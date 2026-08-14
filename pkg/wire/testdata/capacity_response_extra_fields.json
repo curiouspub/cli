@@ -1,0 +1,10 @@
+{
+  "open": true,
+  "accounts_left": 42,
+  "resets_at": "2026-03-01T12:30:00Z",
+  "future_field": "some value the client does not know about yet",
+  "nested_future_thing": {
+    "a": 1,
+    "b": [1, 2, 3]
+  }
+}
