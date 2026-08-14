@@ -1,0 +1,27 @@
+# binaries & build output
+/curious
+/bin/
+/dist/
+
+# GoReleaser
+/.goreleaser/
+
+# test & coverage
+*.test
+coverage.out
+coverage.html
+
+# local config used during manual testing — never commit a real token
+.config/
+*.token
+
+# environment
+.env
+.env.*
+!.env.example
+
+# editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
