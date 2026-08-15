@@ -3,6 +3,9 @@
 /bin/
 /dist/
 
+# Go workspace files (never committed)
+go.work*
+
 # GoReleaser
 /.goreleaser/
 
