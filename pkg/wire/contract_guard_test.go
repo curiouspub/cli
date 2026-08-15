@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// This file closes five gaps that the fixture-driven golden tests in
+// This file closes six gaps that the fixture-driven golden tests in
 // wire_test.go cannot see, each demonstrated by mutation before being
 // written:
 //
@@ -42,10 +42,15 @@
 //     could join with no obligation decided for it at all, because
 //     CarriesRetryAfter answers for any input and nothing forced its
 //     answers to be stated anywhere.
+//  6. A second exported package-level var could join the contract with no
+//     guard at all. The AST guards above enumerate exported constants,
+//     structs and non-struct types; none of them looks at var decls, and
+//     AllErrorCodes — the package's first exported var — happens to be
+//     pinned only because gap 4's guard reads it by name.
 //
-// Gaps 2, 3 and 4 are enforced by parsing wire.go's AST, which is the only
-// way to enumerate a Go package's declared types and constants at test
-// time.
+// Gaps 2, 3, 4 and 6 are enforced by parsing wire.go's AST, which is the
+// only way to enumerate a Go package's declared types, constants and vars
+// at test time.
 
 package wire
 
@@ -314,6 +319,49 @@ func TestCarriesRetryAfterIsPinned(t *testing.T) {
 	}
 }
 
+// TestEveryExportedVarIsGuarded parses wire.go and asserts that every
+// exported package-level var is named in the covered list below.
+//
+// A var is the one shape of exported surface the other AST guards are blind
+// to: declaredStructTypes and declaredNonStructTypes read TYPE decls,
+// declaredErrorCodeValues reads CONST decls. AllErrorCodes is guarded only
+// because TestAllErrorCodesEnumeratesEveryConstant reaches for it by name —
+// nothing generalises that to a second var. And a var is mutable state in a
+// public package: a consumer can append to a slice or reassign it, so
+// "which vars exist" is contract in a way that needs deciding, not
+// inheriting.
+//
+// This guard does not say what a var must contain — it says a var may not
+// enter the frozen contract until someone has written a guard for it and
+// admitted it here. Failing is the correct behaviour for a var nobody has
+// thought about yet.
+func TestEveryExportedVarIsGuarded(t *testing.T) {
+	// Every entry must name the guard that actually pins the var's contents;
+	// this list is an index of coverage, not a mute allowlist.
+	covered := map[string]string{
+		"AllErrorCodes": "TestAllErrorCodesEnumeratesEveryConstant pins it against the declared ErrorCode constants",
+	}
+
+	declared := declaredExportedVars(t)
+
+	for name := range declared {
+		if _, ok := covered[name]; !ok {
+			t.Errorf("exported var %s is unguarded — the struct, non-struct-type and "+
+				"constant guards cannot see var decls. Write a guard pinning its contents, "+
+				"then admit it to the covered list in this test. A var in a public package "+
+				"is mutable contract: consumers can read it, range it, and rely on what is "+
+				"in it.", name)
+		}
+	}
+	for name := range covered {
+		if !declared[name] {
+			t.Errorf("the covered list names %s, which is no longer an exported var in "+
+				"wire.go — removing an exported var is a breaking change within v1; if it "+
+				"was deliberate, drop the entry in the same commit", name)
+		}
+	}
+}
+
 // parseSources parses every non-test .go file in this directory.
 func parseSources(t *testing.T) []*ast.File {
 	t.Helper()
@@ -432,6 +480,39 @@ func stringConstValue(expr ast.Expr) (string, bool) {
 		return stringConstValue(v.Args[0])
 	}
 	return "", false
+}
+
+// declaredExportedVars collects the name of every exported package-level
+// var in the package.
+//
+// f.Decls holds only top-level declarations, so function-local vars are out
+// of scope by construction. Names are read per-spec rather than per-decl, so
+// grouped `var ( … )` blocks and multi-name specs (`var A, B = 1, 2`) are
+// each seen as the several vars they are.
+func declaredExportedVars(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, f := range parseSources(t) {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, name := range vs.Names {
+					if !name.IsExported() {
+						continue
+					}
+					out[name.Name] = true
+				}
+			}
+		}
+	}
+	return out
 }
 
 // declaredNonStructTypes collects exported named types that are not structs.
