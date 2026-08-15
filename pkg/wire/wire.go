@@ -70,6 +70,54 @@ const (
 	CodeInternal       ErrorCode = "internal"
 )
 
+// AllErrorCodes is every ErrorCode this contract defines, in declaration
+// order. It exists so that both sides of the wire can range the full set
+// instead of each keeping a hand-written copy that silently falls behind:
+// a client can prove it handles every code it may receive, and the server
+// can prove — in a test rather than a comment — that every code it may be
+// asked to write has an HTTP status and a Retry-After decision. Without
+// it, a code added here is invisible to the other side until it appears
+// in a response nobody wrote a branch for.
+//
+// A new code is added to this slice in the same commit that declares the
+// constant; the contract guards in this package fail a constant that is
+// declared and not listed. Callers must treat the slice as read-only —
+// it is package-level state shared by every importer.
+var AllErrorCodes = []ErrorCode{
+	CodeBadRequest,
+	CodeUnauthorized,
+	CodeForbidden,
+	CodeNotFound,
+	CodeRateLimited,
+	CodeCapacityClosed,
+	CodeMaintenance,
+	CodeInternal,
+}
+
+// retryAfterCodes is the set behind CarriesRetryAfter. It is unexported
+// deliberately: an exported map is mutable by any importer, and this one
+// states an obligation the server must not be able to edit at runtime.
+var retryAfterCodes = map[ErrorCode]bool{
+	CodeRateLimited:    true, // token bucket: retry after the bucket refills
+	CodeCapacityClosed: true, // daily account cap: retry after resets_at
+}
+
+// CarriesRetryAfter reports whether a /v1 response using code always
+// includes a Retry-After header. This is a property of the protocol, not
+// of any one implementation: the server has no freedom to omit the header
+// for these codes, and a client may rely on it being present.
+//
+// The name says what the contract guarantees rather than what a caller
+// should do about it. It is NOT a general "should I retry?" — maintenance
+// and internal are both worth retrying later, and neither carries the
+// header, because neither has a reset time the server can honestly name.
+//
+// An unknown code reports false: a code this contract does not define
+// carries no obligation, and inventing one for it would be a guess.
+func CarriesRetryAfter(code ErrorCode) bool {
+	return retryAfterCodes[code]
+}
+
 // Error is the machine-readable error carried in every non-2xx /v1
 // response, wrapped in ErrorResponse.
 type Error struct {

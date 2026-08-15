@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// This file closes three gaps that the fixture-driven golden tests in
+// This file closes five gaps that the fixture-driven golden tests in
 // wire_test.go cannot see, each demonstrated by mutation before being
 // written:
 //
@@ -33,8 +33,17 @@
 //  3. A new ErrorCode constant could be added and never pinned, because
 //     the count check in TestErrorCodeConstants compares a literal table
 //     to a literal number in the same file and never reads wire.go.
+//  4. A new ErrorCode constant could be added and left out of
+//     AllErrorCodes, which every consumer that ranges the set — the
+//     server's status table and Retry-After pairing guards among them —
+//     would then be structurally blind to. Pinning the constants (gap 3)
+//     does not pin the enumeration of them.
+//  5. A code's Retry-After obligation could be changed, or a new code
+//     could join with no obligation decided for it at all, because
+//     CarriesRetryAfter answers for any input and nothing forced its
+//     answers to be stated anywhere.
 //
-// The last two are enforced by parsing wire.go's AST, which is the only
+// Gaps 2, 3 and 4 are enforced by parsing wire.go's AST, which is the only
 // way to enumerate a Go package's declared types and constants at test
 // time.
 
@@ -214,6 +223,93 @@ func TestEveryErrorCodeConstantIsPinned(t *testing.T) {
 		if !declared[value] {
 			t.Errorf("ErrorCode %q is pinned by tests but no longer declared in wire.go — "+
 				"removing or renaming a code is a breaking change within v1", value)
+		}
+	}
+}
+
+// TestAllErrorCodesEnumeratesEveryConstant parses wire.go and asserts
+// AllErrorCodes lists exactly the declared ErrorCode constants, once each.
+//
+// TestEveryErrorCodeConstantIsPinned above proves a new constant cannot be
+// added without a test noticing; it says nothing about the enumeration.
+// A constant declared in wire.go but absent from AllErrorCodes is worse
+// than an unpinned one: every consumer that ranges the set believes it has
+// seen the whole contract, so the omission reads as "this code does not
+// exist" rather than as a missing entry. The server's status table and its
+// Retry-After pairing guard both range this slice, and would pass with a
+// code they have no mapping for.
+func TestAllErrorCodesEnumeratesEveryConstant(t *testing.T) {
+	declared := declaredErrorCodeValues(t)
+
+	listed := map[string]bool{}
+	for _, code := range AllErrorCodes {
+		if listed[string(code)] {
+			t.Errorf("AllErrorCodes lists %q more than once — a consumer ranging the "+
+				"set would handle it twice, and a duplicate can hide a missing entry "+
+				"from a length check", code)
+		}
+		listed[string(code)] = true
+	}
+
+	for value := range declared {
+		if !listed[value] {
+			t.Errorf("ErrorCode %q is declared in wire.go but missing from AllErrorCodes — "+
+				"add it in the same commit as the constant, or every consumer that ranges "+
+				"the set is blind to it", value)
+		}
+	}
+	for value := range listed {
+		if !declared[value] {
+			t.Errorf("AllErrorCodes contains %q, which is not declared as an exported "+
+				"constant in wire.go — the enumeration may only name codes the contract "+
+				"actually defines", value)
+		}
+	}
+}
+
+// TestCarriesRetryAfterIsPinned pins, per code, whether /v1 requires the
+// response to carry Retry-After. The table below is a literal restatement
+// of the spec, deliberately NOT derived from the retryAfterCodes map it
+// checks: a guard that reads its expected value from the thing it guards
+// passes forever and protects nothing.
+//
+// The obligation is protocol semantics, not a server implementation
+// detail — a client reads Retry-After, and the server has no freedom to
+// omit it — so a code joining the contract without a stated answer here
+// is a decision that was never made, and fails rather than defaulting to
+// false.
+func TestCarriesRetryAfterIsPinned(t *testing.T) {
+	pinned := map[ErrorCode]bool{
+		CodeBadRequest:     false,
+		CodeUnauthorized:   false,
+		CodeForbidden:      false,
+		CodeNotFound:       false,
+		CodeRateLimited:    true, // token-bucket reset
+		CodeCapacityClosed: true, // resets_at, always known
+		CodeMaintenance:    false,
+		CodeInternal:       false,
+	}
+
+	listed := map[ErrorCode]bool{}
+	for _, code := range AllErrorCodes {
+		listed[code] = true
+
+		want, stated := pinned[code]
+		if !stated {
+			t.Errorf("ErrorCode %q has no entry in this table — whether a code carries "+
+				"Retry-After is a deliberate contract decision, not a default. State it "+
+				"here and in retryAfterCodes.", code)
+			continue
+		}
+		if got := CarriesRetryAfter(code); got != want {
+			t.Errorf("CarriesRetryAfter(%q) = %v, want %v — changing a code's Retry-After "+
+				"obligation changes what an already-released client is told to do", code, got, want)
+		}
+	}
+	for code := range pinned {
+		if !listed[code] {
+			t.Errorf("ErrorCode %q is pinned here but absent from AllErrorCodes — removing "+
+				"a code is a breaking change within v1", code)
 		}
 	}
 }
