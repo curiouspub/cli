@@ -25,11 +25,19 @@ infrastructure (ARNs, bucket names, instance details).
 
 ## Client flow (order is intentional)
 
-1. `GET /v1/capacity` FIRST. Closed → offer waitlist, stop. Never let
-   a user (or agent) do work that can't land.
-2. Token from `~/.config/curious/config.json`; absent → login flow.
-3. Pre-flight (below). 4. Pack. 5. Create deploy + PUT tarball.
-6. Start + stream SSE. 7. Print URL + expiry.
+**Local truths before global state: a project that can't deploy makes
+zero network calls.**
+
+1. Token from `~/.config/curious/config.json` (no network).
+2. Pre-flight (below). Hard stops abort here, having contacted nothing.
+3. Scan + limits (below).
+4. **Only if there's no usable token**: `GET /v1/capacity` — closed →
+   offer waitlist, stop — then the login flow. Never let a user (or
+   agent) do work that can't land. A user who already holds a token
+   isn't gated: the daily cap counts new ACCOUNTS, spent at
+   `/v1/auth/verify`, and their deploy spends none of it.
+5. Pack. 6. Create deploy + PUT tarball. 7. Start + stream SSE.
+8. Print URL + expiry.
 
 Login: email → 6-digit code (10-min expiry). Wrong/expired code NEVER
 restarts the flow — offer "Resend code? [Y/n]" in a retry loop.
@@ -42,7 +50,7 @@ elsewhere.
 | check | severity |
 |---|---|
 | `astro` in package.json dependencies | HARD STOP |
-| lockfile present (package-lock.json / pnpm-lock.yaml) | HARD STOP — builder runs `npm ci` |
+| lockfile present (package-lock.json / pnpm-lock.yaml) | HARD STOP — both accepted; the builder detects which package manager to install with. Skip if there's no package.json |
 | pages dir exists — check `src/pages/`, and parse astro.config for custom `srcDir` before failing | HARD STOP (config-aware) |
 | `http://localhost` in .astro/.js sources | WARNING — CLI: "continue? [Y/n]"; MCP: non-blocking warning in result |
 
