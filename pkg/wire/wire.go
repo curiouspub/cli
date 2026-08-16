@@ -41,6 +41,16 @@
 // wire_test.go — is what lets the server evolve without a coordinated
 // client release.
 //
+// Unknown fields are IGNORED ON BOTH SIDES: clients tolerate newer
+// servers, and servers tolerate newer clients. This is what makes
+// additive evolution and rollback safe. Tolerance in one direction only
+// is not a weaker version of the same property — it is a different and
+// much worse one, because it turns every additive request field into a
+// deployment-order obligation and makes rolling a server back a
+// client-breaking act. TestForwardCompatibleDecoding pins the client
+// half; the server half is the platform's own decoding discipline, and
+// is stated here because this package is where both halves are agreed.
+//
 // Success is signalled by the HTTP status alone; error semantics live in
 // the error envelope. No client behaviour may depend on the contents of a
 // success body — several are empty objects, reserved for fields that may
