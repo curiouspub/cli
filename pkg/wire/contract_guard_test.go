@@ -47,8 +47,25 @@
 //     structs and non-struct types; none of them looks at var decls, and
 //     AllErrorCodes — the package's first exported var — happens to be
 //     pinned only because gap 4's guard reads it by name.
+//  7. Two more string enums (DeployStatus, Phase) and five
+//     integer constants (the Max* limits) to a constant guard that had,
+//     until then, only ever needed to read strings. declaredErrorCodeValues
+//     was deliberately type-blind for a reason gap 4's mutation proved:
+//     `const CodeSneaky = ErrorCode("sneaky")` — the same constant written
+//     as a conversion instead of a typed literal — walked past a
+//     type-filtered predecessor. Five vocabularies now share one constant
+//     block, so blindness cannot survive; every exported constant must be
+//     partitioned into ErrorCode, DeployStatus, Phase or the limits. The
+//     property gap 4's mutation actually established is narrower than
+//     "never filter by type" and it is what survives the change: an
+//     unclassifiable constant must fail LOUDLY, naming itself, never be
+//     silently skipped or defaulted into a partition it does not belong
+//     to. classifyExportedConstants below is the single partitioner all
+//     four declaredXValues helpers read from, so the "loud failure, never
+//     a skip" behaviour lives in one place rather than four copies that
+//     could drift apart.
 //
-// Gaps 2, 3, 4 and 6 are enforced by parsing wire.go's AST, which is the
+// Gaps 2, 3, 4, 6 and 7 are enforced by parsing wire.go's AST, which is the
 // only way to enumerate a Go package's declared types, constants and vars
 // at test time.
 
@@ -181,18 +198,28 @@ func TestEveryExportedStructIsGoldenTested(t *testing.T) {
 
 	// Exported named types that are not structs escape both guards above:
 	// the struct guard skips them, and the constant guard only reads
-	// strings. ErrorCode is the only one, and a new one must not slip in
-	// unguarded.
+	// strings. Each entry below must name the guard pair that actually
+	// pins its constants — the same "name your guard" discipline as
+	// TestEveryExportedVarIsGuarded's covered list, so this is an index of
+	// coverage rather than a longer literal comparison a new type could
+	// slip past unnoticed.
+	nonStructGuarded := map[string]string{
+		"ErrorCode":    "TestEveryErrorCodeConstantIsPinned + TestAllErrorCodesEnumeratesEveryConstant",
+		"DeployStatus": "TestEveryDeployStatusConstantIsPinned + TestAllDeployStatusesEnumeratesEveryConstant",
+		"Phase":        "TestEveryPhaseConstantIsPinned + TestAllPhasesEnumeratesEveryConstant",
+	}
 	nonStruct := declaredNonStructTypes(t)
 	for name := range nonStruct {
-		if name != "ErrorCode" {
+		if _, ok := nonStructGuarded[name]; !ok {
 			t.Errorf("exported non-struct type %s is unguarded — the struct and constant "+
 				"guards cannot see it. Write a guard for it before it enters the frozen "+
-				"contract.", name)
+				"contract, then admit it to nonStructGuarded in this test.", name)
 		}
 	}
-	if !nonStruct["ErrorCode"] {
-		t.Error("expected ErrorCode to be declared as an exported non-struct type")
+	for name := range nonStructGuarded {
+		if !nonStruct[name] {
+			t.Errorf("expected %s to be declared as an exported non-struct type", name)
+		}
 	}
 }
 
@@ -272,6 +299,185 @@ func TestAllErrorCodesEnumeratesEveryConstant(t *testing.T) {
 	}
 }
 
+// TestEveryDeployStatusConstantIsPinned mirrors
+// TestEveryErrorCodeConstantIsPinned for DeployStatus: it parses wire.go and
+// asserts the set of declared DeployStatus constants is exactly the set
+// pinned below.
+func TestEveryDeployStatusConstantIsPinned(t *testing.T) {
+	// Deliberately duplicated from TestDeployStatusConstants, for the same
+	// reason as the ErrorCode pair: this list is derived from the spec, the
+	// other from the Go constants, and the AST comparison below is what
+	// forces them to agree.
+	pinned := map[string]bool{
+		"queued":   true,
+		"building": true,
+		"built":    true,
+		"live":     true,
+		"failed":   true,
+	}
+
+	declared := declaredDeployStatusValues(t)
+
+	for value := range declared {
+		if !pinned[value] {
+			t.Errorf("DeployStatus %q is declared in wire.go but not pinned by a test — "+
+				"deploy statuses are public contract and a consumer switches on them", value)
+		}
+	}
+	for value := range pinned {
+		if !declared[value] {
+			t.Errorf("DeployStatus %q is pinned by tests but no longer declared in wire.go — "+
+				"removing or renaming a status is a breaking change within v1", value)
+		}
+	}
+}
+
+// TestAllDeployStatusesEnumeratesEveryConstant mirrors
+// TestAllErrorCodesEnumeratesEveryConstant for DeployStatus: it proves that
+// AllDeployStatuses lists exactly the declared DeployStatus constants, once
+// each. This is a set check only — TestAllDeployStatusesOrder in
+// wire_test.go is what pins the order, and the two are deliberately
+// separate: a status present but out of order would pass this test and
+// fail that one, which is the point of keeping them apart.
+func TestAllDeployStatusesEnumeratesEveryConstant(t *testing.T) {
+	declared := declaredDeployStatusValues(t)
+
+	listed := map[string]bool{}
+	for _, status := range AllDeployStatuses {
+		if listed[string(status)] {
+			t.Errorf("AllDeployStatuses lists %q more than once — a consumer ranging the "+
+				"set would handle it twice, and a duplicate can hide a missing entry "+
+				"from a length check", status)
+		}
+		listed[string(status)] = true
+	}
+
+	for value := range declared {
+		if !listed[value] {
+			t.Errorf("DeployStatus %q is declared in wire.go but missing from "+
+				"AllDeployStatuses — add it in the same commit as the constant, or every "+
+				"consumer that ranges the set is blind to it (the server's transition "+
+				"table among them)", value)
+		}
+	}
+	for value := range listed {
+		if !declared[value] {
+			t.Errorf("AllDeployStatuses contains %q, which is not declared as an exported "+
+				"constant in wire.go — the enumeration may only name statuses the contract "+
+				"actually defines", value)
+		}
+	}
+}
+
+// TestEveryPhaseConstantIsPinned mirrors TestEveryErrorCodeConstantIsPinned
+// for Phase: it parses wire.go and asserts the set of declared Phase
+// constants is exactly the set pinned below.
+func TestEveryPhaseConstantIsPinned(t *testing.T) {
+	// Deliberately duplicated from TestPhaseConstants, for the same reason
+	// as the ErrorCode and DeployStatus pairs.
+	pinned := map[string]bool{
+		"queued":     true,
+		"starting":   true,
+		"extracting": true,
+		"installing": true,
+		"building":   true,
+		"uploading":  true,
+		"publishing": true,
+	}
+
+	declared := declaredPhaseValues(t)
+
+	for value := range declared {
+		if !pinned[value] {
+			t.Errorf("Phase %q is declared in wire.go but not pinned by a test — "+
+				"phases are public contract and a consumer switches on them", value)
+		}
+	}
+	for value := range pinned {
+		if !declared[value] {
+			t.Errorf("Phase %q is pinned by tests but no longer declared in wire.go — "+
+				"removing or renaming a phase is a breaking change within v1", value)
+		}
+	}
+}
+
+// TestAllPhasesEnumeratesEveryConstant mirrors
+// TestAllErrorCodesEnumeratesEveryConstant for Phase: it proves that
+// AllPhases lists exactly the declared Phase constants, once each. As with
+// DeployStatus, this is a set check only — TestAllPhasesOrder in
+// wire_test.go pins the lifecycle order the exit test cites, kept separate so a
+// phase present but out of order fails that test rather than this one.
+func TestAllPhasesEnumeratesEveryConstant(t *testing.T) {
+	declared := declaredPhaseValues(t)
+
+	listed := map[string]bool{}
+	for _, phase := range AllPhases {
+		if listed[string(phase)] {
+			t.Errorf("AllPhases lists %q more than once — a consumer ranging the set "+
+				"would handle it twice, and a duplicate can hide a missing entry from a "+
+				"length check", phase)
+		}
+		listed[string(phase)] = true
+	}
+
+	for value := range declared {
+		if !listed[value] {
+			t.Errorf("Phase %q is declared in wire.go but missing from AllPhases — add it "+
+				"in the same commit as the constant, or every consumer that ranges the set "+
+				"is blind to it", value)
+		}
+	}
+	for value := range listed {
+		if !declared[value] {
+			t.Errorf("AllPhases contains %q, which is not declared as an exported constant "+
+				"in wire.go — the enumeration may only name phases the contract actually "+
+				"defines", value)
+		}
+	}
+}
+
+// TestEveryLimitConstantIsPinned parses wire.go and asserts the set of
+// declared limit constants is exactly the set pinned
+// below, by both name and value. It exists for the same reason
+// AllErrorCodes has TestEveryErrorCodeConstantIsPinned: a sixth limit added
+// later must not be able to enter the contract unpinned. Five integers
+// entering a constant guard that had only ever read strings is exactly
+// where a sixth would slip in later, unnoticed, if this guard did not
+// exist.
+func TestEveryLimitConstantIsPinned(t *testing.T) {
+	// Deliberately duplicated from TestLimitConstants, for the same reason
+	// as the string-enum pairs above: this table is the independent
+	// restatement the AST comparison below forces to agree with wire.go.
+	pinned := map[string]int64{
+		"MaxSourceFiles":      3_000,
+		"MaxSourceFileBytes":  5_000_000,
+		"MaxSourceTotalBytes": 30_000_000,
+		"MaxOutputFiles":      1_000,
+		"MaxOutputTotalBytes": 30_000_000,
+	}
+
+	declared := declaredLimitValues(t)
+
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("limit constant %s is declared in wire.go but not pinned by a test — "+
+				"a sixth limit must not be able to enter the contract unpinned", name)
+			continue
+		}
+		if value != want {
+			t.Errorf("limit constant %s = %d, want %d", name, value, want)
+		}
+	}
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("limit constant %s is pinned by tests but no longer declared in "+
+				"wire.go — removing or changing a limit's name is a breaking change "+
+				"within v1", name)
+		}
+	}
+}
+
 // TestCarriesRetryAfterIsPinned pins, per code, whether /v1 requires the
 // response to carry Retry-After. The table below is a literal restatement
 // of the spec, deliberately NOT derived from the retryAfterCodes map it
@@ -339,7 +545,9 @@ func TestEveryExportedVarIsGuarded(t *testing.T) {
 	// Every entry must name the guard that actually pins the var's contents;
 	// this list is an index of coverage, not a mute allowlist.
 	covered := map[string]string{
-		"AllErrorCodes": "TestAllErrorCodesEnumeratesEveryConstant pins it against the declared ErrorCode constants",
+		"AllErrorCodes":     "TestAllErrorCodesEnumeratesEveryConstant pins it against the declared ErrorCode constants",
+		"AllDeployStatuses": "TestAllDeployStatusesEnumeratesEveryConstant pins it against the declared DeployStatus constants, and TestAllDeployStatusesOrder pins its order",
+		"AllPhases":         "TestAllPhasesEnumeratesEveryConstant pins it against the declared Phase constants, and TestAllPhasesOrder pins its order",
 	}
 
 	declared := declaredExportedVars(t)
@@ -412,19 +620,59 @@ func declaredStructTypes(t *testing.T) map[string]bool {
 	return out
 }
 
-// declaredErrorCodeValues collects the value of every exported constant in
-// the package.
+// classifiedConstants is the result of partitioning every exported constant
+// in the package into the vocabulary it belongs to. It is the single
+// mechanism behind declaredErrorCodeValues, declaredDeployStatusValues,
+// declaredPhaseValues and declaredLimitValues below: each of those calls
+// classifyExportedConstants once and reads its own field back out, so the
+// partitioning logic — and its "anything unclassifiable fails loudly" rule
+// — lives in exactly one place rather than four copies that could drift
+// apart from each other.
+type classifiedConstants struct {
+	errorCodes     map[string]bool
+	deployStatuses map[string]bool
+	phases         map[string]bool
+	limits         map[string]int64
+}
+
+// classifyExportedConstants collects every exported constant declared in
+// the package and sorts it into ErrorCode, DeployStatus, Phase or the limit
+// constants, by its declared type or its conversion callee.
 //
-// It deliberately does NOT filter on the declared type. An earlier version
-// matched only `Name ErrorCode = "value"` and was shown by mutation to miss
-// `const CodeSneaky = ErrorCode("sneaky")` — the same constant written as a
-// conversion — and would equally miss an untyped `CodeB = "b"`. Since this
-// package should only ever declare ErrorCode constants, the robust rule is
-// simpler: every exported constant must be a pinned string, whatever form
-// it is written in. Anything else fails loudly rather than slipping through.
-func declaredErrorCodeValues(t *testing.T) map[string]bool {
+// This package used to hold only ErrorCode constants, so
+// declaredErrorCodeValues was deliberately type-BLIND: an earlier,
+// type-filtered version matched only `Name ErrorCode = "value"` and was
+// shown by mutation to miss `const CodeSneaky = ErrorCode("sneaky")` — the
+// same constant written as a conversion. This package later added two more string enums
+// and five integer constants, so blindness cannot survive unchanged — but
+// the property the mutation actually proved is narrower than "never filter
+// by type", and it is what this function preserves: an unclassifiable
+// constant must fail LOUDLY, naming itself, and never be silently skipped
+// or defaulted into whichever partition happens to be checked first. A
+// partitioner is fine; a partitioner with a silent default is the original
+// defect wearing new clothes.
+//
+// Concretely:
+//   - A string literal typed ErrorCode/DeployStatus/Phase (either via the
+//     ValueSpec's own Type, e.g. `X ErrorCode = "y"`, or via a matching
+//     single-argument conversion, e.g. `X = ErrorCode("y")`) joins that
+//     vocabulary.
+//   - An untyped integer literal with no declared type and no conversion
+//     (the shape every limit constant is declared in) joins the limits.
+//   - Anything else — an untyped string literal belonging to no named
+//     vocabulary, a conversion to an unrecognised type, a constant with no
+//     explicit value, a non-literal expression — is unclassifiable and
+//     fails the test by name. This is what an untyped `const Sneaky = "x"`
+//     must do: it belongs to no vocabulary, and the correct behaviour is a
+//     named failure, not a pass and not a silent assignment.
+func classifyExportedConstants(t *testing.T) classifiedConstants {
 	t.Helper()
-	out := map[string]bool{}
+	out := classifiedConstants{
+		errorCodes:     map[string]bool{},
+		deployStatuses: map[string]bool{},
+		phases:         map[string]bool{},
+		limits:         map[string]int64{},
+	}
 	for _, f := range parseSources(t) {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -445,18 +693,7 @@ func declaredErrorCodeValues(t *testing.T) map[string]bool {
 							"guard cannot read it, so it cannot be pinned", name.Name)
 						continue
 					}
-					value, ok := stringConstValue(vs.Values[i])
-					if !ok {
-						t.Errorf("exported constant %s is not a plain string literal; the "+
-							"contract guard cannot read it. Keep this package to string "+
-							"constants, or extend the guard deliberately.", name.Name)
-						continue
-					}
-					unquoted, err := strconv.Unquote(value)
-					if err != nil {
-						t.Fatalf("unquoting %s for constant %s: %v", value, name.Name, err)
-					}
-					out[unquoted] = true
+					classifyOneConstant(t, name.Name, vs.Type, vs.Values[i], &out)
 				}
 			}
 		}
@@ -464,22 +701,133 @@ func declaredErrorCodeValues(t *testing.T) map[string]bool {
 	return out
 }
 
-// stringConstValue reads a string literal written either directly ("x") or
-// wrapped in a single-argument conversion such as ErrorCode("x").
-func stringConstValue(expr ast.Expr) (string, bool) {
-	switch v := expr.(type) {
-	case *ast.BasicLit:
-		if v.Kind != token.STRING {
-			return "", false
-		}
-		return v.Value, true
-	case *ast.CallExpr:
-		if len(v.Args) != 1 {
-			return "", false
-		}
-		return stringConstValue(v.Args[0])
+// classifyOneConstant sorts a single exported constant into one field of
+// out, or fails the test naming the constant if it cannot. See
+// classifyExportedConstants for the invariant this preserves.
+func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast.Expr, out *classifiedConstants) {
+	t.Helper()
+
+	// The declared type, read from the ValueSpec itself (e.g. the
+	// "ErrorCode" in `X ErrorCode = "y"`), if the spec states one.
+	typeName := ""
+	if ident, ok := declType.(*ast.Ident); ok {
+		typeName = ident.Name
 	}
-	return "", false
+
+	// A single-argument type conversion — e.g. ErrorCode("y") — names its
+	// target type as the callee. Go does not allow a ValueSpec to carry
+	// both an explicit Type and a conversion in its value, so the callee
+	// (when present) is unambiguous and simply overrides typeName.
+	if call, ok := value.(*ast.CallExpr); ok {
+		if len(call.Args) != 1 {
+			t.Errorf("exported constant %s is a call with %d arguments; the contract guard "+
+				"only reads single-argument type conversions", name, len(call.Args))
+			return
+		}
+		callee, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			t.Errorf("exported constant %s is not a recognisable literal or type "+
+				"conversion; the contract guard cannot classify it", name)
+			return
+		}
+		typeName = callee.Name
+		value = call.Args[0]
+	}
+
+	lit, ok := value.(*ast.BasicLit)
+	if !ok {
+		t.Errorf("exported constant %s is not a plain literal or a single-argument type "+
+			"conversion of one; the contract guard cannot classify it", name)
+		return
+	}
+
+	switch typeName {
+	case "ErrorCode":
+		if s, ok := stringLitValue(t, name, lit); ok {
+			out.errorCodes[s] = true
+		}
+	case "DeployStatus":
+		if s, ok := stringLitValue(t, name, lit); ok {
+			out.deployStatuses[s] = true
+		}
+	case "Phase":
+		if s, ok := stringLitValue(t, name, lit); ok {
+			out.phases[s] = true
+		}
+	case "":
+		// No declared type and no conversion. The only classifiable shape
+		// left is an untyped INTEGER literal — the shape every limit
+		// constant is declared in (`MaxSourceFiles = 3_000`). An untyped
+		// STRING literal here is exactly `const Sneaky = "x"`: it names no
+		// vocabulary, however plausible its value looks, and must fail
+		// rather than be guessed into a partition.
+		if lit.Kind == token.INT {
+			// Base 0 (rather than 10) so Go's underscore-grouped integer
+			// literals — `3_000` — parse without stripping the separators
+			// by hand first.
+			n, err := strconv.ParseInt(lit.Value, 0, 64)
+			if err != nil {
+				t.Errorf("exported constant %s is not a parsable integer literal: %v", name, err)
+				return
+			}
+			out.limits[name] = n
+			return
+		}
+		t.Errorf("exported constant %s has no declared type and is not a plain limit "+
+			"integer — it belongs to no known vocabulary (ErrorCode, DeployStatus, Phase, "+
+			"or a limit constant) and must not sit in the contract unowned", name)
+	default:
+		t.Errorf("exported constant %s is declared as %s, which is none of ErrorCode, "+
+			"DeployStatus or Phase — add a partition for it in classifyOneConstant before "+
+			"it enters the frozen contract", name, typeName)
+	}
+}
+
+// stringLitValue reads a *ast.BasicLit as an unquoted Go string, or fails
+// the test naming the constant if the literal is not a string.
+func stringLitValue(t *testing.T, name string, lit *ast.BasicLit) (string, bool) {
+	t.Helper()
+	if lit.Kind != token.STRING {
+		t.Errorf("exported constant %s does not carry a string literal value; the "+
+			"contract guard cannot read it", name)
+		return "", false
+	}
+	unquoted, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		t.Fatalf("unquoting %s for constant %s: %v", lit.Value, name, err)
+	}
+	return unquoted, true
+}
+
+// declaredErrorCodeValues returns the ErrorCode partition of
+// classifyExportedConstants.
+func declaredErrorCodeValues(t *testing.T) map[string]bool {
+	t.Helper()
+	return classifyExportedConstants(t).errorCodes
+}
+
+// declaredDeployStatusValues returns the DeployStatus partition of
+// classifyExportedConstants.
+func declaredDeployStatusValues(t *testing.T) map[string]bool {
+	t.Helper()
+	return classifyExportedConstants(t).deployStatuses
+}
+
+// declaredPhaseValues returns the Phase partition of
+// classifyExportedConstants.
+func declaredPhaseValues(t *testing.T) map[string]bool {
+	t.Helper()
+	return classifyExportedConstants(t).phases
+}
+
+// declaredLimitValues returns the limit-constant partition of
+// classifyExportedConstants, keyed by constant name (there is no shared
+// named type to key these by, unlike the three string enums — the name
+// itself, e.g. "MaxSourceFiles", is what a sixth unpinned limit would be
+// caught by).
+func declaredLimitValues(t *testing.T) map[string]int64 {
+	t.Helper()
+	return classifyExportedConstants(t).limits
 }
 
 // declaredExportedVars collects the name of every exported package-level

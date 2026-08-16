@@ -162,6 +162,55 @@ func goldenCases() []goldenCase {
 			},
 			newEmpty: func() any { return &AuthVerifyResponse{} },
 		},
+		{
+			name:    "DeployCreateRequest",
+			fixture: "deploy_create_request.json",
+			value: &DeployCreateRequest{
+				Bytes: 8437021,
+			},
+			newEmpty: func() any { return &DeployCreateRequest{} },
+		},
+		{
+			name:    "DeployCreateResponse",
+			fixture: "deploy_create_response.json",
+			value: &DeployCreateResponse{
+				DeployID:  "5f2a9c3b1e7d",
+				UploadURL: "https://uploads.example.com/deploys/5f2a9c3b1e7d/source.tar.gz?sig=example-value",
+			},
+			newEmpty: func() any { return &DeployCreateResponse{} },
+		},
+		{
+			// Deliberately empty, per the WaitlistResponse/AuthStartResponse
+			// pattern: success is the HTTP status.
+			name:     "DeployStartResponse",
+			fixture:  "deploy_start_response.json",
+			value:    &DeployStartResponse{},
+			newEmpty: func() any { return &DeployStartResponse{} },
+		},
+		{
+			name:    "LogEvent",
+			fixture: "log_event.json",
+			value: &LogEvent{
+				Line: "npm ci",
+			},
+			newEmpty: func() any { return &LogEvent{} },
+		},
+		{
+			name:    "PhaseEvent",
+			fixture: "phase_event.json",
+			value: &PhaseEvent{
+				Phase: PhaseBuilding,
+			},
+			newEmpty: func() any { return &PhaseEvent{} },
+		},
+		{
+			name:    "DoneEvent",
+			fixture: "done_event.json",
+			value: &DoneEvent{
+				Status: StatusBuilt,
+			},
+			newEmpty: func() any { return &DoneEvent{} },
+		},
 	}
 }
 
@@ -318,5 +367,109 @@ func TestErrorResponse_JSONShape(t *testing.T) {
 	}
 	if errObj["message"] != "we'll be back shortly" {
 		t.Fatalf("expected error.message to round-trip, got %v", errObj["message"])
+	}
+}
+
+// TestDeployStatusConstants pins the exact string value of every
+// DeployStatus constant, mirroring TestErrorCodeConstants: DeployStatus is
+// contract in the same sense ErrorCode is, and a consumer switches on these
+// values.
+func TestDeployStatusConstants(t *testing.T) {
+	cases := []struct {
+		status DeployStatus
+		want   string
+	}{
+		{StatusQueued, "queued"},
+		{StatusBuilding, "building"},
+		{StatusBuilt, "built"},
+		{StatusLive, "live"},
+		{StatusFailed, "failed"},
+	}
+
+	if len(cases) != 5 {
+		t.Fatalf("expected 5 deploy status constants to be tested, got %d — update this test if the set changed", len(cases))
+	}
+
+	for _, tc := range cases {
+		if string(tc.status) != tc.want {
+			t.Errorf("DeployStatus constant %v = %q, want %q", tc.status, string(tc.status), tc.want)
+		}
+	}
+}
+
+// TestAllDeployStatusesOrder asserts AllDeployStatuses holds exactly spec
+// the lifecycle order, literally — `built` between `building` and `live` —
+// since the server's transition table and any client renderer both range
+// this slice trusting its order and completeness together, not the value
+// pinning above in isolation. The expected slice is written out rather
+// than built from the constants under test, so a wrong or missing entry in
+// AllDeployStatuses itself (not just a wrong constant value) fails this.
+func TestAllDeployStatusesOrder(t *testing.T) {
+	want := []DeployStatus{"queued", "building", "built", "live", "failed"}
+	if !reflect.DeepEqual(AllDeployStatuses, want) {
+		t.Fatalf("AllDeployStatuses = %v, want %v — lifecycle order, built between building and live", AllDeployStatuses, want)
+	}
+}
+
+// TestPhaseConstants pins the exact string value of every Phase constant,
+// mirroring TestErrorCodeConstants and TestDeployStatusConstants.
+func TestPhaseConstants(t *testing.T) {
+	cases := []struct {
+		phase Phase
+		want  string
+	}{
+		{PhaseQueued, "queued"},
+		{PhaseStarting, "starting"},
+		{PhaseExtracting, "extracting"},
+		{PhaseInstalling, "installing"},
+		{PhaseBuilding, "building"},
+		{PhaseUploading, "uploading"},
+		{PhasePublishing, "publishing"},
+	}
+
+	if len(cases) != 7 {
+		t.Fatalf("expected 7 phase constants to be tested, got %d — update this test if the set changed", len(cases))
+	}
+
+	for _, tc := range cases {
+		if string(tc.phase) != tc.want {
+			t.Errorf("Phase constant %v = %q, want %q", tc.phase, string(tc.phase), tc.want)
+		}
+	}
+}
+
+// TestAllPhasesOrder asserts AllPhases holds exactly the seven lifecycle
+// values, in lifecycle order, literally. This is not decoration: the exit test
+// asserts that `phase` SSE events arrive in the documented order and cites
+// this slice directly, so AllPhases IS the document — a set-only check
+// (all seven present, any order) would leave that assertion citing
+// something with no stated order.
+func TestAllPhasesOrder(t *testing.T) {
+	want := []Phase{"queued", "starting", "extracting", "installing", "building", "uploading", "publishing"}
+	if !reflect.DeepEqual(AllPhases, want) {
+		t.Fatalf("AllPhases = %v, want %v — the documented lifecycle order the exit test cites", AllPhases, want)
+	}
+}
+
+// TestLimitConstants pins the exact value of every limit constant,
+// decimal SI, written out literally rather than derived from
+// the constants under test — a client blocking at 30 MiB against a server
+// enforcing 30 MB is exactly the class of bug this pin exists to catch
+// before it ships.
+func TestLimitConstants(t *testing.T) {
+	if MaxSourceFiles != 3000 {
+		t.Errorf("MaxSourceFiles = %d, want 3000", MaxSourceFiles)
+	}
+	if MaxSourceFileBytes != 5000000 {
+		t.Errorf("MaxSourceFileBytes = %d, want 5000000", MaxSourceFileBytes)
+	}
+	if MaxSourceTotalBytes != 30000000 {
+		t.Errorf("MaxSourceTotalBytes = %d, want 30000000", MaxSourceTotalBytes)
+	}
+	if MaxOutputFiles != 1000 {
+		t.Errorf("MaxOutputFiles = %d, want 1000", MaxOutputFiles)
+	}
+	if MaxOutputTotalBytes != 30000000 {
+		t.Errorf("MaxOutputTotalBytes = %d, want 30000000", MaxOutputTotalBytes)
 	}
 }

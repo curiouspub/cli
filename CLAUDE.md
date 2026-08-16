@@ -5,6 +5,39 @@ one Go binary, two faces. Everything here is world-readable — write
 code and comments accordingly, and never reference internal
 infrastructure (ARNs, bucket names, instance details).
 
+## Public conclusions, not private citations
+
+**Comments here state the CONCLUSION and the REASONING. They never cite
+the private artefact the reasoning came from.** Both halves matter: the
+reasoning is the point and must survive, but a reader of this repo
+cannot follow a pointer into a document they will never see.
+
+Concretely, none of these belong in any file in this repo — code,
+comments, tests or fixtures:
+
+- **Spec section numbers and document versions** — a section sign
+  followed by a number, or any "spec vN.N".
+- **Internal task, epic and ruling identifiers**, and any path into the
+  private repo's docs tree.
+- **The control plane's storage key scheme** — the uppercase
+  `PREFIX#`-style item keys and their attribute names — and the names of
+  internal server-side packages.
+
+The examples above are deliberately described rather than quoted: a rule
+that forbids writing an identifier should not have to write one to say
+so, and this file is as world-readable as the code beside it.
+
+Rewrite rather than delete: "the server's transition table", "the
+publish step writes the edge routing entry first", "the site's expiry is
+written earlier still" all carry the full argument with nothing to
+follow. A reason that cannot be stated without naming a private document
+is a reason that needed rephrasing, not a citation that needed adding.
+
+This is a boundary rule, not a threat model. No individual citation
+leaks a secret; the point is that "does THIS one matter?" is a question
+nobody should have to answer under time pressure, and git history is
+permanent — a later commit cannot unpublish it.
+
 ## What this binary is
 
 - `curious deploy [dir]` — interactive CLI: pack an Astro project,
