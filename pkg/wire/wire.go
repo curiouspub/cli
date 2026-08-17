@@ -474,13 +474,24 @@ const (
 	//
 	// Deliberately EQUAL to MaxSourceTotalBytes, which bounds the
 	// UNCOMPRESSED tree. The two measure different things, so the equality
-	// is a decision rather than a coincidence: compression can only help,
-	// so a tree that fits the uncompressed cap always packs to something
-	// that fits this one, and a tarball exceeding it cannot have come from
-	// a tree that passed the client's own pre-flight. Keeping them equal
-	// means there is one number for a user to remember and no gap between
-	// the two in which a deploy is refused for a reason nobody can state
-	// simply.
+	// is a decision: one number for a user to remember, and no band
+	// between two caps in which a deploy is refused for a reason nobody
+	// can state simply.
+	//
+	// It is NOT a guarantee that anything passing the uncompressed cap
+	// will pack within this one, and an earlier version of this comment
+	// wrongly said so ("compression can only help"). Compression helps the
+	// FILE DATA; the archive adds its own bytes. A tar entry costs a
+	// 512-byte header plus padding to the next 512-byte boundary, so 3,000
+	// incompressible 10,000-byte files — exactly 30,000,000 bytes of data,
+	// inside every uncompressed limit — pack to 32,257,024 bytes before
+	// gzip has added anything, and are refused here.
+	//
+	// That case is pathological (incompressible files, every one just past
+	// a block boundary, at the exact cap) and the equality stands, because
+	// the alternative is a second number that exists only to accommodate
+	// it. But a client hitting it deserves a message naming the packed
+	// size rather than one implying it should have fitted.
 	MaxPackedBytes = 30_000_000
 
 	MaxSourceFiles      = 3_000
