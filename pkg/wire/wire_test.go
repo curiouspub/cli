@@ -180,11 +180,14 @@ func goldenCases() []goldenCase {
 			newEmpty: func() any { return &DeployCreateResponse{} },
 		},
 		{
-			// Deliberately empty, per the WaitlistResponse/AuthStartResponse
-			// pattern: success is the HTTP status.
+			// No longer empty: it carries the deploy's status so a caller
+			// whose request timed out and retried learns its build is
+			// running. The value INFORMS and never branches — see the
+			// type's own doc comment for why that is what makes the field
+			// safe to add to a frozen contract.
 			name:     "DeployStartResponse",
 			fixture:  "deploy_start_response.json",
-			value:    &DeployStartResponse{},
+			value:    &DeployStartResponse{Status: StatusBuilding},
 			newEmpty: func() any { return &DeployStartResponse{} },
 		},
 		{

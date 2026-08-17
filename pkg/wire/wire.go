@@ -280,10 +280,31 @@ type DeployCreateResponse struct {
 	UploadURL string `json:"upload_url"`
 }
 
-// DeployStartResponse is the success body of POST /v1/deploys/{id}/start:
-// an empty JSON object, for the same reason as WaitlistResponse. Reserved
-// for future additive fields.
-type DeployStartResponse struct{}
+// DeployStartResponse is the success body of POST /v1/deploys/{id}/start.
+//
+// # Status INFORMS; it never BRANCHES
+//
+// Status reports what the deploy is doing now, and a client takes the
+// IDENTICAL action for every value it can carry: the build is under way,
+// go read the event stream. No client behaviour may depend on which
+// value arrived.
+//
+// That distinction is the whole reason this field is safe to add. The
+// endpoint answers 202 both when this call started the build and when it
+// found that another call already had — a caller whose request timed out
+// and retried learns its build is running, which is the thing it wanted
+// to know, without the server inventing a second success shape or a
+// conflict code for a difference the client cannot act on. A success
+// body whose CONTENTS changed what a client does would be the thing this
+// contract is shaped to prevent (see the package doc: no client
+// behaviour may depend on the contents of a success body).
+//
+// This type shipped as an empty object "reserved for fields that may be
+// added additively later". This is the first draw on that reservation,
+// and it cost one field and no released client.
+type DeployStartResponse struct {
+	Status DeployStatus `json:"status"`
+}
 
 // DeployStatus is the lifecycle state of a deploy, as recorded in the
 // deploy record's status attribute. It is what the record says the deploy IS —
