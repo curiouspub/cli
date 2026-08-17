@@ -133,10 +133,24 @@ var retryAfterCodes = map[ErrorCode]bool{
 	CodeCapacityClosed: true, // daily account cap: retry after resets_at
 }
 
-// CarriesRetryAfter reports whether a /v1 response using code always
-// includes a Retry-After header. This is a property of the protocol, not
-// of any one implementation: the server has no freedom to omit the header
-// for these codes, and a client may rely on it being present.
+// CarriesRetryAfter reports whether an HTTP /v1 response using code
+// always includes a Retry-After header. This is a property of the
+// protocol, not of any one implementation: the server has no freedom to
+// omit the header for these codes, and a client may rely on it being
+// present.
+//
+// HTTP RESPONSES ONLY, and the scope is deliberate. The same ErrorCode
+// vocabulary also travels on the deploy event stream, where the `error`
+// event reuses wire.Error precisely so a client can switch on the same
+// values — and an SSE event has no headers. So a stream carrying
+// rate_limited or capacity_closed cannot carry a Retry-After, and a
+// client that took an unqualified "always" at its word would look for a
+// header that cannot exist. Narrowing this promise is only additive
+// BEFORE a released client relies on it, which is why it is being said
+// now rather than when the first such event is emitted (raised by line
+// review, 2026-08-17). What a client should do on the stream: treat
+// these as retry-later without a stated time, exactly as it already must
+// for maintenance and internal over HTTP.
 //
 // The name says what the contract guarantees rather than what a caller
 // should do about it. It is NOT a general "should I retry?" — maintenance

@@ -311,6 +311,24 @@ func TestCapacityResponse_ResetsAtIsUTCRFC3339(t *testing.T) {
 	}
 }
 
+// TestAllErrorCodesOrder pins the order AllErrorCodes' own doc comment
+// claims ("in declaration order"). AllDeployStatuses and AllPhases each
+// got an order test because their order carries meaning; this slice made
+// the same claim and enforced nothing — swapping its first two entries
+// left the suite green (line review, 2026-08-17). A claimed-but-
+// unenforced property is the drift this package's guards exist to stop,
+// and consumers ranging the slice can observe the order whether or not
+// they should depend on it.
+func TestAllErrorCodesOrder(t *testing.T) {
+	want := []ErrorCode{
+		"bad_request", "unauthorized", "forbidden", "not_found",
+		"rate_limited", "capacity_closed", "maintenance", "internal",
+	}
+	if !reflect.DeepEqual(AllErrorCodes, want) {
+		t.Fatalf("AllErrorCodes = %v, want %v — declaration order, as its doc states", AllErrorCodes, want)
+	}
+}
+
 // TestErrorCodeConstants pins the exact string value of every ErrorCode
 // constant. The codes are contract — a consumer switches on them — so a
 // typo or accidental rename here must fail loudly rather than silently
@@ -471,5 +489,27 @@ func TestLimitConstants(t *testing.T) {
 	}
 	if MaxOutputTotalBytes != 30000000 {
 		t.Errorf("MaxOutputTotalBytes = %d, want 30000000", MaxOutputTotalBytes)
+	}
+}
+
+// TestDeployCreateRequest_BytesIsInt64 pins the WIDTH of the one numeric
+// field in the contract. The golden suite cannot: it compares through
+// `any`, where every JSON number is a float64, so retyping Bytes to
+// float64 or int32 passes marshal, round-trip and key-set checks alike.
+// The only other thing that would catch it is a compile break in a
+// downstream importer, which is outside this repo's CI (line review,
+// 2026-08-17).
+//
+// int64 is the deliberate width: it is the packed tarball's size in
+// bytes, and a 32-bit field would silently cap the contract at 2 GiB.
+func TestDeployCreateRequest_BytesIsInt64(t *testing.T) {
+	f, ok := reflect.TypeOf(DeployCreateRequest{}).FieldByName("Bytes")
+	if !ok {
+		t.Fatal("DeployCreateRequest has no Bytes field")
+	}
+	if f.Type.Kind() != reflect.Int64 {
+		t.Errorf("Bytes is %s, want int64 — a narrower type silently caps the "+
+			"contract, and the golden tests cannot see a numeric retype because "+
+			"they compare through any/float64", f.Type.Kind())
 	}
 }

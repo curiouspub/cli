@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// This file closes six gaps that the fixture-driven golden tests in
+// This file closes the gaps that the fixture-driven golden tests in
 // wire_test.go cannot see, each demonstrated by mutation before being
 // written:
 //
@@ -65,9 +65,20 @@
 //     a skip" behaviour lives in one place rather than four copies that
 //     could drift apart.
 //
-// Gaps 2, 3, 4, 6 and 7 are enforced by parsing wire.go's AST, which is the
-// only way to enumerate a Go package's declared types, constants and vars
-// at test time.
+//  8. A NEW field carrying `omitempty` from birth bypassed gap 1
+//     entirely — see omitempty_guard_test.go, which bans the tag rather
+//     than enumerating its victims.
+//  9. Exported FUNCS and METHODS had no guard at all, and gap 6's own
+//     comment wrongly called vars "the one shape" that was unguarded —
+//     see func_guard_test.go. A custom UnmarshalJSON was the sharp case:
+//     it can revoke this package's unknown-field tolerance for one type
+//     without touching a field or a tag, where no fixture can see it.
+//
+// These guards are enforced by parsing the AST of EVERY non-test .go file
+// in this package — not only wire.go, despite what several comments below
+// still say in passing. parseSources reads the directory, which is what
+// makes a constant declared in a second file catchable; that is load-
+// bearing, not incidental.
 
 package wire
 
@@ -232,29 +243,36 @@ func TestEveryErrorCodeConstantIsPinned(t *testing.T) {
 	// Deliberately duplicated from TestErrorCodeConstants. The duplication is
 	// the point: this list is derived from the spec, the other from the Go
 	// constants, and the AST comparison below is what forces them to agree.
-	pinned := map[string]bool{
-		"bad_request":     true,
-		"unauthorized":    true,
-		"forbidden":       true,
-		"not_found":       true,
-		"rate_limited":    true,
-		"capacity_closed": true,
-		"maintenance":     true,
-		"internal":        true,
+	pinned := map[string]string{
+		"CodeBadRequest":     "bad_request",
+		"CodeUnauthorized":   "unauthorized",
+		"CodeForbidden":      "forbidden",
+		"CodeNotFound":       "not_found",
+		"CodeRateLimited":    "rate_limited",
+		"CodeCapacityClosed": "capacity_closed",
+		"CodeMaintenance":    "maintenance",
+		"CodeInternal":       "internal",
 	}
 
 	declared := declaredErrorCodeValues(t)
 
-	for value := range declared {
-		if !pinned[value] {
-			t.Errorf("ErrorCode %q is declared in wire.go but not pinned by a test — "+
-				"error codes are public contract and a consumer switches on them", value)
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("ErrorCode constant %s (= %q) is declared in wire.go but not pinned by a "+
+				"test — the exported IDENTIFIER is public API of this module just as the "+
+				"string value is", name, value)
+			continue
+		}
+		if value != want {
+			t.Errorf("ErrorCode constant %s = %q, want %q — changing a shipped value breaks "+
+				"every client already switching on it", name, value, want)
 		}
 	}
-	for value := range pinned {
-		if !declared[value] {
-			t.Errorf("ErrorCode %q is pinned by tests but no longer declared in wire.go — "+
-				"removing or renaming a code is a breaking change within v1", value)
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("ErrorCode constant %s is pinned by tests but no longer declared in "+
+				"wire.go — removing or renaming it is a breaking change within v1", name)
 		}
 	}
 }
@@ -283,7 +301,8 @@ func TestAllErrorCodesEnumeratesEveryConstant(t *testing.T) {
 		listed[string(code)] = true
 	}
 
-	for value := range declared {
+	declaredValues := valueSet(declared)
+	for value := range declaredValues {
 		if !listed[value] {
 			t.Errorf("ErrorCode %q is declared in wire.go but missing from AllErrorCodes — "+
 				"add it in the same commit as the constant, or every consumer that ranges "+
@@ -291,7 +310,7 @@ func TestAllErrorCodesEnumeratesEveryConstant(t *testing.T) {
 		}
 	}
 	for value := range listed {
-		if !declared[value] {
+		if !declaredValues[value] {
 			t.Errorf("AllErrorCodes contains %q, which is not declared as an exported "+
 				"constant in wire.go — the enumeration may only name codes the contract "+
 				"actually defines", value)
@@ -308,26 +327,33 @@ func TestEveryDeployStatusConstantIsPinned(t *testing.T) {
 	// reason as the ErrorCode pair: this list is derived from the spec, the
 	// other from the Go constants, and the AST comparison below is what
 	// forces them to agree.
-	pinned := map[string]bool{
-		"queued":   true,
-		"building": true,
-		"built":    true,
-		"live":     true,
-		"failed":   true,
+	pinned := map[string]string{
+		"StatusQueued":   "queued",
+		"StatusBuilding": "building",
+		"StatusBuilt":    "built",
+		"StatusLive":     "live",
+		"StatusFailed":   "failed",
 	}
 
 	declared := declaredDeployStatusValues(t)
 
-	for value := range declared {
-		if !pinned[value] {
-			t.Errorf("DeployStatus %q is declared in wire.go but not pinned by a test — "+
-				"deploy statuses are public contract and a consumer switches on them", value)
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("DeployStatus constant %s (= %q) is declared in wire.go but not pinned by a "+
+				"test — the exported IDENTIFIER is public API of this module just as the "+
+				"string value is", name, value)
+			continue
+		}
+		if value != want {
+			t.Errorf("DeployStatus constant %s = %q, want %q — changing a shipped value breaks "+
+				"every client already switching on it", name, value, want)
 		}
 	}
-	for value := range pinned {
-		if !declared[value] {
-			t.Errorf("DeployStatus %q is pinned by tests but no longer declared in wire.go — "+
-				"removing or renaming a status is a breaking change within v1", value)
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("DeployStatus constant %s is pinned by tests but no longer declared in "+
+				"wire.go — removing or renaming it is a breaking change within v1", name)
 		}
 	}
 }
@@ -352,7 +378,8 @@ func TestAllDeployStatusesEnumeratesEveryConstant(t *testing.T) {
 		listed[string(status)] = true
 	}
 
-	for value := range declared {
+	declaredValues := valueSet(declared)
+	for value := range declaredValues {
 		if !listed[value] {
 			t.Errorf("DeployStatus %q is declared in wire.go but missing from "+
 				"AllDeployStatuses — add it in the same commit as the constant, or every "+
@@ -361,7 +388,7 @@ func TestAllDeployStatusesEnumeratesEveryConstant(t *testing.T) {
 		}
 	}
 	for value := range listed {
-		if !declared[value] {
+		if !declaredValues[value] {
 			t.Errorf("AllDeployStatuses contains %q, which is not declared as an exported "+
 				"constant in wire.go — the enumeration may only name statuses the contract "+
 				"actually defines", value)
@@ -375,28 +402,35 @@ func TestAllDeployStatusesEnumeratesEveryConstant(t *testing.T) {
 func TestEveryPhaseConstantIsPinned(t *testing.T) {
 	// Deliberately duplicated from TestPhaseConstants, for the same reason
 	// as the ErrorCode and DeployStatus pairs.
-	pinned := map[string]bool{
-		"queued":     true,
-		"starting":   true,
-		"extracting": true,
-		"installing": true,
-		"building":   true,
-		"uploading":  true,
-		"publishing": true,
+	pinned := map[string]string{
+		"PhaseQueued":     "queued",
+		"PhaseStarting":   "starting",
+		"PhaseExtracting": "extracting",
+		"PhaseInstalling": "installing",
+		"PhaseBuilding":   "building",
+		"PhaseUploading":  "uploading",
+		"PhasePublishing": "publishing",
 	}
 
 	declared := declaredPhaseValues(t)
 
-	for value := range declared {
-		if !pinned[value] {
-			t.Errorf("Phase %q is declared in wire.go but not pinned by a test — "+
-				"phases are public contract and a consumer switches on them", value)
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("Phase constant %s (= %q) is declared in wire.go but not pinned by a "+
+				"test — the exported IDENTIFIER is public API of this module just as the "+
+				"string value is", name, value)
+			continue
+		}
+		if value != want {
+			t.Errorf("Phase constant %s = %q, want %q — changing a shipped value breaks "+
+				"every client already switching on it", name, value, want)
 		}
 	}
-	for value := range pinned {
-		if !declared[value] {
-			t.Errorf("Phase %q is pinned by tests but no longer declared in wire.go — "+
-				"removing or renaming a phase is a breaking change within v1", value)
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("Phase constant %s is pinned by tests but no longer declared in "+
+				"wire.go — removing or renaming it is a breaking change within v1", name)
 		}
 	}
 }
@@ -420,7 +454,8 @@ func TestAllPhasesEnumeratesEveryConstant(t *testing.T) {
 		listed[string(phase)] = true
 	}
 
-	for value := range declared {
+	declaredValues := valueSet(declared)
+	for value := range declaredValues {
 		if !listed[value] {
 			t.Errorf("Phase %q is declared in wire.go but missing from AllPhases — add it "+
 				"in the same commit as the constant, or every consumer that ranges the set "+
@@ -428,7 +463,7 @@ func TestAllPhasesEnumeratesEveryConstant(t *testing.T) {
 		}
 	}
 	for value := range listed {
-		if !declared[value] {
+		if !declaredValues[value] {
 			t.Errorf("AllPhases contains %q, which is not declared as an exported constant "+
 				"in wire.go — the enumeration may only name phases the contract actually "+
 				"defines", value)
@@ -620,6 +655,18 @@ func declaredStructTypes(t *testing.T) map[string]bool {
 	return out
 }
 
+// valueSet turns a name->value partition into the set of its values, for
+// the enumeration guards, which are about which VALUES appear in an
+// All… slice. The pinned guards are about NAMES; both properties matter
+// and they are checked separately.
+func valueSet(m map[string]string) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for _, v := range m {
+		out[v] = true
+	}
+	return out
+}
+
 // classifiedConstants is the result of partitioning every exported constant
 // in the package into the vocabulary it belongs to. It is the single
 // mechanism behind declaredErrorCodeValues, declaredDeployStatusValues,
@@ -629,9 +676,19 @@ func declaredStructTypes(t *testing.T) map[string]bool {
 // — lives in exactly one place rather than four copies that could drift
 // apart from each other.
 type classifiedConstants struct {
-	errorCodes     map[string]bool
-	deployStatuses map[string]bool
-	phases         map[string]bool
+	// Keyed by CONSTANT NAME, not by value. Value-keyed maps let a
+	// duplicate-NAME constant collapse into an already-pinned entry and
+	// enter the frozen contract unguarded — a line review demonstrated
+	// `StatusSneaky DeployStatus = "queued"` and
+	// `CodeBoth ErrorCode = ErrorCode("bad_request")` both leaving the
+	// suite green (2026-08-17), and a mutation in this repo confirmed it.
+	// The exported IDENTIFIER is public API of a released module just as
+	// much as the string value is: once a CLI ships importing it, removing
+	// it is the breaking change this package forbids. The limits partition
+	// was already name-keyed and would have caught its analogue.
+	errorCodes     map[string]string
+	deployStatuses map[string]string
+	phases         map[string]string
 	limits         map[string]int64
 }
 
@@ -668,9 +725,9 @@ type classifiedConstants struct {
 func classifyExportedConstants(t *testing.T) classifiedConstants {
 	t.Helper()
 	out := classifiedConstants{
-		errorCodes:     map[string]bool{},
-		deployStatuses: map[string]bool{},
-		phases:         map[string]bool{},
+		errorCodes:     map[string]string{},
+		deployStatuses: map[string]string{},
+		phases:         map[string]string{},
 		limits:         map[string]int64{},
 	}
 	for _, f := range parseSources(t) {
@@ -715,9 +772,18 @@ func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast
 	}
 
 	// A single-argument type conversion — e.g. ErrorCode("y") — names its
-	// target type as the callee. Go does not allow a ValueSpec to carry
-	// both an explicit Type and a conversion in its value, so the callee
-	// (when present) is unambiguous and simply overrides typeName.
+	// target type as the callee, which overrides any type on the spec
+	// itself.
+	//
+	// An earlier version of this comment claimed Go forbids a ValueSpec
+	// carrying BOTH an explicit type and a conversion. That is false —
+	// `const CodeBoth ErrorCode = ErrorCode("bad_request")` compiles, as a
+	// line review demonstrated (2026-08-17). The override is still
+	// unambiguous, but for a different and better reason: where both are
+	// present the compiler requires them to AGREE, so for any code that
+	// compiles, callee and spec type name the same type and it cannot
+	// matter which one is read. Recorded because this is the file whose
+	// whole doctrine is that a claim and its code must not drift.
 	if call, ok := value.(*ast.CallExpr); ok {
 		if len(call.Args) != 1 {
 			t.Errorf("exported constant %s is a call with %d arguments; the contract guard "+
@@ -744,15 +810,15 @@ func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast
 	switch typeName {
 	case "ErrorCode":
 		if s, ok := stringLitValue(t, name, lit); ok {
-			out.errorCodes[s] = true
+			out.errorCodes[name] = s
 		}
 	case "DeployStatus":
 		if s, ok := stringLitValue(t, name, lit); ok {
-			out.deployStatuses[s] = true
+			out.deployStatuses[name] = s
 		}
 	case "Phase":
 		if s, ok := stringLitValue(t, name, lit); ok {
-			out.phases[s] = true
+			out.phases[name] = s
 		}
 	case "":
 		// No declared type and no conversion. The only classifiable shape
@@ -801,21 +867,21 @@ func stringLitValue(t *testing.T, name string, lit *ast.BasicLit) (string, bool)
 
 // declaredErrorCodeValues returns the ErrorCode partition of
 // classifyExportedConstants.
-func declaredErrorCodeValues(t *testing.T) map[string]bool {
+func declaredErrorCodeValues(t *testing.T) map[string]string {
 	t.Helper()
 	return classifyExportedConstants(t).errorCodes
 }
 
 // declaredDeployStatusValues returns the DeployStatus partition of
 // classifyExportedConstants.
-func declaredDeployStatusValues(t *testing.T) map[string]bool {
+func declaredDeployStatusValues(t *testing.T) map[string]string {
 	t.Helper()
 	return classifyExportedConstants(t).deployStatuses
 }
 
 // declaredPhaseValues returns the Phase partition of
 // classifyExportedConstants.
-func declaredPhaseValues(t *testing.T) map[string]bool {
+func declaredPhaseValues(t *testing.T) map[string]string {
 	t.Helper()
 	return classifyExportedConstants(t).phases
 }
