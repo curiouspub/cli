@@ -72,6 +72,33 @@
 // so a future enum in this package inherits it without having to say so
 // again.
 //
+// # The deploy event stream has a GRAMMAR, and both sides are bound by it
+//
+// GET /v1/deploys/{id}/events emits named events whose payloads are the
+// types below. The sequence itself is contract, not an implementation
+// detail, because a client must decide when to stop reading and a server
+// must decide how to stop writing — and if that is left unstated,
+// whatever the first server happens to do becomes binding on every
+// client written against it, without anyone having decided it:
+//
+//   - EXACTLY ONE `done` event terminates every stream, and the final
+//     DeployStatus is inside it. A stream that ends without `done` ended
+//     abnormally (a dropped connection, a crashed relay) and a client
+//     should treat it as such, not as a result.
+//   - `error` is DIAGNOSTIC, never terminal. It explains what went wrong;
+//     it does not end the stream. A failed build still ends with
+//     `done{status: "failed"}` — so a client's termination condition is
+//     "`done` arrived", never "`error` arrived".
+//   - NOTHING follows `done`.
+//   - An UNKNOWN event type is SKIPPED. This is the additive rule for the
+//     event vocabulary, the same shape as the render-unknown obligation
+//     DeployStatus and Phase carry: a server may add an event type at any
+//     time, and a client built before it existed must ignore it and keep
+//     reading rather than treat the stream as corrupt.
+//
+// The grammar binds both directions symmetrically. The server may not end
+// a stream with `error`, and a client may not treat one as the end.
+//
 // Success is signalled by the HTTP status alone; error semantics live in
 // the error envelope. No client behaviour may depend on the contents of a
 // success body — several are empty objects, reserved for fields that may
@@ -362,6 +389,43 @@ var AllPhases = []Phase{
 	PhasePublishing,
 }
 
+// EventType is the NAME of an event on the deploy event stream — the
+// SSE `event:` line, not its payload. These were contract strings living
+// only in doc comments, hand-written on both sides of the wire, which is
+// the "hand-written copy that silently falls behind" failure AllErrorCodes
+// exists to prevent: a typo in either repo was uncheckable through this
+// package.
+//
+// An unknown event type is SKIPPED, per the stream grammar in the package
+// doc. That is what makes adding an event type additive.
+type EventType string
+
+const (
+	// EventLog carries one line of combined build output (LogEvent).
+	EventLog EventType = "log"
+	// EventPhase reports pipeline progress (PhaseEvent).
+	EventPhase EventType = "phase"
+	// EventDone terminates the stream exactly once (DoneEvent).
+	EventDone EventType = "done"
+	// EventError is diagnostic and never terminal; its payload is the
+	// same Error the HTTP surface uses, so a client switches on the same
+	// ErrorCode values in both places.
+	EventError EventType = "error"
+)
+
+// AllEventTypes is every EventType this contract defines, in the order a
+// well-formed stream tends to produce them: log and phase interleave
+// throughout, error may appear at any point, and done comes last exactly
+// once. As with the other vocabularies here, it exists so neither side
+// keeps a copy that can fall behind — a client can prove it handles (or
+// deliberately skips) every type it may receive.
+var AllEventTypes = []EventType{
+	EventLog,
+	EventPhase,
+	EventError,
+	EventDone,
+}
+
 // LogEvent is the data: payload of the SSE `log` event on
 // GET /v1/deploys/{id}/events. It carries the line and nothing else: the
 // stream is combined stdout/stderr by design, so there is no separate
@@ -404,6 +468,21 @@ type DoneEvent struct {
 // additive-only contract would convert a policy into a promise. It lives
 // server-side.
 const (
+	// MaxPackedBytes bounds the PACKED tarball — the number
+	// DeployCreateRequest.Bytes declares, and the one the server
+	// validates that declaration against before any upload URL exists.
+	//
+	// Deliberately EQUAL to MaxSourceTotalBytes, which bounds the
+	// UNCOMPRESSED tree. The two measure different things, so the equality
+	// is a decision rather than a coincidence: compression can only help,
+	// so a tree that fits the uncompressed cap always packs to something
+	// that fits this one, and a tarball exceeding it cannot have come from
+	// a tree that passed the client's own pre-flight. Keeping them equal
+	// means there is one number for a user to remember and no gap between
+	// the two in which a deploy is refused for a reason nobody can state
+	// simply.
+	MaxPackedBytes = 30_000_000
+
 	MaxSourceFiles      = 3_000
 	MaxSourceFileBytes  = 5_000_000
 	MaxSourceTotalBytes = 30_000_000

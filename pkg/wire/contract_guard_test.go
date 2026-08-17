@@ -218,6 +218,7 @@ func TestEveryExportedStructIsGoldenTested(t *testing.T) {
 		"ErrorCode":    "TestEveryErrorCodeConstantIsPinned + TestAllErrorCodesEnumeratesEveryConstant",
 		"DeployStatus": "TestEveryDeployStatusConstantIsPinned + TestAllDeployStatusesEnumeratesEveryConstant",
 		"Phase":        "TestEveryPhaseConstantIsPinned + TestAllPhasesEnumeratesEveryConstant",
+		"EventType":    "TestEveryEventTypeConstantIsPinned + TestAllEventTypesEnumeratesEveryConstant",
 	}
 	nonStruct := declaredNonStructTypes(t)
 	for name := range nonStruct {
@@ -484,6 +485,7 @@ func TestEveryLimitConstantIsPinned(t *testing.T) {
 	// as the string-enum pairs above: this table is the independent
 	// restatement the AST comparison below forces to agree with wire.go.
 	pinned := map[string]int64{
+		"MaxPackedBytes":      30_000_000,
 		"MaxSourceFiles":      3_000,
 		"MaxSourceFileBytes":  5_000_000,
 		"MaxSourceTotalBytes": 30_000_000,
@@ -509,6 +511,70 @@ func TestEveryLimitConstantIsPinned(t *testing.T) {
 			t.Errorf("limit constant %s is pinned by tests but no longer declared in "+
 				"wire.go — removing or changing a limit's name is a breaking change "+
 				"within v1", name)
+		}
+	}
+}
+
+// TestEveryEventTypeConstantIsPinned mirrors its siblings for
+// EventType: the event NAMES are contract strings both repos write onto
+// and read off the wire, so a typo in either one is a stream nobody
+// handles.
+func TestEveryEventTypeConstantIsPinned(t *testing.T) {
+	pinned := map[string]string{
+		"EventLog":   "log",
+		"EventPhase": "phase",
+		"EventDone":  "done",
+		"EventError": "error",
+	}
+
+	declared := declaredEventTypeValues(t)
+
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("EventType constant %s (= %q) is declared in wire.go but not pinned "+
+				"by a test", name, value)
+			continue
+		}
+		if value != want {
+			t.Errorf("EventType constant %s = %q, want %q — the event name is what a "+
+				"client matches on; changing it breaks every released binary", name, value, want)
+		}
+	}
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("EventType constant %s is pinned by tests but no longer declared "+
+				"in wire.go — removing it is a breaking change within v1", name)
+		}
+	}
+}
+
+// TestAllEventTypesEnumeratesEveryConstant proves AllEventTypes lists
+// exactly the declared EventType constants, once each. A type declared
+// and left out of the slice reads to every consumer that ranges it as
+// "this event does not exist" — and for the event vocabulary that means
+// a client silently skipping a stream it was meant to handle, which the
+// skip-unknown rule makes indistinguishable from correct behaviour.
+func TestAllEventTypesEnumeratesEveryConstant(t *testing.T) {
+	declared := declaredEventTypeValues(t)
+	declaredValues := valueSet(declared)
+
+	listed := map[string]bool{}
+	for _, e := range AllEventTypes {
+		if listed[string(e)] {
+			t.Errorf("AllEventTypes lists %q more than once", e)
+		}
+		listed[string(e)] = true
+	}
+	for value := range declaredValues {
+		if !listed[value] {
+			t.Errorf("EventType %q is declared in wire.go but missing from AllEventTypes", value)
+		}
+	}
+	for value := range listed {
+		if !declaredValues[value] {
+			t.Errorf("AllEventTypes contains %q, which is not declared as an exported "+
+				"constant in wire.go", value)
 		}
 	}
 }
@@ -583,6 +649,7 @@ func TestEveryExportedVarIsGuarded(t *testing.T) {
 		"AllErrorCodes":     "TestAllErrorCodesEnumeratesEveryConstant pins it against the declared ErrorCode constants",
 		"AllDeployStatuses": "TestAllDeployStatusesEnumeratesEveryConstant pins it against the declared DeployStatus constants, and TestAllDeployStatusesOrder pins its order",
 		"AllPhases":         "TestAllPhasesEnumeratesEveryConstant pins it against the declared Phase constants, and TestAllPhasesOrder pins its order",
+		"AllEventTypes":     "TestAllEventTypesEnumeratesEveryConstant pins it against the declared EventType constants, and TestAllEventTypesOrder pins its order",
 	}
 
 	declared := declaredExportedVars(t)
@@ -689,6 +756,7 @@ type classifiedConstants struct {
 	errorCodes     map[string]string
 	deployStatuses map[string]string
 	phases         map[string]string
+	eventTypes     map[string]string
 	limits         map[string]int64
 }
 
@@ -728,6 +796,7 @@ func classifyExportedConstants(t *testing.T) classifiedConstants {
 		errorCodes:     map[string]string{},
 		deployStatuses: map[string]string{},
 		phases:         map[string]string{},
+		eventTypes:     map[string]string{},
 		limits:         map[string]int64{},
 	}
 	for _, f := range parseSources(t) {
@@ -820,6 +889,10 @@ func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast
 		if s, ok := stringLitValue(t, name, lit); ok {
 			out.phases[name] = s
 		}
+	case "EventType":
+		if s, ok := stringLitValue(t, name, lit); ok {
+			out.eventTypes[name] = s
+		}
 	case "":
 		// No declared type and no conversion. The only classifiable shape
 		// left is an untyped INTEGER literal — the shape every limit
@@ -841,11 +914,11 @@ func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast
 		}
 		t.Errorf("exported constant %s has no declared type and is not a plain limit "+
 			"integer — it belongs to no known vocabulary (ErrorCode, DeployStatus, Phase, "+
-			"or a limit constant) and must not sit in the contract unowned", name)
+			"EventType, or a limit constant) and must not sit in the contract unowned", name)
 	default:
 		t.Errorf("exported constant %s is declared as %s, which is none of ErrorCode, "+
-			"DeployStatus or Phase — add a partition for it in classifyOneConstant before "+
-			"it enters the frozen contract", name, typeName)
+			"DeployStatus, Phase or EventType — add a partition for it in "+
+			"classifyOneConstant before it enters the frozen contract", name, typeName)
 	}
 }
 
@@ -884,6 +957,13 @@ func declaredDeployStatusValues(t *testing.T) map[string]string {
 func declaredPhaseValues(t *testing.T) map[string]string {
 	t.Helper()
 	return classifyExportedConstants(t).phases
+}
+
+// declaredEventTypeValues returns the EventType partition of
+// classifyExportedConstants.
+func declaredEventTypeValues(t *testing.T) map[string]string {
+	t.Helper()
+	return classifyExportedConstants(t).eventTypes
 }
 
 // declaredLimitValues returns the limit-constant partition of

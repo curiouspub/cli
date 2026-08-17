@@ -475,6 +475,9 @@ func TestAllPhasesOrder(t *testing.T) {
 // enforcing 30 MB is exactly the class of bug this pin exists to catch
 // before it ships.
 func TestLimitConstants(t *testing.T) {
+	if MaxPackedBytes != 30000000 {
+		t.Errorf("MaxPackedBytes = %d, want 30000000", MaxPackedBytes)
+	}
 	if MaxSourceFiles != 3000 {
 		t.Errorf("MaxSourceFiles = %d, want 3000", MaxSourceFiles)
 	}
@@ -511,5 +514,35 @@ func TestDeployCreateRequest_BytesIsInt64(t *testing.T) {
 		t.Errorf("Bytes is %s, want int64 — a narrower type silently caps the "+
 			"contract, and the golden tests cannot see a numeric retype because "+
 			"they compare through any/float64", f.Type.Kind())
+	}
+}
+
+// TestEventTypeConstants pins each event name's exact string, from the
+// spec side rather than from the constants, so this table and the AST
+// guard's must agree.
+func TestEventTypeConstants(t *testing.T) {
+	for _, tc := range []struct {
+		got  EventType
+		want string
+	}{
+		{EventLog, "log"},
+		{EventPhase, "phase"},
+		{EventDone, "done"},
+		{EventError, "error"},
+	} {
+		if string(tc.got) != tc.want {
+			t.Errorf("EventType constant = %q, want %q", string(tc.got), tc.want)
+		}
+	}
+}
+
+// TestAllEventTypesOrder pins the slice literally. The order here is not
+// a lifecycle the way AllPhases' is — log and phase interleave, error may
+// appear at any point — but done is last, deliberately, because it is the
+// one event the grammar says terminates the stream.
+func TestAllEventTypesOrder(t *testing.T) {
+	want := []EventType{"log", "phase", "error", "done"}
+	if !reflect.DeepEqual(AllEventTypes, want) {
+		t.Fatalf("AllEventTypes = %v, want %v", AllEventTypes, want)
 	}
 }
