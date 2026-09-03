@@ -191,6 +191,16 @@ func goldenCases() []goldenCase {
 			newEmpty: func() any { return &DeployStartResponse{} },
 		},
 		{
+			// The publish step's success body. Both fields INFORM and
+			// neither branches: the label is shown to a person, and the
+			// expiry is a fact the client cannot derive for itself
+			// because the window is the server's.
+			name:     "DeployPublishResponse",
+			fixture:  "deploy_publish_response.json",
+			value:    &DeployPublishResponse{Subdomain: "quick-koala-4f2a", ExpiresAt: time.Date(2026, 9, 6, 9, 0, 0, 0, time.UTC)},
+			newEmpty: func() any { return &DeployPublishResponse{} },
+		},
+		{
 			name:    "LogEvent",
 			fixture: "log_event.json",
 			value: &LogEvent{

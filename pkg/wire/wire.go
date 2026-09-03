@@ -306,6 +306,37 @@ type DeployStartResponse struct {
 	Status DeployStatus `json:"status"`
 }
 
+// DeployPublishResponse is the success body of POST /v1/deploys/{id}/publish:
+// the step that makes a built deploy answer at a URL.
+//
+// It carries the SUBDOMAIN LABEL rather than an assembled URL, and the
+// choice is worth stating because the sibling DeployCreateResponse goes
+// the other way with UploadURL. The reason is where the base domain
+// lives: the server has no representation of it at all today — no
+// constant, no config key — so returning a URL would mean introducing
+// one, and doing that inside a review fix is how a contract acquires a
+// field nobody designed. The label is exactly what the server already
+// holds.
+//
+// A URL field may be added later; that is additive and allowed. Removing
+// Subdomain would not be, which is why the smaller commitment is the one
+// made first.
+//
+// ExpiresAt is carried because a client CANNOT derive it: the window is
+// the server's (spec §3.6, measured from the publish that set it), and
+// nothing the client can see determines it. Contrast DeployCreateResponse,
+// which deliberately omits an expiry for UploadURL — there the client
+// learns by the PUT failing, and a second representation of a fact it can
+// discover is a second thing to keep true. Here there is no discovering
+// it; there is only being told.
+//
+// Per this package's own rule, no client behaviour may depend on these
+// contents: they are shown to a person, not branched on.
+type DeployPublishResponse struct {
+	Subdomain string    `json:"subdomain"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // DeployStatus is the lifecycle state of a deploy, as recorded in the
 // deploy record's status attribute. It is what the record says the deploy IS —
 // contrast Phase, which is what the build pipeline is DOING. The two
