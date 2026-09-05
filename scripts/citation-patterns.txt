@@ -10,10 +10,19 @@
 # rules forbid, not any one instance of one: the point is to stop the
 # next occurrence before it ships, not to remember the one that already
 # did.
+#
+# THE BOUNDARY, in one sentence: the NAME of a sibling repository may be
+# written here; its STRUCTURE may not. Saying that a server implementation
+# exists and conforms to this contract is public fact and is useful to a
+# reader; naming a path inside it, a document in it, or an identifier out
+# of its planning tree hands a reader a map they can never use and tells
+# them what is in it. So no pattern below matches a bare repository name,
+# and several match paths into one.
 
 # A section sign followed by a number: a private document's own numbered
-# heading.
-§[0-9]+(\.[0-9]+)*
+# heading. Optional whitespace after the sign, because "§ 3.1" is the
+# same citation and used to pass.
+§\s*[0-9]+(\.[0-9]+)*
 
 # A document version string, written as "spec" followed by a lowercase
 # "v" and a dotted number.
@@ -32,13 +41,41 @@
 \bEpic[ -]?[0-9]+\b
 
 # An internal decision identifier: a single capital letter directly
-# followed by digits, with no separator, set off in parentheses.
+# followed by digits, with no separator. Two forms, and the gap between
+# them is deliberate.
+#
+# Set off in parentheses — unambiguous, so matched bare:
 \([A-Z][0-9]+\)
 
-# A path segment naming the private documentation tree.
-\bdocs/(epics|tasks)/
-\bplatform/docs/
+# Or introduced by a citing word. This form is CONTEXT-CUED rather than
+# bare, and that is a considered limit, not an oversight: a bare
+# \b[A-Z][0-9]+\b also matches P256, S3, H2 and every other legitimate
+# capital-letter-plus-digits token a Go source file may contain. A guard
+# that cries wolf on its first run is a guard somebody disables, so this
+# one asks for a citing word and accepts that "the D7 rule" slips past.
+(?i)\b(?:see|per|ruled|rule|ruling|decision|finding)\s+[A-Z][0-9]+\b
 
-# The control plane's storage key scheme: an uppercase word immediately
-# followed by "#", used as an item-key prefix.
-\b[A-Z][A-Z0-9_]*#
+# Gap and cross-epic identifiers, which have no ambiguous twin and so are
+# matched bare.
+\bGAP-[0-9]+\b
+\bE[0-9]+-[0-9]+\b
+
+# A path segment naming the private documentation tree. Both separators:
+# a Windows-style path is the same disclosure, and this repo's CI runs on
+# Windows, so the backslash form is not hypothetical.
+\bdocs/(epics|tasks)/
+\bdocs\\(epics|tasks)\\
+\bplatform/docs
+\bplatform\\docs
+
+# The control plane's storage key scheme: an item-key prefix immediately
+# followed by "#".
+#
+# NAMED prefixes rather than "any uppercase word", and the narrowing is
+# deliberate. The broad form matched this repo's own CLAUDE.md, where the
+# rule is STATED using a placeholder — a guard reding on the sentence that
+# describes it is the fastest way to get the guard switched off. This list
+# is the canonical one the rule's own home carries; it is narrower than
+# "any uppercase word", so a NEW prefix invented later is not caught until
+# it is added here, and that trade is taken knowingly.
+\b(DEPLOY|SITE|TOKEN|CODE|EMAIL|QUOTA|CAP|WAIT|NAME|FLAG)#

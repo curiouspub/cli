@@ -1,9 +1,20 @@
 // Package guard holds this repository's mechanically-enforced versions of
-// three of the hard rules this public repo states in its own CLAUDE.md:
-// no AWS SDK or telemetry dependency, no compiled-in hostname beyond a
-// small and explicitly counted allowance, and no private citation in a
-// source comment. Each is a test, run by `go test ./...`, so a violation
-// fails at the moment it is introduced rather than at review.
+// the hard rules this public repo states in its own CLAUDE.md: no AWS SDK
+// or telemetry dependency, no compiled-in hostname beyond a small and
+// explicitly named allowance, no private citation in any file, and no
+// unexported struct field holding a Secret. Each is a test, so a
+// violation fails at the moment it is introduced rather than at review.
+//
+// A NOTE ON RUNNING THEM. These guards read state Go does not track as an
+// input to this package — the whole module's source tree, its dependency
+// graph, a manifest file. Go's test cache therefore does not know when
+// their answer has changed, and a cached PASS stays valid while the tree
+// underneath it starts violating the rule. That is measured, not
+// theorised: a banned import added elsewhere went undetected on a cached
+// run and failed instantly without the cache. The Makefile runs
+// `go test -count=1` for exactly this reason, and anyone invoking these
+// by hand should too. **A guard that can report a stale pass is worse
+// than no guard, because it is trusted.**
 //
 // Every guard here reads real state — the module's own dependency graph,
 // its own source files, and its own citation-pattern manifest —
@@ -12,6 +23,7 @@
 package guard
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -72,11 +84,10 @@ func moduleRoot(t *testing.T) string {
 // fix has a field of view, and the field of view is itself an unguarded
 // assumption.
 //
-// The stated LIMIT of guard 3's view, so the next reader does not have
-// to rediscover it: it sees ".go" files only. A citation in a workflow
-// YAML, a Makefile or a shell script ships past it. That gap is real and
-// is covered by the leak scan, which reads the same manifest over the
-// whole tree and the git history.
+// Guard 3 no longer uses this helper at all — it walks EVERY file, not
+// only Go sources, via allTextFiles below. Scoping it to ".go" left a
+// citation in a workflow YAML, a Makefile or a shell script shipping
+// past it, and every one of those is as world-readable as a source file.
 func goFiles(t *testing.T, root string, includeTests bool) []string {
 	t.Helper()
 	var files []string
@@ -105,6 +116,67 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 	}
 	if len(files) == 0 {
 		t.Fatal("no .go files found under the module root — this guard would silently pass")
+	}
+	sort.Strings(files)
+	return files
+}
+
+// allTextFiles returns every text file under root that ships in this
+// repository. Guard 3's threat is a world-readable FILE disclosing
+// private paper, and "world-readable" has nothing to do with the
+// extension — so the extension is not a filter here.
+//
+// What is skipped, and why each is not a hole:
+//
+//   - .git, vendor and bin: not authored content. bin holds build output
+//     that is gitignored and never published.
+//   - The citation manifest itself. It necessarily contains text shaped
+//     like the citations it hunts. Today's patterns are written so they
+//     do not match themselves, but that is a property of how they happen
+//     to be spelled, and a future pattern carrying a literal example
+//     would red the guard against its own rule file. Excluded
+//     deliberately, and named here so the exclusion is a decision rather
+//     than a silent gap.
+//   - Binary files, detected by a NUL byte rather than by extension, so
+//     an unfamiliar binary format is skipped on evidence instead of on a
+//     list somebody has to maintain.
+func allTextFiles(t *testing.T, root string) []string {
+	t.Helper()
+	manifest := filepath.Join(root, "scripts", "citation-patterns.txt")
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "bin":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == manifest {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		probe := data
+		if len(probe) > 8192 {
+			probe = probe[:8192]
+		}
+		if bytes.IndexByte(probe, 0) >= 0 {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no text files found under the module root — this guard would silently pass")
 	}
 	sort.Strings(files)
 	return files
@@ -143,6 +215,16 @@ var bannedDependencyFragments = []string{
 	"datadoghq",
 	"honeycomb.io",
 	"newrelic",
+	// Telemetry that arrives as a "standard" rather than as a vendor,
+	// which is how it gets waved through. OpenTelemetry is a
+	// phone-home whatever the governance model, and it was the gap a
+	// review found in the vendor-name-only list above.
+	"opentelemetry.io",
+	"opencensus.io",
+	"go.elastic.co/apm",
+	"bugsnag",
+	"rollbar",
+	"logrocket",
 }
 
 // TestNoBannedDependencies walks the module's full dependency graph and
@@ -156,25 +238,52 @@ var bannedDependencyFragments = []string{
 // the very import path this test needs to see.
 func TestNoBannedDependencies(t *testing.T) {
 	root := moduleRoot(t)
-	cmd := exec.Command("go", "list", "-e", "-deps", "./...")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
+
+	// Two sources, because neither sees what the other does.
+	//
+	//   - `go list -deps -test ./...` is the package graph INCLUDING test
+	//     imports. Without -test, a banned client imported only from a
+	//     _test.go file is invisible — and a dependency added "just for a
+	//     test" is in go.sum, in the module cache, and one careless import
+	//     away from the shipped binary.
+	//   - `go list -m all` is the MODULE graph, which still names a
+	//     requirement nothing imports yet. A go.mod line is the commitment;
+	//     the import is a formality that follows.
+	sources := []struct {
+		label string
+		args  []string
+	}{
+		{"package graph (tests included)", []string{"list", "-e", "-deps", "-test", "./..."}},
+		{"module requirements", []string{"list", "-m", "all"}},
+	}
 
 	var offenders []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		for _, banned := range bannedDependencyFragments {
-			if strings.Contains(line, banned) {
-				offenders = append(offenders, line)
-				break
+	var hardErr error
+	var hardOut []byte
+
+	for _, src := range sources {
+		cmd := exec.Command("go", src.args...)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
 			}
+			for _, banned := range bannedDependencyFragments {
+				if strings.Contains(line, banned) {
+					offenders = append(offenders, fmt.Sprintf("%s: %s", src.label, line))
+					break
+				}
+			}
+		}
+		if err != nil && hardErr == nil {
+			hardErr, hardOut = err, out
 		}
 	}
 
 	if len(offenders) > 0 {
+		sort.Strings(offenders)
 		t.Errorf("dependency graph names a banned import path: %s\n"+
 			"This repo never imports an AWS SDK or a telemetry/analytics client — "+
 			"the client speaks only the public HTTP API and phones home to nobody.",
@@ -182,9 +291,9 @@ func TestNoBannedDependencies(t *testing.T) {
 		return
 	}
 
-	if err != nil {
-		t.Fatalf("go list -e -deps ./... failed with no banned dependency in its output "+
-			"(a genuine build problem, not this guard): %v\n%s", err, out)
+	if hardErr != nil {
+		t.Fatalf("a `go list` invocation failed with no banned dependency in its output "+
+			"(a genuine build problem, not this guard): %v\n%s", hardErr, hardOut)
 	}
 }
 
@@ -192,12 +301,39 @@ func TestNoBannedDependencies(t *testing.T) {
 // Guard 2: no compiled-in hostname beyond a small, counted allowance.
 // ---------------------------------------------------------------------
 
-var urlLiteralPattern = regexp.MustCompile(`^https?://`)
+// urlBearingPattern matches a literal that carries a scheme separator
+// ANYWHERE, not only at the start. Anchoring it to the start was a real
+// gap twice over: a struct tag renders as `endpoint:"https://host"`, so
+// the literal begins with the tag key, and a URL split across a
+// concatenation puts the separator mid-literal.
+var urlBearingPattern = regexp.MustCompile(`://`)
+
+// schemeFragmentPattern matches a literal that is nothing but the front
+// of a URL. On its own it is harmless; as an operand of a `+` it is a
+// host being assembled out of pieces small enough that no single one
+// looks like a URL — `"http" + "s://" + host`.
+var schemeFragmentPattern = regexp.MustCompile(`^https?:?/{0,2}$`)
 
 // maxNamedURLConstants is the guard's own stated ceiling, not a count
 // read from anywhere else — a guard whose allowance can be widened by
 // editing the same file that trips it is not a guard.
 const maxNamedURLConstants = 2
+
+// allowedURLConstants pins the VALUE of every permitted named URL
+// constant, because a ceiling of two says nothing about WHICH two.
+// Counting alone, swapping the API base for an attacker's host and
+// leaving the count at two passed — the guard's name promised a
+// protection its body did not provide.
+//
+// A constant not listed here fails even if the count is within budget.
+// Adding a line is a deliberate, reviewable act in a public repo, which
+// is the whole difference between an allowance and a hole.
+//
+// The site base domain has no entry on purpose: it is a bare domain with
+// no scheme, so it is not a URL literal and never reaches this map.
+var allowedURLConstants = map[string]string{
+	"https://api.curious.pub": "the default control-plane API base",
+}
 
 // TestAtMostTwoNamedURLConstants parses every non-test source file's AST
 // and classifies each http(s) string literal it finds into one of two
@@ -223,6 +359,8 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 
 	var bare []string
 	var named []string
+	var unapproved []string
+	var split []string
 
 	for _, path := range goFiles(t, root, false) {
 		f, err := parser.ParseFile(fset, path, nil, 0)
@@ -251,18 +389,41 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 		}
 
 		ast.Inspect(f, func(n ast.Node) bool {
+			// A URL assembled from pieces: flag the concatenation itself,
+			// since no single operand looks like a URL.
+			if be, ok := n.(*ast.BinaryExpr); ok && be.Op == token.ADD {
+				for _, operand := range []ast.Expr{be.X, be.Y} {
+					l, ok := operand.(*ast.BasicLit)
+					if !ok || l.Kind != token.STRING {
+						continue
+					}
+					uq, err := strconv.Unquote(l.Value)
+					if err != nil || !schemeFragmentPattern.MatchString(uq) {
+						continue
+					}
+					pos := fset.Position(l.Pos())
+					split = append(split, fmt.Sprintf("%q (%s:%d)",
+						uq, displayPath(root, path), pos.Line))
+				}
+				return true
+			}
+
 			lit, ok := n.(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
 				return true
 			}
 			unquoted, err := strconv.Unquote(lit.Value)
-			if err != nil || !urlLiteralPattern.MatchString(unquoted) {
+			if err != nil || !urlBearingPattern.MatchString(unquoted) {
 				return true
 			}
 			pos := fset.Position(lit.Pos())
 			loc := fmt.Sprintf("%s:%d", displayPath(root, path), pos.Line)
 			if name, isNamed := namedLits[lit]; isNamed {
 				named = append(named, fmt.Sprintf("%s = %q (%s)", name, unquoted, loc))
+				if _, allowed := allowedURLConstants[unquoted]; !allowed {
+					unapproved = append(unapproved,
+						fmt.Sprintf("%s = %q (%s)", name, unquoted, loc))
+				}
 			} else {
 				bare = append(bare, fmt.Sprintf("%q (%s)", unquoted, loc))
 			}
@@ -277,6 +438,25 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 			"Every http(s) URL in a non-test source must be declared as one named "+
 			"constant, not written inline — see CLAUDE.md's hard don'ts.",
 			strings.Join(bare, "; "))
+	}
+
+	if len(split) > 0 {
+		sort.Strings(split)
+		t.Errorf("found a URL being assembled from scheme fragments: %s\n"+
+			"A host split across a concatenation is still a compiled-in host, "+
+			"and splitting it is how one gets past a guard that only reads whole "+
+			"literals. Declare the URL as one named constant.",
+			strings.Join(split, "; "))
+	}
+
+	if len(unapproved) > 0 {
+		sort.Strings(unapproved)
+		t.Errorf("found a named URL constant whose VALUE is not approved: %s\n"+
+			"The ceiling of %d says how many, not which. Every named URL constant "+
+			"must appear in allowedURLConstants with its exact value — otherwise "+
+			"replacing the API base with another host passes while the count is "+
+			"unchanged.",
+			strings.Join(unapproved, "; "), maxNamedURLConstants)
 	}
 
 	if len(named) > maxNamedURLConstants {
@@ -326,16 +506,21 @@ func loadCitationPatterns(t *testing.T, root string) []*regexp.Regexp {
 	return patterns
 }
 
-// TestNoPrivateCitations scans every Go source file's raw text — TESTS
-// INCLUDED, and not only string literals, since a citation is at least as
-// likely to live in a comment as in a value — against every pattern the
-// manifest declares, and fails naming the file, line and pattern that
-// matched.
+// TestNoPrivateCitations scans EVERY text file this repository ships —
+// Go sources, tests, the Makefile, the CI workflow, shell scripts,
+// markdown — against every pattern the manifest declares, and fails
+// naming the file, line and pattern that matched. Not only string
+// literals: a citation is at least as likely to live in a comment.
+//
+// The scope is the whole tree because the threat is that a
+// world-readable file discloses private paper, and every file here is
+// world-readable. A guard's scope follows its threat, not the scope of
+// whatever guard sits next to it in the file.
 func TestNoPrivateCitations(t *testing.T) {
 	root := moduleRoot(t)
 	patterns := loadCitationPatterns(t, root)
 
-	for _, path := range goFiles(t, root, true) {
+	for _, path := range allTextFiles(t, root) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
@@ -352,4 +537,96 @@ func TestNoPrivateCitations(t *testing.T) {
 			}
 		}
 	}
+}
+
+// ---------------------------------------------------------------------
+// Guard 4: no unexported struct field holds a Secret.
+// ---------------------------------------------------------------------
+
+// TestNoUnexportedSecretFields fails on any struct field that is
+// unexported AND typed Secret, because that combination defeats the
+// redaction and no method on the type can prevent it.
+//
+// The mechanism, measured rather than assumed: fmt cannot call a method
+// on a value it reached by reflecting an UNEXPORTED field, so String,
+// GoString and Format are all skipped and the underlying string is
+// printed. `%v`, `%+v`, `%#v` and Sprint on the containing struct each
+// print the real secret. Making Secret an opaque struct does not fix it
+// either — the same reflection prints the inner field.
+//
+// So the type provably cannot defend itself here, and the only place the
+// rule can live is a guard. That is the whole reason this one exists:
+// every other guard in this file enforces a rule the code could in
+// principle follow by accident, and this one enforces a rule the
+// language gives no way to express.
+//
+// SCOPE, and its threat: non-test sources only. The harm is a secret
+// reaching a user's terminal or a log line from shipped code. A test's
+// own output is not shipped — and internal/ui's redaction suite must
+// construct exactly this shape to pin the limit it documents, so
+// including tests would red the guard against the test that proves the
+// thing the guard is for. The remaining exposure is a test printing a
+// secret into CI output, which is a smaller and differently-shaped risk.
+func TestNoUnexportedSecretFields(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+
+	var offenders []string
+	for _, path := range goFiles(t, root, false) {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		inUIPackage := f.Name.Name == "ui"
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, field := range st.Fields.List {
+				if !isSecretType(field.Type, inUIPackage) {
+					continue
+				}
+				for _, name := range field.Names {
+					if name.IsExported() || name.Name == "_" {
+						continue
+					}
+					pos := fset.Position(name.Pos())
+					offenders = append(offenders, fmt.Sprintf("%s (%s:%d)",
+						name.Name, displayPath(root, path), pos.Line))
+				}
+			}
+			return true
+		})
+	}
+
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Errorf("found an UNEXPORTED struct field holding a Secret: %s\n"+
+			"fmt cannot call a method on a value reached by reflecting an "+
+			"unexported field, so the redaction is skipped and %%v on the "+
+			"containing struct prints the real secret. Export the field, or "+
+			"do not store a Secret in this struct.",
+			strings.Join(offenders, "; "))
+	}
+}
+
+// isSecretType reports whether expr names ui.Secret — written as
+// `ui.Secret` from outside the package, or as a bare `Secret` from
+// inside it. Pointers and slices of it count: the field still holds the
+// value and reflection still reaches through.
+func isSecretType(expr ast.Expr, inUIPackage bool) bool {
+	switch e := expr.(type) {
+	case *ast.StarExpr:
+		return isSecretType(e.X, inUIPackage)
+	case *ast.ArrayType:
+		return isSecretType(e.Elt, inUIPackage)
+	case *ast.Ident:
+		return inUIPackage && e.Name == "Secret"
+	case *ast.SelectorExpr:
+		pkg, ok := e.X.(*ast.Ident)
+		return ok && pkg.Name == "ui" && e.Sel.Name == "Secret"
+	}
+	return false
 }

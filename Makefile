@@ -13,8 +13,21 @@ build:
 # release-build check, a wrapper package's own test runner) — each lands
 # here as an additional prerequisite so one command still sees the whole
 # repository.
+#
+# -count=1 disables the test cache, and it is LOAD BEARING rather than a
+# habit. The guards in internal/guard read state Go does not track as an
+# input to their package: the whole module's source tree, its dependency
+# graph, and a manifest file. Go's cache key covers the guard package's
+# own files, so a violation introduced anywhere else leaves the cached
+# PASS valid and `make ci` reports green against a tree that breaks the
+# rule.
+#
+# That is not hypothetical — it was measured. A banned telemetry import
+# added to a test file went undetected on a cached run and failed
+# immediately with -count=1. A guard that can report a stale pass is
+# worse than no guard, because it is trusted.
 test:
-	go test ./...
+	go test -count=1 ./...
 
 vet:
 	go vet ./...
