@@ -56,6 +56,18 @@ permanent — a later commit cannot unpublish it.
   this module. Additive changes only; renaming/removing a released
   field is forbidden. Golden tests required.
 
+## Dependency policy
+
+Stdlib first. A third-party dependency is introduced only by a change
+that names it and says why the stdlib answer was rejected.
+
+**Never** an AWS SDK, a telemetry/analytics client, or an auto-updater —
+this is enforced mechanically by `internal/guard`, not only stated here.
+
+Anticipated for the near future: `golang.org/x/term`, for TTY detection
+and no-echo input. Everything else — tar, gzip, JSON, HTTP, path
+matching — is stdlib until a change argues otherwise.
+
 ## Client flow (order is intentional)
 
 **Local truths before global state: a project that can't deploy makes

@@ -1,0 +1,44 @@
+# Citation patterns this repo forbids in any non-test Go source file.
+#
+# One RE2 regular expression per line (Go's regexp/syntax). Blank lines
+# and lines starting with "#" are ignored. internal/guard reads this file
+# directly at test time — it keeps no copy of its own — so deleting a
+# line here is deleting the one thing that made the matching mutation
+# visible.
+#
+# Each pattern describes the SHAPE of a private reference this repo's own
+# rules forbid, not any one instance of one: the point is to stop the
+# next occurrence before it ships, not to remember the one that already
+# did.
+
+# A section sign followed by a number: a private document's own numbered
+# heading.
+§[0-9]+(\.[0-9]+)*
+
+# A document version string, written as "spec" followed by a lowercase
+# "v" and a dotted number.
+(?i)\bspec[ _-]?v[0-9]+(\.[0-9]+)+\b
+
+# An internal task identifier: the capital letter T, a hyphen, and
+# digits.
+\bT-[0-9]+\b
+
+# An internal ruling identifier: the capital letter R, a hyphen, and
+# digits.
+\bR-[0-9]+\b
+
+# An internal epic identifier, spelled out as a word followed by a
+# number.
+\bEpic[ -]?[0-9]+\b
+
+# An internal decision identifier: a single capital letter directly
+# followed by digits, with no separator, set off in parentheses.
+\([A-Z][0-9]+\)
+
+# A path segment naming the private documentation tree.
+\bdocs/(epics|tasks)/
+\bplatform/docs/
+
+# The control plane's storage key scheme: an uppercase word immediately
+# followed by "#", used as an item-key prefix.
+\b[A-Z][A-Z0-9_]*#
