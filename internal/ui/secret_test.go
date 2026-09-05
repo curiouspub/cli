@@ -77,3 +77,37 @@ func TestSecretShape(t *testing.T) {
 		t.Errorf("string(Secret(%q)) = %q, want the original value back", realValue, string(s))
 	}
 }
+
+// TestSecretMapKeyIsAKnownUncoveredPath pins the ONE rendering path the
+// redaction does not cover, so it is a documented limit rather than a
+// surprise — and so that a change in either direction is noticed.
+//
+// encoding/json resolves a map key by checking reflect.Kind == String
+// before consulting encoding.TextMarshaler, so Secret's MarshalText is
+// never reached for a key and the real value is printed. This test
+// asserts the CURRENT behaviour: if it ever starts failing, either the
+// standard library changed or Secret stopped being a string, and both
+// are things somebody should be told about rather than discover.
+func TestSecretMapKeyIsAKnownUncoveredPath(t *testing.T) {
+	const real = "secret-abc123"
+	b, err := json.Marshal(map[Secret]string{Secret(real): "v"})
+	if err != nil {
+		t.Fatalf("marshalling a map keyed by Secret: %v", err)
+	}
+	if !strings.Contains(string(b), real) {
+		t.Fatalf("map-key redaction now WORKS: %s\n"+
+			"That is good news and this test is the wrong shape for it — "+
+			"the limit documented on Secret is stale, and the doc comment "+
+			"naming this path as uncovered must be corrected with it.", b)
+	}
+
+	// The paths that ARE covered stay covered, asserted beside the limit
+	// so the two cannot drift apart.
+	value, err := json.Marshal(map[string]Secret{"k": Secret(real)})
+	if err != nil {
+		t.Fatalf("marshalling a map valued by Secret: %v", err)
+	}
+	if strings.Contains(string(value), real) {
+		t.Errorf("a Secret as a map VALUE leaked the real value: %s", value)
+	}
+}
