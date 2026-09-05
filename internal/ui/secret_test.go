@@ -111,3 +111,52 @@ func TestSecretMapKeyIsAKnownUncoveredPath(t *testing.T) {
 		t.Errorf("a Secret as a map VALUE leaked the real value: %s", value)
 	}
 }
+
+// TestSecretFormatterCoversEveryVerb is the regression for the leak that
+// Stringer alone allowed: fmt consults Stringer only for the
+// string-compatible verbs, and for any other verb it printed its own
+// diagnostic — with the real value embedded in it. %d on a Secret gave
+// %!d(ui.Secret=<the token>).
+//
+// Format covers every verb fmt routes through it. The exception is %p,
+// which fmt resolves before consulting Formatter; that is asserted
+// separately below as a known limit rather than quietly omitted here.
+func TestSecretFormatterCoversEveryVerb(t *testing.T) {
+	s := Secret(realValue)
+	for _, verb := range []string{
+		"%s", "%v", "%q", "%#v", "%x", "%X",
+		"%d", "%f", "%t", "%c", "%e", "%b", "%o", "%U",
+	} {
+		got := fmt.Sprintf(verb, s)
+		if strings.Contains(got, realValue) {
+			t.Errorf("%s leaked the real value: %s", verb, got)
+		}
+	}
+}
+
+// TestSecretKnownUncoveredPaths pins the paths that cannot be closed on
+// this type, so each is a documented limit rather than a surprise and so
+// a change in either direction is noticed. If any of these starts
+// redacting, that is good news and the doc comment on Secret is stale.
+func TestSecretKnownUncoveredPaths(t *testing.T) {
+	s := Secret(realValue)
+
+	// %p: fmt resolves it before consulting Formatter.
+	if got := fmt.Sprintf("%p", s); !strings.Contains(got, realValue) {
+		t.Errorf("%%p now redacts (%s) — Secret's documented limits are stale", got)
+	}
+
+	// An unexported field: fmt cannot call a method on a value reached by
+	// reflecting one, so it prints the underlying string.
+	type holder struct{ token Secret }
+	if got := fmt.Sprintf("%v", holder{s}); !strings.Contains(got, realValue) {
+		t.Errorf("an unexported Secret field now redacts (%s) — limits are stale", got)
+	}
+
+	// An EXPORTED field is covered, asserted beside the limit so the two
+	// cannot drift apart.
+	type exported struct{ Token Secret }
+	if got := fmt.Sprintf("%v", exported{s}); strings.Contains(got, realValue) {
+		t.Errorf("an exported Secret field leaked: %s", got)
+	}
+}
