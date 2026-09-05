@@ -36,6 +36,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "-h", "--help", "help":
+		// Consistent with parseSubcommand below: help is a request, not a
+		// mistake. It answered on stderr with exit 2, which made
+		// `curious -h | less` show nothing.
+		printUsage(stdout)
+		return 0
 	case "version":
 		return runVersion(args[1:], stdout, stderr)
 	case "deploy":

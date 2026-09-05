@@ -26,8 +26,10 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -130,19 +132,24 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 //
 //   - .git, vendor and bin: not authored content. bin holds build output
 //     that is gitignored and never published.
-//   - The citation manifest itself. It necessarily contains text shaped
-//     like the citations it hunts. Today's patterns are written so they
-//     do not match themselves, but that is a property of how they happen
-//     to be spelled, and a future pattern carrying a literal example
-//     would red the guard against its own rule file. Excluded
-//     deliberately, and named here so the exclusion is a decision rather
-//     than a silent gap.
+//   - The citation manifest's PATTERN lines. It necessarily contains
+//     text shaped like the citations it hunts, and a future pattern
+//     carrying a literal example would red the guard against its own
+//     rule file. Its COMMENT lines are scanned like any other file,
+//     because prose explaining a pattern has no need to cite anything —
+//     excluding the whole file left the one place in the repo where a
+//     citation could sit unexamined.
 //   - Binary files, detected by a NUL byte rather than by extension, so
 //     an unfamiliar binary format is skipped on evidence instead of on a
-//     list somebody has to maintain.
+//     list somebody has to maintain. STATED LIMIT: a UTF-16 text file is
+//     full of NUL bytes and is therefore skipped as binary. Nothing in
+//     this repo is UTF-16 today; Windows tooling writes it, so if a
+//     .ps1 or .txt ever arrives that way it is outside this guard and
+//     inside the leak scan's.
+//
+// A second stated limit: file CONTENTS are matched, never file NAMES.
 func allTextFiles(t *testing.T, root string) []string {
 	t.Helper()
-	manifest := filepath.Join(root, "scripts", "citation-patterns.txt")
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -155,9 +162,7 @@ func allTextFiles(t *testing.T, root string) []string {
 			}
 			return nil
 		}
-		if path == manifest {
-			return nil
-		}
+
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
@@ -212,8 +217,8 @@ var bannedDependencyFragments = []string{
 	"getsentry",
 	"sentry-go",
 	"posthog",
-	"datadoghq",
-	"honeycomb.io",
+	"datadog",
+	"honeycombio",
 	"newrelic",
 	// Telemetry that arrives as a "standard" rather than as a vendor,
 	// which is how it gets waved through. OpenTelemetry is a
@@ -225,7 +230,23 @@ var bannedDependencyFragments = []string{
 	"bugsnag",
 	"rollbar",
 	"logrocket",
+	// Auto-updaters. CLAUDE.md's first screen promises this class is
+	// "enforced mechanically by internal/guard", and until these lines
+	// existed it was not — the public repo was making a claim its code
+	// did not keep, which is worse than a missing check because a reader
+	// stops looking.
+	"selfupdate",
+	"go-update",
+	"go-github-selfupdate",
+	"equinox.io",
 }
+
+// Matching is case-INSENSITIVE, and two entries above earn it. The list
+// once carried "datadoghq" and "honeycomb.io", which match no real
+// import path: the modules are github.com/DataDog/... and
+// github.com/honeycombio/..., so both clients compiled in with the guard
+// green. A fragment nobody has checked against a real path is a line of
+// reassurance, not a check.
 
 // TestNoBannedDependencies walks the module's full dependency graph and
 // fails naming any import path that matches a banned fragment.
@@ -264,14 +285,25 @@ func TestNoBannedDependencies(t *testing.T) {
 	for _, src := range sources {
 		cmd := exec.Command("go", src.args...)
 		cmd.Dir = root
+		// GOWORK=off, and it is load bearing. `go list -m all` inherits
+		// the environment, so an operator standing in a Go workspace that
+		// also includes the private server repository got THAT module's
+		// requirements reported as this one's — twenty-three AWS SDK
+		// lines, a confident failure, and nothing wrong with this repo.
+		// A false red on the exact cross-repo session the workspace rules
+		// prescribe is how a guard gets switched off. The subject here is
+		// this module's own go.mod, never whatever workspace it is being
+		// read from.
+		cmd.Env = append(os.Environ(), "GOWORK=off")
 		out, err := cmd.CombinedOutput()
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
+			lower := strings.ToLower(line)
 			for _, banned := range bannedDependencyFragments {
-				if strings.Contains(line, banned) {
+				if strings.Contains(lower, strings.ToLower(banned)) {
 					offenders = append(offenders, fmt.Sprintf("%s: %s", src.label, line))
 					break
 				}
@@ -298,8 +330,26 @@ func TestNoBannedDependencies(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Guard 2: no compiled-in hostname beyond a small, counted allowance.
+// Guard 2: no compiled-in host beyond a small, explicitly named
+// allowance — as a URL literal, as a bare hostname, or embedded.
 // ---------------------------------------------------------------------
+//
+// WHAT THIS GUARD DOES NOT SEE, stated because the heading used to
+// promise more than the body measured:
+//
+//   - A URL built at RUN TIME from parts that are individually innocent:
+//     (&url.URL{Scheme: "https", Host: h}).String(), strings.Join of
+//     scheme and host, fmt.Sprintf with the separator in the format.
+//     The bare-hostname check below is what catches the HOST in those,
+//     which is the part that matters; the scheme is not the secret.
+//   - Anything reached over the network or read from a file at run time.
+//   - Test files, deliberately: fixtures legitimately contain URLs, and
+//     a test binary is not shipped.
+//   - A bare hostname whose final label is outside the short TLD list
+//     below. That list is short on purpose — this repository is full of
+//     dotted FILENAMES, and matching "any dotted word" would red on
+//     go.mod and package.json. A reserved documentation TLD is also
+//     outside it, which is harmless: such a name does not resolve.
 
 // urlBearingPattern matches a literal that carries a scheme separator
 // ANYWHERE, not only at the start. Anchoring it to the start was a real
@@ -335,6 +385,32 @@ var allowedURLConstants = map[string]string{
 	"https://api.curious.pub": "the default control-plane API base",
 }
 
+// allowedHosts is the same list the leak scan enforces, and it exists
+// because a hostname needs no scheme to be a compiled-in host: a bare
+// `const tracker = "collect.example"` passed every URL-shaped check here
+// while being exactly the thing they are for.
+//
+// Kept as ONE list with the leak scan rather than two that drift.
+var allowedHosts = map[string]bool{
+	"api.curious.pub": true,
+	"curious.pub":     true,
+	"curiously.dev":   true,
+	"github.com":      true,
+}
+
+// hostLiteralPattern matches a bare dotted hostname. The final label
+// must be one of a short list of real TLDs rather than "any letters",
+// because this repository is full of dotted FILENAMES — go.mod,
+// package.json, astro.config.mjs — and a guard that reds on those is one
+// somebody deletes on its first afternoon.
+var hostLiteralPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.(com|dev|pub|io|net|org)$`)
+
+// embedDirectivePattern finds a //go:embed directive's patterns, so the
+// files a binary carries are scanned for hosts too. Without this, a URL
+// in an embedded text file shipped inside the binary with nothing in
+// `make ci` seeing a scheme anywhere.
+var embedDirectivePattern = regexp.MustCompile(`^\s*//go:embed\s+(.+)$`)
+
 // TestAtMostTwoNamedURLConstants parses every non-test source file's AST
 // and classifies each http(s) string literal it finds into one of two
 // buckets:
@@ -361,6 +437,8 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 	var named []string
 	var unapproved []string
 	var split []string
+	var hosts []string
+	var embedded []string
 
 	for _, path := range goFiles(t, root, false) {
 		f, err := parser.ParseFile(fset, path, nil, 0)
@@ -413,7 +491,15 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 				return true
 			}
 			unquoted, err := strconv.Unquote(lit.Value)
-			if err != nil || !urlBearingPattern.MatchString(unquoted) {
+			if err != nil {
+				return true
+			}
+			if !urlBearingPattern.MatchString(unquoted) {
+				if hostLiteralPattern.MatchString(unquoted) && !allowedHosts[unquoted] {
+					pos := fset.Position(lit.Pos())
+					hosts = append(hosts, fmt.Sprintf("%q (%s:%d)",
+						unquoted, displayPath(root, path), pos.Line))
+				}
 				return true
 			}
 			pos := fset.Position(lit.Pos())
@@ -438,6 +524,50 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 			"Every http(s) URL in a non-test source must be declared as one named "+
 			"constant, not written inline — see CLAUDE.md's hard don'ts.",
 			strings.Join(bare, "; "))
+	}
+
+	// Embedded files ship inside the binary; scan what they carry.
+	for _, path := range goFiles(t, root, false) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			m := embedDirectivePattern.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			for _, pat := range strings.Fields(m[1]) {
+				pat = strings.Trim(pat, `"`)
+				matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), pat))
+				for _, target := range matches {
+					body, err := os.ReadFile(target)
+					if err != nil {
+						continue
+					}
+					if urlBearingPattern.Match(body) {
+						embedded = append(embedded, fmt.Sprintf("%s (embedded by %s)",
+							displayPath(root, target), displayPath(root, path)))
+					}
+				}
+			}
+		}
+	}
+
+	if len(embedded) > 0 {
+		sort.Strings(embedded)
+		t.Errorf("found a URL inside an EMBEDDED file: %s\n"+
+			"go:embed puts the file's bytes in the shipped binary, so a host in "+
+			"there is as compiled-in as one in a source literal — and no literal "+
+			"scan sees it.", strings.Join(embedded, "; "))
+	}
+
+	if len(hosts) > 0 {
+		sort.Strings(hosts)
+		t.Errorf("found a compiled-in HOSTNAME that is not on the allowed list: %s\n"+
+			"A hostname needs no scheme to be a host. Allowed: api.curious.pub, "+
+			"curious.pub, curiously.dev, github.com — the same list the leak scan "+
+			"enforces.", strings.Join(hosts, "; "))
 	}
 
 	if len(split) > 0 {
@@ -520,12 +650,20 @@ func TestNoPrivateCitations(t *testing.T) {
 	root := moduleRoot(t)
 	patterns := loadCitationPatterns(t, root)
 
+	manifest := filepath.Join(root, "scripts", "citation-patterns.txt")
 	for _, path := range allTextFiles(t, root) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
 		}
+		isManifest := path == manifest
 		for lineNum, line := range strings.Split(string(data), "\n") {
+			// In the manifest, only its prose is in scope: a pattern line
+			// is a description of a citation shape and matching patterns
+			// against themselves proves nothing.
+			if isManifest && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
 			for _, re := range patterns {
 				if m := re.FindString(line); m != "" {
 					t.Errorf("%s:%d matches citation pattern %q (matched %q): %q\n"+
@@ -540,93 +678,255 @@ func TestNoPrivateCitations(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Guard 4: no unexported struct field holds a Secret.
+// Guard 4: no unexported struct field can reach a Secret.
 // ---------------------------------------------------------------------
 
+// secretTypeString is how go/types spells this repo's Secret. Comparing
+// the fully-qualified string rather than an object identity keeps the
+// check independent of which importer instance produced the package.
+const (
+	modulePath       = "github.com/curiouspub/cli"
+	secretTypeString = modulePath + "/internal/ui.Secret"
+)
+
 // TestNoUnexportedSecretFields fails on any struct field that is
-// unexported AND typed Secret, because that combination defeats the
-// redaction and no method on the type can prevent it.
+// unexported and whose type can REACH a Secret, and on any defined type
+// declared from Secret.
 //
 // The mechanism, measured rather than assumed: fmt cannot call a method
 // on a value it reached by reflecting an UNEXPORTED field, so String,
 // GoString and Format are all skipped and the underlying string is
-// printed. `%v`, `%+v`, `%#v` and Sprint on the containing struct each
-// print the real secret. Making Secret an opaque struct does not fix it
-// either — the same reflection prints the inner field.
+// printed. Making Secret an opaque struct does not fix it either — the
+// same reflection prints the inner field. So the type provably cannot
+// defend itself here, and the only place the rule can live is a guard.
 //
-// So the type provably cannot defend itself here, and the only place the
-// rule can live is a guard. That is the whole reason this one exists:
-// every other guard in this file enforces a rule the code could in
-// principle follow by accident, and this one enforces a rule the
-// language gives no way to express.
+// TRANSITIVE, and that is the whole point of the rewrite. The first
+// version of this guard matched the SPELLING of the immediate field
+// type, which answered "is this field written `ui.Secret`" while the
+// rule is "can this field reach a Secret". Those coincide only in the
+// shape its author had in mind. fmt's read-only flag propagates through
+// every field reached via an unexported one, so
 //
-// SCOPE, and its threat: non-test sources only. The harm is a secret
-// reaching a user's terminal or a log line from shipped code. A test's
-// own output is not shipped — and internal/ui's redaction suite must
-// construct exactly this shape to pin the limit it documents, so
-// including tests would red the guard against the test that proves the
-// thing the guard is for. The remaining exposure is a test printing a
-// secret into CI output, which is a smaller and differently-shaped risk.
+//	type inner struct{ Token ui.Secret }   // exported!
+//	type outer struct{ in inner }          // one unexported field
+//
+// prints the secret in full through %v, and the spelling check was
+// green. That is not an exotic shape, it is `struct{ creds Credentials }`
+// — the ordinary way to hold a credential. Aliases, defined types,
+// dot-imports, maps, slices and generic instantiations were all green
+// too, for the same reason.
+//
+// The residue, named rather than left to be found:
+//
+//   - An `any` or interface-typed field can hold a Secret at runtime and
+//     no static check can see it.
+//   - A generic container is only inspected where it is INSTANTIATED in
+//     a package this check type-checks.
+//   - Non-test sources only. The harm is a secret reaching a terminal or
+//     a log from shipped code, and internal/ui's own suite must build
+//     this exact shape to pin the limits it documents.
 func TestNoUnexportedSecretFields(t *testing.T) {
 	root := moduleRoot(t)
-	fset := token.NewFileSet()
 
 	var offenders []string
-	for _, path := range goFiles(t, root, false) {
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			t.Fatalf("parsing %s: %v", path, err)
-		}
-		inUIPackage := f.Name.Name == "ui"
+	var derived []string
+	structsChecked := 0
 
-		ast.Inspect(f, func(n ast.Node) bool {
-			st, ok := n.(*ast.StructType)
-			if !ok || st.Fields == nil {
-				return true
+	for _, dir := range packageDirs(t, root) {
+		fset := token.NewFileSet()
+		var files []*ast.File
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("reading %s: %v", dir, err)
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
 			}
-			for _, field := range st.Fields.List {
-				if !isSecretType(field.Type, inUIPackage) {
-					continue
+			f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+			if err != nil {
+				t.Fatalf("parsing %s: %v", filepath.Join(dir, name), err)
+			}
+			files = append(files, f)
+		}
+		if len(files) == 0 {
+			continue
+		}
+
+		info := &types.Info{Types: make(map[ast.Expr]types.TypeAndValue)}
+		conf := types.Config{
+			Importer: importer.ForCompiler(fset, "source", nil),
+			// A package that will not type-check must not silently
+			// disappear from this guard's view: the error is collected
+			// and the walk continues over whatever did resolve, and the
+			// zero-structs check below is what catches a total failure.
+			Error: func(error) {},
+		}
+		// The package PATH given here shows up inside every type string
+		// this guard prints. Passing the absolute directory put the
+		// checkout's full filesystem path — and the operator's username —
+		// into failure output that CI logs verbatim, so it is the
+		// module-relative import path instead.
+		pkgPath := modulePath
+		if rel, err := filepath.Rel(root, dir); err == nil && rel != "." {
+			pkgPath = modulePath + "/" + filepath.ToSlash(rel)
+		}
+		_, _ = conf.Check(pkgPath, fset, files, info)
+
+		for _, f := range files {
+			ast.Inspect(f, func(n ast.Node) bool {
+				// A defined type built FROM Secret strips its methods and
+				// therefore leaks even in an exported field.
+				if ts, ok := n.(*ast.TypeSpec); ok && !ts.Assign.IsValid() {
+					if tv, ok := info.Types[ts.Type]; ok && isSecretType(tv.Type) {
+						pos := fset.Position(ts.Pos())
+						derived = append(derived, fmt.Sprintf("%s (%s:%d)",
+							ts.Name.Name, displayPath(root, pos.Filename), pos.Line))
+					}
 				}
-				for _, name := range field.Names {
-					if name.IsExported() || name.Name == "_" {
+
+				st, ok := n.(*ast.StructType)
+				if !ok {
+					return true
+				}
+				tv, ok := info.Types[st]
+				if !ok {
+					return true
+				}
+				strct, ok := tv.Type.(*types.Struct)
+				if !ok {
+					return true
+				}
+				structsChecked++
+				for i := 0; i < strct.NumFields(); i++ {
+					field := strct.Field(i)
+					if field.Exported() || field.Name() == "_" {
 						continue
 					}
-					pos := fset.Position(name.Pos())
-					offenders = append(offenders, fmt.Sprintf("%s (%s:%d)",
-						name.Name, displayPath(root, path), pos.Line))
+					if !reachesSecret(field.Type(), map[types.Type]bool{}) {
+						continue
+					}
+					pos := fset.Position(field.Pos())
+					offenders = append(offenders, fmt.Sprintf("%s %s (%s:%d)",
+						field.Name(), field.Type(), displayPath(root, pos.Filename), pos.Line))
 				}
-			}
-			return true
-		})
+				return true
+			})
+		}
+	}
+
+	if structsChecked == 0 {
+		t.Fatal("type-checked ZERO struct types — this guard would silently pass")
 	}
 
 	if len(offenders) > 0 {
 		sort.Strings(offenders)
-		t.Errorf("found an UNEXPORTED struct field holding a Secret: %s\n"+
-			"fmt cannot call a method on a value reached by reflecting an "+
-			"unexported field, so the redaction is skipped and %%v on the "+
-			"containing struct prints the real secret. Export the field, or "+
-			"do not store a Secret in this struct.",
+		t.Errorf("found an UNEXPORTED struct field that can reach a Secret: %s\n"+
+			"fmt cannot call a method on a value reached by reflecting an unexported "+
+			"field, and that applies at every depth below it — so %%v on the "+
+			"containing struct prints the real secret even when the Secret itself "+
+			"sits in an exported field further down. Export the field, or do not "+
+			"let this struct reach a Secret.",
 			strings.Join(offenders, "; "))
+	}
+
+	if len(derived) > 0 {
+		sort.Strings(derived)
+		t.Errorf("found a defined type declared FROM Secret: %s\n"+
+			"A defined type does not inherit its source type's methods, so this one "+
+			"has no String, no Format and no MarshalJSON — it prints in full "+
+			"everywhere, including from an EXPORTED field. Use ui.Secret itself, or "+
+			"an alias (=) if a local name is wanted.",
+			strings.Join(derived, "; "))
 	}
 }
 
-// isSecretType reports whether expr names ui.Secret — written as
-// `ui.Secret` from outside the package, or as a bare `Secret` from
-// inside it. Pointers and slices of it count: the field still holds the
-// value and reflection still reaches through.
-func isSecretType(expr ast.Expr, inUIPackage bool) bool {
-	switch e := expr.(type) {
-	case *ast.StarExpr:
-		return isSecretType(e.X, inUIPackage)
-	case *ast.ArrayType:
-		return isSecretType(e.Elt, inUIPackage)
-	case *ast.Ident:
-		return inUIPackage && e.Name == "Secret"
-	case *ast.SelectorExpr:
-		pkg, ok := e.X.(*ast.Ident)
-		return ok && pkg.Name == "ui" && e.Sel.Name == "Secret"
+// packageDirs returns every directory under root holding non-test Go
+// source. testdata trees are skipped: Go itself ignores them, and a
+// fixture is not shipped code.
+func packageDirs(t *testing.T, root string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "bin", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+			seen[filepath.Dir(path)] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+	if len(seen) == 0 {
+		t.Fatal("found no package directories — this guard would silently pass")
+	}
+	dirs := make([]string, 0, len(seen))
+	for d := range seen {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
+// isSecretType reports whether t is exactly ui.Secret.
+func isSecretType(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	return ok && types.TypeString(named, nil) == secretTypeString
+}
+
+// reachesSecret reports whether a value of type t can contain a Secret,
+// following named types, aliases, pointers, slices, arrays, maps,
+// channels and struct fields — at any depth, and regardless of whether
+// the fields below are exported, because fmt's read-only flag propagates
+// downward from the first unexported field.
+//
+// Interfaces return false: what they hold is a runtime fact. That is the
+// guard's honest limit, stated in the test's doc comment too.
+func reachesSecret(t types.Type, seen map[types.Type]bool) bool {
+	if t == nil || seen[t] {
+		return false
+	}
+	seen[t] = true
+
+	t = types.Unalias(t)
+	if isSecretType(t) {
+		return true
+	}
+
+	switch u := t.(type) {
+	case *types.Named:
+		for i := 0; i < u.TypeArgs().Len(); i++ {
+			if reachesSecret(u.TypeArgs().At(i), seen) {
+				return true
+			}
+		}
+		return reachesSecret(u.Underlying(), seen)
+	case *types.Pointer:
+		return reachesSecret(u.Elem(), seen)
+	case *types.Slice:
+		return reachesSecret(u.Elem(), seen)
+	case *types.Array:
+		return reachesSecret(u.Elem(), seen)
+	case *types.Chan:
+		return reachesSecret(u.Elem(), seen)
+	case *types.Map:
+		return reachesSecret(u.Key(), seen) || reachesSecret(u.Elem(), seen)
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if reachesSecret(u.Field(i).Type(), seen) {
+				return true
+			}
+		}
 	}
 	return false
 }

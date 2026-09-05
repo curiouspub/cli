@@ -11,6 +11,12 @@
 # next occurrence before it ships, not to remember the one that already
 # did.
 #
+# These comments DESCRIBE the shapes rather than quoting examples of
+# them, and that is not fastidiousness: the guard reads these comment
+# lines like any other prose in the repository, so an example written out
+# here would be a citation shipping inside the file that forbids
+# citations. Only the pattern lines below are exempt.
+#
 # THE BOUNDARY, in one sentence: the NAME of a sibling repository may be
 # written here; its STRUCTURE may not. Saying that a server implementation
 # exists and conforms to this contract is public fact and is useful to a
@@ -20,9 +26,10 @@
 # and several match paths into one.
 
 # A section sign followed by a number: a private document's own numbered
-# heading. Optional whitespace after the sign, because "§ 3.1" is the
-# same citation and used to pass.
-§\s*[0-9]+(\.[0-9]+)*
+# heading. Optional whitespace after the sign, including a NON-BREAKING
+# space: typed in a word processor the separator is often U+00A0, which
+# RE2's \s does not match, and the citation reads identically.
+§[\s\x{00A0}]*[0-9]+(\.[0-9]+)*
 
 # A document version string, written as "spec" followed by a lowercase
 # "v" and a dotted number.
@@ -38,7 +45,7 @@
 
 # An internal epic identifier, spelled out as a word followed by a
 # number.
-\bEpic[ -]?[0-9]+\b
+(?i)\bEpic[ -]?[0-9]+\b
 
 # An internal decision identifier: a single capital letter directly
 # followed by digits, with no separator. Two forms, and the gap between
@@ -53,18 +60,29 @@
 # capital-letter-plus-digits token a Go source file may contain. A guard
 # that cries wolf on its first run is a guard somebody disables, so this
 # one asks for a citing word and accepts that "the D7 rule" slips past.
-(?i)\b(?:see|per|ruled|rule|ruling|decision|finding)\s+[A-Z][0-9]+\b
+\b(?i:see|per|ruled|rule|ruling|decision|finding)\s+[A-Z][0-9]+\b
 
 # Gap and cross-epic identifiers, which have no ambiguous twin and so are
 # matched bare.
 \bGAP-[0-9]+\b
 \bE[0-9]+-[0-9]+\b
 
+# Finding identifiers from this project's review registers. NAMED
+# prefixes rather than a generic [A-Z]+-[0-9]+, which would red on UTF-8,
+# SHA-256 and RFC-7235. These are the prefixes the registers actually
+# use. The register that produced this very file names its findings with
+# exactly these prefixes, and a comment citing one of them is the next
+# natural sentence somebody writes in a guard.
+\b(S|M|F|RQ|PUB|CMD)-[0-9]+\b
+\bG[0-9]-[0-9]+\b
+
 # A path segment naming the private documentation tree. Both separators:
 # a Windows-style path is the same disclosure, and this repo's CI runs on
 # Windows, so the backslash form is not hypothetical.
-\bdocs/(epics|tasks)/
-\bdocs\\(epics|tasks)\\
+\bdocs/epic
+\bdocs\\epic
+\bdocs/(tasks|curious-mvp-spec)
+\bdocs\\(tasks|curious-mvp-spec)
 \bplatform/docs
 \bplatform\\docs
 

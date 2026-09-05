@@ -112,3 +112,12 @@ func (Secret) MarshalJSON() ([]byte, error) {
 func (Secret) MarshalText() ([]byte, error) {
 	return []byte(redactedPlaceholder), nil
 }
+
+// MarshalBinary implements encoding.BinaryMarshaler, which is what
+// encoding/gob honours — gob deliberately does NOT consult TextMarshaler
+// (it was disabled for net.IP compatibility), so MarshalText above does
+// not reach it and a gob-encoded Secret carried the real value in full.
+// Measured against this type before the method existed.
+func (Secret) MarshalBinary() ([]byte, error) {
+	return []byte(redactedPlaceholder), nil
+}

@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -20,6 +21,21 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
+      # windows-latest has no GNU Make: the runner image ships MSYS2 but
+      # deliberately keeps it off PATH, and `shell: bash` on Windows is
+      # Git Bash, whose /usr/bin has none either. Without this the job
+      # exits 127 before a single check runs, so the whole reason the
+      # matrix includes Windows — path handling, file permissions, the
+      # config directory — is never exercised.
+      #
+      # This is setup, like setup-go above it, so the rule that `make ci`
+      # is the single entry point is unaffected: CI still runs that and
+      # nothing else.
+      - name: Install GNU Make (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install make -y --no-progress
+
       - name: make ci
         shell: bash
         run: make ci
