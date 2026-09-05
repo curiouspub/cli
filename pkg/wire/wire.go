@@ -323,7 +323,7 @@ type DeployStartResponse struct {
 // made first.
 //
 // ExpiresAt is carried because a client CANNOT derive it: the window is
-// the server's (spec §3.6, measured from the publish that set it), and
+// the server's, measured from the publish that set it, and
 // nothing the client can see determines it. Contrast DeployCreateResponse,
 // which deliberately omits an expiry for UploadURL — there the client
 // learns by the PUT failing, and a second representation of a fact it can

@@ -70,7 +70,13 @@ zero network calls.**
    isn't gated: the daily cap counts new ACCOUNTS, spent at
    `/v1/auth/verify`, and their deploy spends none of it.
 5. Pack. 6. Create deploy + PUT tarball. 7. Start + stream SSE.
-8. Print URL + expiry.
+8. Print the URL and the expiry. The publish step returns the SUBDOMAIN
+   LABEL, not a URL -- the server holds the label and has no
+   representation of the site's base domain -- so the client joins the
+   two itself. Say the site may take up to about a minute to answer;
+   propagation to edge locations is eventual, and asserting
+   reachability is asserting something false for the first half-minute
+   of every deploy.
 
 Login: email → 6-digit code (10-min expiry). Wrong/expired code NEVER
 restarts the flow — offer "Resend code? [Y/n]" in a retry loop.
