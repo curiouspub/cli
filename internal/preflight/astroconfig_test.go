@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------
@@ -27,7 +29,8 @@ type countingFS struct {
 	bytesRead int
 }
 
-func (c *countingFS) Stat(name string) (fs.FileInfo, error) { return os.Stat(name) }
+func (c *countingFS) Stat(name string) (fs.FileInfo, error)  { return os.Stat(name) }
+func (c *countingFS) Lstat(name string) (fs.FileInfo, error) { return os.Lstat(name) }
 
 func (c *countingFS) Open(name string) (io.ReadCloser, error) {
 	c.opens = append(c.opens, name)
@@ -146,7 +149,7 @@ var astroConfigTable = []struct {
 	// srcDir resolution: every fixture below has src/pages ABSENT, which
 	// is what makes this path run at all.
 	{"srcdir-relative", nil},
-	{"srcdir-hardstop", []wantFinding{
+	{"srcdir-resolves-no-pages-dir", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
 	}},
 	{"srcdir-backtick", nil},
@@ -241,7 +244,7 @@ var astroConfigTable = []struct {
 	// other. These two rows do: a hard stop plus a build-format warning
 	// together, and two independent warnings together, each asserting
 	// both findings are present rather than just one.
-	{"srcdir-hardstop-plus-buildformat-warning", []wantFinding{
+	{"srcdir-resolves-no-pages-dir-plus-buildformat-warning", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
 		{CheckIDBuildFormat, SeverityWarning, []string{"file"}, nil},
 	}},
@@ -349,6 +352,177 @@ var astroConfigTable = []struct {
 	{"build-format-vite-shadow", []wantFinding{
 		{CheckIDBuildFormat, SeverityWarning, []string{"file", "directory"}, nil},
 	}},
+
+	// ---------------------------------------------------------------
+	// Rows added by the maximum-rigour round: THE SUBSET GATE. Every
+	// fixture below is one of the review's own probe configs, taken
+	// verbatim. Each used to produce a CONFIDENT, WRONG claim; each must
+	// now produce an admission — both keys unresolved, warning on both,
+	// "for everything, not locally" — never a silent or a wrong answer.
+	// ---------------------------------------------------------------
+
+	// Finding 1a: a regex containing an escaped closer used to truncate
+	// the anchored object without failing, promoting the nested
+	// "srcDir: './wrong'" to a live top-level key. Must never mention
+	// "wrong": the gate must trip on the bare "/" before either key is
+	// ever inspected, and build-format's own silence must break too,
+	// since the same construct makes it unresolved as well.
+	{"srcdir-regex-escaped-closer", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, []string{"wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, nil, []string{"wrong"}},
+	}},
+	// Finding 1b (srcDir variant): a quote inside a regex used to let
+	// the following string literal's CONTENTS re-emerge as live code,
+	// reading "srcDir: \"wrong\"," out of a description string. Must
+	// never mention "wrong".
+	{"srcdir-quote-inside-regex", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, []string{"wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, nil, []string{"wrong"}},
+	}},
+	// Finding 1b (build.format variant): the same mechanism firing the
+	// 404 warning on a config that never sets build.format at all —
+	// the string content "build: { format: \"file\" }," leaking back as
+	// if it were the real key. The old, wrong finding named "file" with
+	// confidence; the fix must admit it cannot tell, not name a value.
+	{"srcdir-quote-inside-regex-buildformat", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, nil},
+		{CheckIDBuildFormat, SeverityWarning, nil, []string{"build.format is set to"}},
+	}},
+	// Finding 2: a regex ending in "\/" produces the byte pair that
+	// opens a line comment, eating the rest of the statement and
+	// leaving brackets unclosed — which used to make the WHOLE parse
+	// return empty, silently, even though build.format really is set
+	// to 'file' two lines later. The fix must reach unresolved AND SAY
+	// SO on build-format — a silent empty parse and a declared
+	// unresolved are different outcomes, and only the warning is
+	// honest.
+	{"srcdir-regex-trailing-escaped-slash", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, nil},
+		{CheckIDBuildFormat, SeverityWarning, nil, []string{"build.format is set to"}},
+	}},
+	// The review's own "byte-identical control": the same shape with a
+	// plain string instead of a regex must parse NORMALLY — a real,
+	// confident build-format warning naming 'file', not an admission.
+	// Without this row, nothing proves the admission above is really
+	// about the regex and not about the surrounding shape.
+	{"srcdir-regex-trailing-slash-control", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"couldn't be fully read"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"file", "directory"}, nil},
+	}},
+	// The ternary: its ":" used to be read as a property colon, so
+	// "outDir: useCustom ? srcDir : 'dist'" claimed srcDir was "dist".
+	// Must never mention "dist".
+	{"srcdir-ternary", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, []string{"dist"}},
+		{CheckIDBuildFormat, SeverityWarning, nil, []string{"dist"}},
+	}},
+
+	// Duplicate build/format keys: JavaScript takes the LAST, this
+	// scanner used to silently take the FIRST. Now ambiguous, matching
+	// how a duplicate srcDir key is already ambiguous rather than
+	// "first wins" — and, since ambiguity is itself informative, this
+	// is one of the two states that breaks build-format's usual
+	// silence. Both fixtures have src/pages present, isolating the
+	// build-format concern the way every other build-format row does.
+	{"build-format-duplicate-build-key", []wantFinding{
+		{CheckIDBuildFormat, SeverityWarning, []string{"more than once"}, nil},
+	}},
+	{"build-format-duplicate-format-key", []wantFinding{
+		{CheckIDBuildFormat, SeverityWarning, []string{"more than once"}, nil},
+	}},
+
+	// Byte-oriented escapes, fixed to be code-point-oriented. Both
+	// fixtures resolve CLEANLY — the directory each one names really
+	// exists on disk with that exact name — which is the point: a
+	// byte-for-byte (rather than code-point) decode would look for a
+	// directory that was never there and warn instead of passing.
+	// caf\xe9 must become "café" (U+00E9, UTF-8 0xC3 0xA9), not the raw
+	// byte 0xE9, which is not valid UTF-8 on its own and cannot match a
+	// real "café" directory.
+	{"srcdir-latin1-escape", nil},
+	// A UTF-16 surrogate pair (😀, the emoji directory this
+	// fixture is named for) must combine into the ONE astral character
+	// it names, not two independently-written, invalid runes.
+	{"srcdir-surrogate-pair-escape", nil},
+
+	// escapeUnresolved coverage: previously zero, per the review — the
+	// two guards keying on it (readStringLiteralValue and
+	// matchFileURLIdiom) could be deleted and the suite stayed green.
+	// All three rows below are LOCAL rejections (the malformed escape
+	// stays bounded inside its own string; the scan around it is not
+	// desynchronised), so — unlike the SUBSET GATE rows above — these
+	// must NOT claim the whole file is unreadable; they hit the
+	// ordinary "found a key, can't read its value" path.
+	{"srcdir-malformed-hex-escape", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+	}},
+	{"srcdir-fileurltopath-malformed-escape", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+	}},
+	// An unpaired high surrogate: valid hex, but not a valid Unicode
+	// scalar value on its own, and not followed by the low surrogate
+	// that would complete it. Must be unresolved, never a mangled path.
+	{"srcdir-unpaired-surrogate", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+	}},
+
+	// A quoted key ("srcDir": "./quoted") is a legitimate spelling this
+	// scanner has always claimed to support (isKeyToken checks it) but
+	// which, per the review, "works and is pinned by nothing" — nothing
+	// in the suite would notice if that branch were deleted. Must
+	// resolve exactly like a bare identifier does.
+	{"srcdir-quoted-key", nil},
+
+	// The build-format string-scanning control: the existing
+	// build-format-in-string fixture is a valid control against a naive
+	// regex, but proves nothing about THIS scanner's own string
+	// boundary tracking. This one mirrors srcdir-escaped-quote-in-string
+	// for the second key: an escaped quote inside a description string
+	// must not end the string early and let "build: { format: ... }"
+	// leak out as if it were live code.
+	{"build-format-in-string-escaped-quote", nil},
+}
+
+// ---------------------------------------------------------------------
+// The ambiguous-candidate note: N-aware wording, and firing independent
+// of the pages-dir path now that build-format opens the config on every
+// project.
+// ---------------------------------------------------------------------
+
+// TestCheckAstroConfig_AmbiguousNoteFiresWithPagesPresent is the review's
+// third finding: the note used to be decided entirely inside
+// resolvePagesDirFindings, which never runs once src/pages exists — so
+// two (or more) candidate configs sitting right next to an otherwise
+// unremarkable, pages-present project produced no note at all, even
+// though build-format now opens one of them on every single run.
+func TestCheckAstroConfig_AmbiguousNoteFiresWithPagesPresent(t *testing.T) {
+	root := fixtureRoot(t)
+	findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, "ambiguous-configs-pages-present"))
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly one (the ambiguity note, standalone)", findings)
+	}
+	f := findings[0]
+	if f.CheckID != CheckIDPagesDir || f.Severity != SeverityWarning {
+		t.Errorf("finding = %+v, want a pages-dir warning", f)
+	}
+	mustContainAll(t, f.Message, []string{"astro.config.mjs", "astro.config.ts", "Both"})
+}
+
+// TestCheckAstroConfig_AmbiguousNoteIsNAware is the review's own example:
+// with three candidates, the old wording read "Both A and B and C
+// exist" — "Both" names exactly two things, and using it for three reads
+// as a grammar mistake to anyone who notices. This asserts the corrected
+// wording directly, appended onto the base srcDir warning (this
+// fixture's winning config sets no srcDir key at all).
+func TestCheckAstroConfig_AmbiguousNoteIsNAware(t *testing.T) {
+	root := fixtureRoot(t)
+	findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, "ambiguous-configs-three-way"))
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly one", findings)
+	}
+	f := findings[0]
+	mustContainAll(t, f.Message, []string{"All of", "astro.config.mjs", "astro.config.js", "astro.config.ts"})
+	mustContainNone(t, f.Message, []string{"Both"})
 }
 
 func TestCheckAstroConfig_Table(t *testing.T) {
@@ -378,6 +552,34 @@ func TestCheckAstroConfig_Table(t *testing.T) {
 				mustContainNone(t, f.Message, wf.messageLacks)
 			}
 		})
+	}
+}
+
+// TestConfigCandidates_PinnedExactly is the review's third finding:
+// mutating any of the four CURRENT extension positions in configCandidates
+// — .mjs, .js, .ts, .mts — left the whole suite green, because only the
+// legacy .cjs/.cts pair (this tool's own documented preference, not a
+// fact about Astro) was ever pinned by anything. One deep-equality
+// assertion against the whole six-entry slice covers every position at
+// once and cannot rot into covering only one, the way six separate
+// per-position checks could.
+//
+// REQUIRED MUTATION: swap any two adjacent entries in configCandidates
+// (astroconfig.go) — e.g. ".mjs" and ".js" — and this test reds
+// immediately. Run and observed to fail before this comment was
+// committed; see the report for the red and the checksum-verified
+// revert.
+func TestConfigCandidates_PinnedExactly(t *testing.T) {
+	want := []string{
+		"astro.config.mjs",
+		"astro.config.js",
+		"astro.config.ts",
+		"astro.config.mts",
+		"astro.config.cjs",
+		"astro.config.cts",
+	}
+	if !reflect.DeepEqual(configCandidates, want) {
+		t.Fatalf("configCandidates = %#v, want %#v", configCandidates, want)
 	}
 }
 
@@ -480,7 +682,7 @@ func TestCheckAstroConfig_NoHardStopWhenPagesPresent(t *testing.T) {
 	root := fixtureRoot(t)
 
 	parserFailureFixtures := []string{
-		"srcdir-hardstop",
+		"srcdir-resolves-no-pages-dir",
 		"srcdir-template-interp",
 		"srcdir-pathjoin",
 		"srcdir-commented-out",
@@ -619,7 +821,8 @@ func TestCheckAstroConfig_BuildFormatComputedStaysSilent(t *testing.T) {
 // injects its own routes is the concrete case where it would be wrong
 // every time. Reintroducing SeverityHardStop anywhere this file's
 // resolution logic runs reds this test immediately, on the very fixture
-// (srcdir-hardstop) that named the defect in the first place.
+// (srcdir-resolves-no-pages-dir) that named the defect in the first
+// place.
 func TestCheckAstroConfig_NeverHardStopsAnywhere(t *testing.T) {
 	root := fixtureRoot(t)
 	for _, tc := range astroConfigTable {
@@ -686,5 +889,59 @@ func moduleRootForTest(t *testing.T) string {
 			t.Fatal("could not find the module root walking up from the test's working directory")
 		}
 		dir = parent
+	}
+}
+
+// ---------------------------------------------------------------------
+// The FIFO row: a regression must hang THIS ROW, never the suite.
+// ---------------------------------------------------------------------
+
+// TestCheckAstroConfig_FIFODoesNotHang is the review's FIFO finding: a
+// named pipe called astro.config.mjs used to make isFile's "!IsDir()"
+// check pass (a FIFO is not a directory), so readConfigCapped went on to
+// Open it — and opening a FIFO for reading, with no writer ever
+// connecting the other end, blocks forever, with no timeout anywhere in
+// this package to notice. newFIFOFixture (platform-specific, see
+// astroconfig_fifo_unix_test.go / astroconfig_fifo_other_test.go) makes
+// a real one and never writes to it.
+//
+// CheckAstroConfig runs in its own goroutine specifically so a
+// regression fails THIS TEST after the timeout rather than hanging `go
+// test` itself: the goroutine leaked by a real regression stays blocked
+// in a syscall in the background, but the test function returns (via
+// t.Fatal) on schedule, and process exit does not wait for it.
+//
+// REQUIRED MUTATION: in isFile (astroconfig.go), change
+// "info.Mode().IsRegular()" back to "!info.IsDir()" and this test reds
+// with the 2-second timeout firing — not instantly, which is the whole
+// point: a regression here is a HANG, not a wrong answer. Run and
+// observed to fail (by timing out) before this comment was committed;
+// see the report for the measured duration and the checksum-verified
+// revert.
+func TestCheckAstroConfig_FIFODoesNotHang(t *testing.T) {
+	dir, ok := newFIFOFixture(t)
+	if !ok {
+		t.Skip("named pipes are not portably constructible on this platform")
+	}
+
+	done := make(chan []Finding, 1)
+	go func() {
+		done <- CheckAstroConfig(&countingFS{}, dir)
+	}()
+
+	select {
+	case findings := <-done:
+		// isFile must have rejected the FIFO before Open was ever
+		// reachable, so this is indistinguishable from "no config file
+		// at all": no src/pages either, in this fixture, so the ordinary
+		// no-config warning fires — never a crash, never a resolved
+		// value read from a pipe that was never written to.
+		if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+			t.Fatalf("findings = %+v, want exactly one pages-dir warning (the FIFO must be treated as no config found)", findings)
+		}
+		mustContainAll(t, findings[0].Message, []string{"astro.config"})
+	case <-time.After(2 * time.Second):
+		t.Fatal("CheckAstroConfig hung for more than 2s reading a FIFO named astro.config.mjs — " +
+			"isFile must reject non-regular files (Lstat, regular files only) before Open is ever called")
 	}
 }
