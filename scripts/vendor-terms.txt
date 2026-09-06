@@ -1,0 +1,65 @@
+# Provider and service vocabulary that may not appear in authored text
+# anywhere this repository publishes. Ruled 2026-09-06.
+#
+# WHY A LIST ACROSS MANY PROVIDERS, when only one of them could possibly
+# be in use: because a list naming ONE provider is itself the disclosure.
+# This set spans seven, and a reader learns the POLICY — a client that
+# speaks one HTTP protocol has no business naming anyone's infrastructure
+# — while learning nothing about which of them serves anything. That is a
+# statement of policy, not a confession, and it is the same reason the
+# dependency denylist beside it covers a class rather than a vendor.
+#
+# HOW THESE ARE MATCHED, and why it is not a regular expression. The
+# guard TOKENISES every line: it splits each alphanumeric run on
+# camelCase and acronym boundaries, and matches whole subwords or
+# contiguous joins of them. A word-boundary regex could not do this job.
+# It misses the spellings these names actually take in Go — an
+# identifier in camel or snake case has no word boundary inside it — and
+# a substring match instead reds on ordinary English, since a common word
+# for defects contains one of the terms below. Splitting is what
+# distinguishes an identifier that names a provider from a word that
+# merely contains those letters.
+#
+# One entry per line. Blank lines and lines starting with "#" ignored.
+# This is a RULE FILE: its data lines are exempt from the vendor check
+# only, never from any other pattern, and its comment lines are scanned
+# like all other prose.
+aws
+amazon
+ec2
+s3
+dynamodb
+cloudfront
+lambda
+ses
+sqs
+sns
+kinesis
+fargate
+route53
+cloudwatch
+elasticbeanstalk
+azure
+cosmosdb
+blobstorage
+appservice
+aks
+azurefunctions
+gcp
+gcs
+bigquery
+cloudrun
+gke
+pubsub
+firestore
+cloudsql
+appengine
+cloudflare
+r2
+durableobjects
+digitalocean
+droplet
+linode
+hetzner
+scaleway
+vultr
