@@ -179,6 +179,54 @@ var astroConfigTable = []struct {
 	{"srcdir-no-config", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"astro.config"}, nil},
 	}},
+
+	// The five rows below came from an independent reconstruction of this
+	// suite: a reader who wrote an acceptance suite from the written
+	// specification alone, without ever seeing this file, this table, or
+	// the fixtures above. Comparing the two suites row by row turned up
+	// no real disagreement — but it did turn up a coverage gap, merged
+	// here with origin notes on the rows that close it.
+
+	// .cjs and .cts had NEVER been exercised, alone or together, before
+	// this row. That is notable specifically because their ORDER is the
+	// one Astro fact this check got wrong once already, in an earlier
+	// draft, and corrected only by reading Astro's own source rather than
+	// reasoning about it a second time (see the comment on
+	// configCandidates). A fact that was wrong once, then fixed and
+	// re-verified, still went untested until a reader who had never seen
+	// either the mistake or the fix wrote this row from the written rule
+	// alone. .cts's srcDir deliberately points at a directory with no
+	// pages/ subdirectory, so a regression back to the wrong order would
+	// flip this row from a warning to a wrong hard stop.
+	{"srcdir-cjs-precedes-cts", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.cjs", "astro.config.cts"}, nil},
+	}},
+
+	// The existing "// inside a string" row proves the comment stripper
+	// doesn't misread a URL as starting a comment. It does not prove the
+	// stripper's escape handling inside that same string is correct — an
+	// escaped quote that were treated as the string's real end would
+	// desynchronise everything scanned after it. This row is the
+	// independent reconstruction's check on that: a preceding string
+	// containing \' must not confuse the scan that finds the real srcDir
+	// key later on the same line.
+	{"srcdir-escaped-quote-in-string", nil},
+
+	// Both existing hard-stop and combined-warning rows only ever
+	// exercise ONE finding at a time. Neither proves that the pages-dir
+	// and build-format concerns are independent findings drawn off the
+	// same single read rather than, say, one silently suppressing the
+	// other. These two rows do: a hard stop plus a build-format warning
+	// together, and two independent warnings together, each asserting
+	// both findings are present rather than just one.
+	{"srcdir-hardstop-plus-buildformat-warning", []wantFinding{
+		{CheckIDPagesDir, SeverityHardStop, []string{"astro.config.mjs", "www", "www/pages"}, nil},
+		{CheckIDBuildFormat, SeverityWarning, []string{"file"}, nil},
+	}},
+	{"srcdir-pathjoin-plus-buildformat-warning", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, nil, nil},
+		{CheckIDBuildFormat, SeverityWarning, []string{"preserve"}, nil},
+	}},
 }
 
 func TestCheckAstroConfig_Table(t *testing.T) {
@@ -206,6 +254,44 @@ func TestCheckAstroConfig_Table(t *testing.T) {
 				}
 				mustContainAll(t, f.Message, wf.messageHas)
 				mustContainNone(t, f.Message, wf.messageLacks)
+			}
+		})
+	}
+}
+
+// TestCheckAstroConfig_EachExtensionAloneResolves merges the sixth row an
+// independent reconstruction of this suite found missing: every fixture
+// elsewhere in this file uses .mjs, with a single .ts appearing only as
+// the losing candidate in an ambiguity row, never alone. The other four
+// of Astro's six recognised extensions — .js, .mts, .cjs and .cts — had
+// never been exercised in any form. Built with t.TempDir() rather than a
+// testdata fixture per extension, since the six cases differ only in
+// file name and this loop is the whole of what would otherwise be six
+// near-identical directories.
+func TestCheckAstroConfig_EachExtensionAloneResolves(t *testing.T) {
+	extensions := []string{
+		"astro.config.mjs",
+		"astro.config.js",
+		"astro.config.ts",
+		"astro.config.mts",
+		"astro.config.cjs",
+		"astro.config.cts",
+	}
+
+	for _, ext := range extensions {
+		t.Run(ext, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "candsrc", "pages"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "export default {\n  srcDir: './candsrc',\n};\n"
+			if err := os.WriteFile(filepath.Join(dir, ext), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			findings := CheckAstroConfig(&countingFS{}, dir)
+			if len(findings) != 0 {
+				t.Fatalf("a lone %s candidate should resolve srcDir cleanly, got %+v", ext, findings)
 			}
 		})
 	}
