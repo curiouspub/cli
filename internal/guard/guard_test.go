@@ -24,6 +24,7 @@ package guard
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/importer"
@@ -86,10 +87,11 @@ func moduleRoot(t *testing.T) string {
 // fix has a field of view, and the field of view is itself an unguarded
 // assumption.
 //
-// Guard 3 no longer uses this helper at all — it walks EVERY file, not
-// only Go sources, via allTextFiles below. Scoping it to ".go" left a
-// citation in a workflow YAML, a Makefile or a shell script shipping
-// past it, and every one of those is as world-readable as a source file.
+// Guard 3 no longer uses this helper at all — it scans every file the
+// repository publishes, not only Go sources, via publishedTextFiles
+// below. Scoping it to ".go" left a citation in a markdown document, a
+// workflow YAML, a Makefile or a shell script shipping past it, and
+// every one of those is as world-readable as a source file.
 func goFiles(t *testing.T, root string, includeTests bool) []string {
 	t.Helper()
 	var files []string
@@ -123,65 +125,125 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 	return files
 }
 
-// allTextFiles returns every text file under root that ships in this
-// repository. Guard 3's threat is a world-readable FILE disclosing
-// private paper, and "world-readable" has nothing to do with the
-// extension — so the extension is not a filter here.
+// publishedTextFiles returns every text file this repository PUBLISHES:
+// every file git tracks, plus every untracked file no ignore rule
+// covers. Guard 3's threat is a world-readable file disclosing private
+// paper, and "world-readable" has nothing to do with a file's extension
+// — so the extension is not a filter here. A markdown document, the
+// Makefile, a workflow YAML and a shell script are all exactly as public
+// as a .go file, and every one of them is in scope.
 //
-// What is skipped, and why each is not a hole:
+// ASKING GIT rather than walking the filesystem is the load-bearing
+// half, and it is here because of a measurement rather than an argument.
+// A filesystem walk cannot tell a file that ships from one that provably
+// never will — and this repository now grows the second kind ON PURPOSE.
+// CLAUDE.md is split in two: a public half, which is product surface for
+// anyone reading the repo, and a gitignored CLAUDE.local.md holding the
+// orchestration half, which exists precisely to carry the internal
+// identifiers and document references this guard hunts. Under a
+// filesystem walk that file reds `make ci` on the day it lands and every
+// day after, and the quickest way out of a permanently red gate is to
+// loosen the pattern that catches real leaks. Measured before this
+// change was written: a gitignored CLAUDE.local.md holding two
+// identifiers failed this guard twice, naming a file it has no business
+// reading.
 //
-//   - .git, vendor and bin: not authored content. bin holds build output
-//     that is gitignored and never published.
-//   - The citation manifest's PATTERN lines. It necessarily contains
-//     text shaped like the citations it hunts, and a future pattern
-//     carrying a literal example would red the guard against its own
-//     rule file. Its COMMENT lines are scanned like any other file,
-//     because prose explaining a pattern has no need to cite anything —
-//     excluding the whole file left the one place in the repo where a
-//     citation could sit unexamined.
+// So the universe is now the right one on its own terms — not "files on
+// this disk" but "files this repository publishes":
+//
+//   - TRACKED files are in scope because they are already public.
+//   - UNTRACKED, UNIGNORED files are in scope because they are one
+//     `git add` away from being public, and a guard that waited for the
+//     add would find the violation after its author stopped looking.
+//   - IGNORED files are out of scope, because git will not publish them
+//     — which is the same property that makes it safe to keep private
+//     paper in one.
+//
+// This also retires two skips that used to be name-based: `.git` is
+// never listed by git at all, and `bin/` is ignored, so both now leave
+// scope by the rule rather than by a list somebody has to maintain.
+//
+// What is still skipped, and why neither is a hole:
+//
+//   - vendor/: third-party source, not authored here. Nothing in it can
+//     cite this project's private paper.
 //   - Binary files, detected by a NUL byte rather than by extension, so
 //     an unfamiliar binary format is skipped on evidence instead of on a
-//     list somebody has to maintain. STATED LIMIT: a UTF-16 text file is
-//     full of NUL bytes and is therefore skipped as binary. Nothing in
-//     this repo is UTF-16 today; Windows tooling writes it, so if a
-//     .ps1 or .txt ever arrives that way it is outside this guard and
-//     inside the leak scan's.
+//     list. STATED LIMIT: a UTF-16 text file is full of NUL bytes and is
+//     therefore skipped as binary. Nothing here is UTF-16 today; Windows
+//     tooling writes it, so if one ever arrives that way it is outside
+//     this guard and inside the leak scan's.
 //
-// A second stated limit: file CONTENTS are matched, never file NAMES.
-func allTextFiles(t *testing.T, root string) []string {
+// Two further stated limits. File CONTENTS are matched, never file
+// NAMES: a branch name, a commit message, a tag or a pull-request title
+// is a published surface no pattern here can see, and those are
+// hand-checked at the publish point. And `--exclude-standard` honours
+// the operator's GLOBAL ignore file as well as this repository's, so a
+// personal global rule could in principle drop a real file out of scope
+// on one machine — CI checks out clean with no global excludes, which is
+// where the answer that counts is produced.
+func publishedTextFiles(t *testing.T, root string) []string {
 	t.Helper()
+
+	// -z, so a path containing a newline cannot split into two entries.
+	// --cached is the tracked set; --others adds untracked files and
+	// --exclude-standard subtracts everything the ignore rules cover.
+	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files in %s: %v\n"+
+			"This guard cannot establish what the repository publishes, so it fails "+
+			"rather than report a pass over a set it never determined.", root, err)
+	}
+
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	seen := make(map[string]bool)
+	for _, name := range strings.Split(string(out), "\x00") {
+		// An unmerged path is listed once per stage, so dedupe rather
+		// than scan the same file three times mid-conflict.
+		if name == "" || seen[name] {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "bin":
-				return filepath.SkipDir
+		seen[name] = true
+		if name == "vendor" || strings.HasPrefix(name, "vendor/") {
+			continue
+		}
+
+		path := filepath.Join(root, filepath.FromSlash(name))
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			if errors.Is(statErr, fs.ErrNotExist) {
+				// Tracked in the index, deleted in the working tree.
+				// There is no content to scan, and that is not a
+				// violation.
+				continue
 			}
-			return nil
+			t.Fatalf("stat %s: %v", path, statErr)
+		}
+		if !info.Mode().IsRegular() {
+			// A symlink or a submodule directory: nothing to read here,
+			// and following either would scan content this repository
+			// does not author.
+			continue
 		}
 
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return readErr
+			t.Fatalf("reading %s: %v", path, readErr)
 		}
 		probe := data
 		if len(probe) > 8192 {
 			probe = probe[:8192]
 		}
 		if bytes.IndexByte(probe, 0) >= 0 {
-			return nil
+			continue
 		}
 		files = append(files, path)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking %s: %v", root, err)
 	}
+
 	if len(files) == 0 {
-		t.Fatal("no text files found under the module root — this guard would silently pass")
+		t.Fatal("git listed no publishable text file under the module root — this guard would silently pass")
 	}
 	sort.Strings(files)
 	return files
@@ -651,7 +713,7 @@ func TestNoPrivateCitations(t *testing.T) {
 	patterns := loadCitationPatterns(t, root)
 
 	manifest := filepath.Join(root, "scripts", "citation-patterns.txt")
-	for _, path := range allTextFiles(t, root) {
+	for _, path := range publishedTextFiles(t, root) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)

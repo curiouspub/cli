@@ -28,3 +28,6 @@ coverage.html
 .idea/
 .vscode/
 *.swp
+
+# orchestration half of CLAUDE.md — local only, never committed
+CLAUDE.local.md
