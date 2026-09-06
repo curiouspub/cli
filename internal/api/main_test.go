@@ -63,6 +63,26 @@ func TestMain(m *testing.M) {
 	proxyBackend = newProxyTestBackend()
 	proxyServer = newConnectProxy()
 
+	// HTTP_PROXY is not used by anything here (every scenario below is
+	// https) and is cleared FIRST, before HTTPS_PROXY/NO_PROXY are set,
+	// so an ambient value from the operator's own shell cannot change
+	// what any test observes.
+	//
+	// Windows environment variable NAMES are case-insensitive — SetEnv
+	// and Unsetenv there operate on the same underlying variable
+	// regardless of case — so "https_proxy" and "HTTPS_PROXY" are the
+	// SAME variable on that platform, and so are "no_proxy" and
+	// "NO_PROXY". Unsetting the lowercase spelling of either AFTER
+	// setting the uppercase one below would delete the value just set,
+	// on Windows only: exactly the failure this comment now prevents,
+	// caught by the Windows leg of this repo's own CI matrix. Go's own
+	// httpproxy.FromEnvironment checks the uppercase name first on every
+	// platform (getEnvAny), so setting only the uppercase form is
+	// sufficient everywhere and there is nothing to gain by also
+	// clearing its lowercase alias.
+	_ = os.Unsetenv("HTTP_PROXY")
+	_ = os.Unsetenv("http_proxy")
+
 	if err := os.Setenv("HTTPS_PROXY", proxyServer.URL); err != nil {
 		fmt.Fprintln(os.Stderr, "setenv HTTPS_PROXY:", err)
 		os.Exit(1)
@@ -71,13 +91,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "setenv NO_PROXY:", err)
 		os.Exit(1)
 	}
-	// Not used by anything here (every scenario is https), and cleared
-	// so an ambient value from the operator's own shell cannot change
-	// what any test observes.
-	_ = os.Unsetenv("HTTP_PROXY")
-	_ = os.Unsetenv("http_proxy")
-	_ = os.Unsetenv("https_proxy")
-	_ = os.Unsetenv("no_proxy")
 
 	code := m.Run()
 
