@@ -203,3 +203,38 @@ func TestErrorMapping_RetryAfterRanged(t *testing.T) {
 		})
 	}
 }
+
+// TestErrorMapping_RetryAfterHTTPDateForm ranges wire.AllErrorCodes to
+// prove Retry-After also parses the HTTP-date form RFC 7231 permits, not
+// only delta-seconds — a form the ranged test above never feeds it.
+//
+// Ported from an independent reconstruction of this client's documented
+// behaviour, built from this client's public surface and the wire
+// contract alone, with no access to this file or to parseRetryAfter's
+// own source. Its independence bought exactly this row: two separate
+// adversarial reviews of the implementation missed that parseRetryAfter
+// accepts a form no test here had ever exercised.
+func TestErrorMapping_RetryAfterHTTPDateForm(t *testing.T) {
+	for _, code := range wire.AllErrorCodes {
+		t.Run(string(code), func(t *testing.T) {
+			httpDate := time.Now().Add(42 * time.Second).UTC().Format(http.TimeFormat)
+			srv := errorServer(t, http.StatusTooManyRequests,
+				fmt.Sprintf(`{"error":{"code":%q,"message":"m"}}`, code),
+				map[string]string{"Retry-After": httpDate})
+			defer srv.Close()
+
+			c, err := New(srv.URL)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = c.AuthStart(context.Background(), wire.AuthStartRequest{})
+			apiErr := requireAPIError(t, err)
+			// Generous tolerance: the header names an absolute instant
+			// computed before the request was even sent, so exact
+			// equality would be timing-dependent.
+			if apiErr.RetryAfter < 35*time.Second || apiErr.RetryAfter > 49*time.Second {
+				t.Errorf("RetryAfter = %v, want close to 42s", apiErr.RetryAfter)
+			}
+		})
+	}
+}
