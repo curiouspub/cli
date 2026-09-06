@@ -217,16 +217,27 @@ when it is introduced rather than at review. They live in
 Each guard fails loudly if it scanned nothing, so none of them can pass
 by looking at an empty set.
 
-**The two manifests are RULE FILES, and they get exactly one carve-out.**
-`scripts/citation-patterns.txt` and `scripts/banned-dependencies.txt`
-have to spell the things they forbid — you cannot match a module path or
-describe a citation shape without writing one down — so their **data**
-lines are exempt from the citation scan. Their **comment** lines are
-scanned like any other prose, which is why nothing in either file quotes
-an example: the comments describe classes, and a rule file that quoted
-its own targets would be a leak shipping inside the file that hunts
-leaks. Without this carve-out the repository reds against itself, and the
-fastest way out of that is deleting one of two correct rules.
+**Three manifests are RULE FILES, and they get exactly one narrow
+carve-out.** `scripts/citation-patterns.txt`,
+`scripts/banned-dependencies.txt` and `scripts/vendor-terms.txt` have to
+spell the things they forbid — you cannot match a module path without
+writing one down — so their **data** lines are exempt **from the vendor
+check only, never from any other pattern**. That narrowness is the whole
+of it: the dependency denylist genuinely must name providers, and nothing
+else about a data line deserves a waiver, so a private identifier written
+on one still reds. Their **comment** lines are scanned like any other
+prose, which is why nothing in any of them quotes an example — a rule
+file that quoted its own targets would be a leak shipping inside the file
+that hunts leaks.
+
+**The vendor check TOKENISES rather than pattern-matches**, and that is
+not an optimisation. A word-boundary expression sees no boundary inside
+an identifier, so every camelCase and snake_case spelling walked past the
+first version of this rule; a substring match instead reds on ordinary
+English, because a common word for defects contains one of the terms. So
+the guard splits each alphanumeric run on camelCase and acronym
+boundaries and matches whole subwords, plus contiguous joins of them for
+names the convention itself splits.
 
 ## Hard don'ts
 
