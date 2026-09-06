@@ -56,7 +56,8 @@
 
 # Or introduced by a citing word. This form is CONTEXT-CUED rather than
 # bare, and that is a considered limit, not an oversight: a bare
-# \b[A-Z][0-9]+\b also matches P256, S3, H2 and every other legitimate
+# \b[A-Z][0-9]+\b also matches P256, H2, RFC7235 and every other
+# legitimate
 # capital-letter-plus-digits token a Go source file may contain. A guard
 # that cries wolf on its first run is a guard somebody disables, so this
 # one asks for a citing word and accepts that "the D7 rule" slips past.
@@ -120,3 +121,33 @@
 \.cloudfunctions\.net\b
 \.googleusercontent\.com\b
 \.r2\.cloudflarestorage\.com\b
+
+# Vendor names of the infrastructure this project runs on. Ruled
+# 2026-09-06, and made STRUCTURAL rather than left to vigilance: which
+# provider serves the API, and which of its services, is not a fact this
+# repository has any reason to carry, and a name typed into a comment
+# while debugging is the ordinary way it would arrive.
+#
+# Case-insensitive and WORD-BOUNDED, both deliberately. Case-insensitive
+# because a lowercase spelling discloses exactly as much as a capitalised
+# one. Word-bounded because three of these are common substrings of
+# ordinary English — without the boundaries this line would match
+# "uses", "responses", "closes" and "parses", and a guard that reds on
+# those is one somebody deletes the same afternoon. Measured against the
+# whole published tree before being committed: three hits, all of them
+# inside rule files, and none in prose.
+#
+# The (?i:...) is a scoped GROUP rather than a leading flag. A leading
+# (?i) applies to the entire expression including the boundaries and any
+# pattern later joined to it, which is how an earlier line here came to
+# match text it was written to permit.
+#
+# RUNTIME URLs ARE EXEMPT — they are physics, not authorship. The client
+# is handed upload targets by the server and must PUT to whatever it
+# receives; a hostname flowing through a variable at runtime discloses
+# nothing an operator chose to write. That exemption needs no mechanism,
+# because such a URL never appears in a source file. If a FIXTURE ever
+# seems to need one, that is not a case for exemption: it is a signal the
+# fixture is baking in an assumption the client is specifically designed
+# not to have, and it is a raise.
+\b(?i:aws|amazon|s3|cloudfront|dynamodb|lambda|ses)\b
