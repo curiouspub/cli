@@ -12,13 +12,11 @@ import (
 	"github.com/curiouspub/cli/pkg/wire"
 )
 
-// TestNew_BaseURLResolution is the "Construction" scope's own claim: an
-// explicit baseURL argument wins outright; an empty one falls back to
+// TestNew_BaseURLResolution pins the base-URL precedence New documents:
+// an explicit baseURL argument wins outright; an empty one falls back to
 // CURIOUS_API_URL; and with neither set, the compiled-in default
-// applies. Not in the acceptance table's own bullet list, but stated
-// directly in the task's Construction section, so it earns a test of
-// its own rather than being left to the calls that happen to exercise
-// New indirectly.
+// applies. This earns a test of its own rather than being left to the
+// calls that happen to exercise New indirectly.
 func TestNew_BaseURLResolution(t *testing.T) {
 	t.Run("explicit argument wins over the environment", func(t *testing.T) {
 		t.Setenv("CURIOUS_API_URL", "http://localhost:1")
@@ -76,6 +74,20 @@ func TestNew_DefaultTimeout(t *testing.T) {
 	}
 	if c.timeout != defaultTimeout {
 		t.Errorf("timeout = %v, want the default %v", c.timeout, defaultTimeout)
+	}
+}
+
+// TestNew_NonPositiveTimeoutRefused pins WithTimeout's own documented
+// rule: a zero or negative timeout is refused at construction rather
+// than accepted and left to fail every subsequent call with a
+// deadline-exceeded error — context.WithTimeout given a non-positive
+// duration expires before the call it wraps ever gets to run.
+func TestNew_NonPositiveTimeoutRefused(t *testing.T) {
+	if _, err := New("https://api.curious.pub", WithTimeout(0)); err == nil {
+		t.Error("New with WithTimeout(0) succeeded, want a refusal at construction")
+	}
+	if _, err := New("https://api.curious.pub", WithTimeout(-1*time.Second)); err == nil {
+		t.Error("New with a negative WithTimeout succeeded, want a refusal at construction")
 	}
 }
 

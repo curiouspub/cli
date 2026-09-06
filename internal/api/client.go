@@ -14,7 +14,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/curiouspub/cli/internal/ui"
@@ -162,7 +161,12 @@ func validateBaseURL(raw string) (string, error) {
 // Option configures a Client built by New.
 type Option func(*Client)
 
-// WithTimeout overrides the default 30-second per-request timeout.
+// WithTimeout overrides the default 30-second per-request timeout. A
+// zero or negative duration is refused by New, at construction — the
+// same "refuse once, up front" shape the address guard already follows
+// — rather than accepted here and left to make every subsequent call
+// fail immediately with a deadline-exceeded error, which is what a
+// context.WithTimeout given a non-positive duration does.
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }
@@ -217,6 +221,14 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	if c.timeout <= 0 {
+		return nil, fmt.Errorf(
+			"refusing to construct a client with a non-positive timeout (%v): every "+
+				"call would fail immediately with a deadline-exceeded error instead "+
+				"of ever attempting one — pass a positive duration to WithTimeout, or "+
+				"omit the option entirely for the %v default", c.timeout, defaultTimeout)
 	}
 
 	c.httpClient = &http.Client{
@@ -350,6 +362,15 @@ func (c *Client) attempt(ctx context.Context, method, path string, payload []byt
 			// is empty, let me check a field" is the exact mistake that
 			// shape exists to prevent.
 			if decErr := json.NewDecoder(resp.Body).Decode(out); decErr != nil && !errors.Is(decErr, io.EOF) {
+				if errors.Is(decErr, io.ErrUnexpectedEOF) {
+					// The connection was cut mid-body — a connection-level
+					// failure indistinguishable from any other dropped
+					// connection, and exactly the kind of blip a retry
+					// exists to smooth over. Every OTHER decode failure
+					// (malformed JSON, a field of the wrong shape) is this
+					// client's own problem to report, never the network's.
+					return true, fmt.Errorf("reading response body from %s: %w", c.baseURL, decErr)
+				}
 				return false, fmt.Errorf("decoding response body: %w", decErr)
 			}
 		}
@@ -375,7 +396,7 @@ func networkError(err error, baseURL string) error {
 	if errors.As(err, &dnsErr) {
 		return fmt.Errorf("could not resolve %s: %w", host, err)
 	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
+	if isConnectionRefused(err) {
 		return fmt.Errorf("connection refused by %s: %w", host, err)
 	}
 	var certErr *tls.CertificateVerificationError
