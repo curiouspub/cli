@@ -39,6 +39,10 @@ code, comments, tests, fixtures, markdown, workflows or scripts:
 - **The control plane's storage key scheme** — its uppercase
   prefix-and-separator item keys and their attribute names — and the
   names of internal server-side packages.
+- **The deployment estate** — resource identifiers, account numbers,
+  internal endpoints, and which infrastructure provider serves the API.
+  What runs behind `/v1` is not a fact this repository has any reason to
+  carry, and the client could not act on it if it did.
 
 The examples above are deliberately described rather than quoted: a rule
 that forbids writing an identifier should not have to write one to say
@@ -124,9 +128,16 @@ with good intentions:
 Stdlib first. A third-party dependency is introduced only by a change
 that names it and says why the stdlib answer was rejected.
 
-**Never** an AWS SDK, a telemetry or analytics client, or an
-auto-updater. This is enforced mechanically by `internal/guard`, not only
-stated here.
+**Never** an infrastructure-provider SDK, a telemetry or analytics
+client, or an auto-updater. This is enforced mechanically by
+`internal/guard`, not only stated here.
+
+The provider rule is written as a **class**, and the guard bans a long
+list of providers rather than one. That is not thoroughness for its own
+sake: this binary speaks exactly one protocol — this project's public
+HTTP API — so it has no business holding any provider's SDK, and a guard
+naming a single vendor would let every other vendor's SDK straight
+through.
 
 ## Build and CI
 
@@ -167,10 +178,10 @@ Four rules the repo states about itself are tests, so a violation fails
 when it is introduced rather than at review. They live in
 `internal/guard`.
 
-1. **No AWS SDK, no telemetry dependency** — checked against the module's
-   real dependency graph, both the package graph including test imports
-   and the module requirement list. A requirement nothing imports yet is
-   already the commitment.
+1. **No provider SDK, no telemetry dependency** — checked against the
+   module's real dependency graph, both the package graph including test
+   imports and the module requirement list. A requirement nothing imports
+   yet is already the commitment.
 2. **No compiled-in hostname**, beyond at most two named URL constants —
    the API base and the site base domain. A bare URL literal anywhere
    fails regardless of count: a URL a reader cannot find by grepping for
@@ -198,7 +209,8 @@ by looking at an empty set.
 
 - **No telemetry, analytics, or phone-home of any kind. Ever.** This
   repo's existence is a trust argument; one tracker destroys it.
-- **No AWS SDK.** The client speaks the public HTTP API and nothing else.
+- **No infrastructure-provider SDK.** The client speaks this project's
+  public HTTP API and nothing else — never whatever runs behind it.
 - **No server-side logic.** If a validation matters for security it
   belongs on the server; the checks here are UX, and every one of them is
   re-validated server-side.

@@ -97,3 +97,26 @@
 # "any uppercase word", so a NEW prefix invented later is not caught until
 # it is added here, and that trade is taken knowingly.
 \b(DEPLOY|SITE|TOKEN|CODE|EMAIL|QUOTA|CAP|WAIT|NAME|FLAG)#
+
+# Deployment-estate identifiers: the resource names and endpoint shapes
+# that say WHERE this service runs. Ruled 2026-09-06 — what serves the
+# API is not a fact this repository has any reason to carry, and a
+# hostname or resource id pasted into a comment while debugging is the
+# ordinary way it would arrive.
+#
+# The set covers SEVERAL providers rather than one, for the same reason
+# the dependency denylist does: a list naming one provider is itself the
+# disclosure, and a rule about one provider lets the rest through.
+#
+# These match RESOURCE and ENDPOINT shapes only, never a package import
+# path — the dependency guard's denylist has to spell provider module
+# paths out loud to do its job, and a pattern matching those would red
+# this repository against its own guard.
+\barn:[a-z0-9-]+:[a-z0-9-]+:
+\.amazonaws\.com\b
+\b[0-9]{12}\.dkr\.ecr\.
+\.blob\.core\.windows\.net\b
+\.azurewebsites\.net\b
+\.cloudfunctions\.net\b
+\.googleusercontent\.com\b
+\.r2\.cloudflarestorage\.com\b

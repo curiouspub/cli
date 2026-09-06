@@ -1,6 +1,7 @@
 // Package guard holds this repository's mechanically-enforced versions of
-// the hard rules this public repo states in its own CLAUDE.md: no AWS SDK
-// or telemetry dependency, no compiled-in hostname beyond a small and
+// the hard rules this public repo states in its own CLAUDE.md: no
+// infrastructure-provider SDK and no telemetry dependency, no
+// compiled-in hostname beyond a small and
 // explicitly named allowance, no private citation in any file, and no
 // unexported struct field holding a Secret. Each is a test, so a
 // violation fails at the moment it is introduced rather than at review.
@@ -260,17 +261,47 @@ func displayPath(root, path string) string {
 }
 
 // ---------------------------------------------------------------------
-// Guard 1: no AWS SDK, no telemetry/analytics dependency.
+// Guard 1: no provider SDK, no telemetry/analytics dependency.
 // ---------------------------------------------------------------------
 
 // bannedDependencyFragments are import-path substrings this guard refuses
-// to find anywhere in the module's dependency graph: an AWS SDK (the
-// client speaks only the public HTTP API, never AWS directly) or a
-// telemetry/analytics vendor (no phone-home, ever — see CLAUDE.md's hard
-// don'ts).
+// to find anywhere in the module's dependency graph. Three classes, each
+// one a promise CLAUDE.md makes on its own first screen.
 var bannedDependencyFragments = []string{
+	// INFRASTRUCTURE PROVIDER SDKs. This client speaks one protocol —
+	// this project's own public HTTP API — and has no business holding
+	// any provider's SDK, whichever provider it is.
+	//
+	// The list names the CLASS rather than a vendor, and that is a real
+	// widening rather than a tidy-up: a guard that names one provider
+	// lets every other provider's SDK through, and the rule was never
+	// about one of them. An earlier version of this list named exactly
+	// one, which is the same defect as a guard proved only against the
+	// shape its author had in mind.
+	//
+	// The entries are import-path substrings and are matched
+	// case-insensitively, so they have to be spelled the way a module
+	// path is. Nothing about this list says which provider anything runs
+	// on, and nothing here should: what serves the API is not a fact
+	// this repository has any reason to carry.
 	"aws-sdk",
 	"aws/smithy",
+	"azure-sdk",
+	"azidentity",
+	"cloud.google.com/go",
+	"googleapis/gax-go",
+	"cloudflare-go",
+	"digitalocean/godo",
+	"linodego",
+	"scaleway-sdk-go",
+	"hetznercloud",
+	"govultr",
+	"oci-go-sdk",
+	"aliyun",
+	"alibabacloud",
+	"tencentcloud",
+	"ibm-cloud",
+	// TELEMETRY AND ANALYTICS. No phone-home, ever.
 	"segment.com",
 	"segmentio",
 	"mixpanel",
@@ -350,8 +381,9 @@ func TestNoBannedDependencies(t *testing.T) {
 		// GOWORK=off, and it is load bearing. `go list -m all` inherits
 		// the environment, so an operator standing in a Go workspace that
 		// also includes the private server repository got THAT module's
-		// requirements reported as this one's — twenty-three AWS SDK
-		// lines, a confident failure, and nothing wrong with this repo.
+		// requirements reported as this one's — twenty-three
+		// provider-SDK lines belonging to a module that is entitled to
+		// them, a confident failure, and nothing wrong with this repo.
 		// A false red on the exact cross-repo session the workspace rules
 		// prescribe is how a guard gets switched off. The subject here is
 		// this module's own go.mod, never whatever workspace it is being
@@ -379,8 +411,9 @@ func TestNoBannedDependencies(t *testing.T) {
 	if len(offenders) > 0 {
 		sort.Strings(offenders)
 		t.Errorf("dependency graph names a banned import path: %s\n"+
-			"This repo never imports an AWS SDK or a telemetry/analytics client — "+
-			"the client speaks only the public HTTP API and phones home to nobody.",
+			"This repo never imports an infrastructure-provider SDK or a "+
+			"telemetry/analytics client — it speaks this project's public HTTP "+
+			"API and phones home to nobody.",
 			strings.Join(offenders, "; "))
 		return
 	}
