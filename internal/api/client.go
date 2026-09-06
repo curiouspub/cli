@@ -251,6 +251,19 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// Transport returns the *http.Transport every request from this Client
+// goes through — the same one New builds, Proxy field included. It is a
+// read-only escape hatch for a caller with a genuine reason to extend
+// the Transport (additional TLS trust material, a wrapped RoundTripper,
+// connection-level instrumentation) without this package growing a
+// bespoke setter for every such knob. It grants no more trust than any
+// other exported method already does: nothing stops a caller from
+// mutating the result unwisely, the same as with any pointer this
+// package hands back.
+func (c *Client) Transport() *http.Transport {
+	return c.httpClient.Transport.(*http.Transport)
+}
+
 // retryBackoff is deliberately small: a retry exists to smooth over a
 // blip, not to make a person wait, and the two REQUIRED calls it applies
 // to (Capacity, Waitlist) are calls a user is actively waiting on.

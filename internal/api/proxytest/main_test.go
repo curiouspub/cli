@@ -1,4 +1,21 @@
-package api
+// Package proxytest is this module's ONE place that configures process
+// proxy environment for a test.
+//
+// net/http caches its environment-derived proxy configuration
+// (HTTPS_PROXY/HTTP_PROXY/NO_PROXY) exactly once per process, in a
+// sync.Once private to net/http, the first time anything dials through a
+// Transport whose Proxy field is http.ProxyFromEnvironment — with no
+// exported way to reset that cache. Two test files that each try to set
+// their own proxy environment and expect it to be observed are therefore
+// mutually exclusive within one test binary: whichever request happens
+// first wins for the rest of the process, silently.
+//
+// This package owns the binary's one proxy configuration; no proxy row
+// lives anywhere else in this module. internal/api's own suite is a
+// direct consequence: it runs proxy-environment-free, which also retires
+// the risk of a TestMain in that package's binary racing an unrelated
+// test's own first request through http.ProxyFromEnvironment.
+package proxytest
 
 import (
 	"crypto/ecdsa"
@@ -38,27 +55,14 @@ var (
 )
 
 // TestMain exists for one reason, and it is specific to testing this
-// file's own subject. net/http caches the parsed HTTPS_PROXY/HTTP_PROXY/
-// NO_PROXY environment exactly ONCE, in a sync.Once private to net/http,
-// with no exported way to reset it from outside that package — the first
-// real request made through any Transport whose Proxy field is
-// http.ProxyFromEnvironment freezes it for the rest of the process. So
-// the two proxy tests below cannot each set their own environment with
-// t.Setenv and expect the second one's change to take effect.
-//
-// The fix is to fix the environment ONCE, here, before anything in this
-// binary has made a request — so the first-ever read is deterministic
-// rather than a race between test files — and to design the two proxy
-// tests to need only ONE environment (see proxy_test.go): the same
-// HTTPS_PROXY and NO_PROXY values serve both, because NO_PROXY's
-// exclusion is evaluated per request against a fixed configuration, not
-// re-parsed per call.
-//
-// Every OTHER test in this package targets a loopback listener
-// (127.0.0.1, via httptest.NewServer). net/http's own proxy resolution
-// exempts loopback addresses unconditionally, regardless of HTTPS_PROXY
-// or NO_PROXY, so fixing these two variables for the whole process does
-// not change what any non-proxy test observes.
+// package's own subject. See the package doc comment for the sync.Once
+// mechanism; the fix is to fix the environment ONCE, here, before
+// anything in this binary has made a request — so the first-ever read is
+// deterministic rather than a race between test files — and to design
+// the two proxy tests to need only ONE environment (see proxy_test.go):
+// the same HTTPS_PROXY and NO_PROXY values serve both, because
+// NO_PROXY's exclusion is evaluated per request against a fixed
+// configuration, not re-parsed per call.
 func TestMain(m *testing.M) {
 	proxyBackend = newProxyTestBackend()
 	proxyServer = newConnectProxy()
@@ -74,12 +78,10 @@ func TestMain(m *testing.M) {
 	// SAME variable on that platform, and so are "no_proxy" and
 	// "NO_PROXY". Unsetting the lowercase spelling of either AFTER
 	// setting the uppercase one below would delete the value just set,
-	// on Windows only: exactly the failure this comment now prevents,
-	// caught by the Windows leg of this repo's own CI matrix. Go's own
-	// httpproxy.FromEnvironment checks the uppercase name first on every
-	// platform (getEnvAny), so setting only the uppercase form is
-	// sufficient everywhere and there is nothing to gain by also
-	// clearing its lowercase alias.
+	// on Windows only. Go's own httpproxy.FromEnvironment checks the
+	// uppercase name first on every platform (getEnvAny), so setting
+	// only the uppercase form is sufficient everywhere and there is
+	// nothing to gain by also clearing its lowercase alias.
 	_ = os.Unsetenv("HTTP_PROXY")
 	_ = os.Unsetenv("http_proxy")
 

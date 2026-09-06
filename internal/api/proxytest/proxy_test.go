@@ -1,25 +1,25 @@
-package api
+package proxytest
 
 import (
 	"context"
 	"crypto/tls"
 	"net"
-	"net/http"
 	"sync/atomic"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/api"
 )
 
-// wireProxyTestTransport reaches into a Client built by the real New —
-// so the REQUIRED MUTATION below (removing Proxy: http.ProxyFromEnvironment
-// from New's own Transport) is actually exercised by these tests — and
-// adds only what a throwaway certificate and a redirect-to-backend
-// dialer need. It never touches the Proxy field New already set.
-func wireProxyTestTransport(t *testing.T, c *Client) {
+// wireProxyTestTransport reaches into a Client built by the real
+// api.New — so a mutation that removes Proxy: http.ProxyFromEnvironment
+// from New's own Transport is actually caught by these tests — through
+// Client's own Transport accessor rather than an unexported field, since
+// this package is deliberately not package api. It adds only what a
+// throwaway certificate and a redirect-to-backend dialer need, and never
+// touches the Proxy field New already set.
+func wireProxyTestTransport(t *testing.T, c *api.Client) {
 	t.Helper()
-	tr, ok := c.httpClient.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("Client's Transport is a %T, not *http.Transport", c.httpClient.Transport)
-	}
+	tr := c.Transport()
 	tr.TLSClientConfig = &tls.Config{RootCAs: proxyBackendPool}
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if addr == proxyShouldBypassHost+":443" {
@@ -34,16 +34,19 @@ func wireProxyTestTransport(t *testing.T, c *Client) {
 	}
 }
 
-// TestProxyHonoured is the acceptance table's "Proxy honoured" row: with
+// TestProxyHonoured is this suite's "proxy honoured" row: with
 // HTTPS_PROXY pointed at a local test proxy, a Capacity call is observed
 // AT THE PROXY. Asserted by the proxy's own CONNECT count, never by the
 // call merely succeeding — a client that silently bypassed the proxy and
 // reached the backend directly would also succeed, and that distinction
-// is the entire test.
+// is the entire test. The backend's own hit count is asserted too: the
+// proxy's CONNECT count alone proves the tunnel was opened, not that a
+// real request travelled through it end to end.
 func TestProxyHonoured(t *testing.T) {
-	before := atomic.LoadInt32(&proxyConnectCount)
+	beforeConnects := atomic.LoadInt32(&proxyConnectCount)
+	beforeBackendHits := atomic.LoadInt32(&proxyBackendHits)
 
-	c, err := New("https://" + proxyShouldUseHost)
+	c, err := api.New("https://" + proxyShouldUseHost)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -57,16 +60,22 @@ func TestProxyHonoured(t *testing.T) {
 		t.Errorf("Open = false, want true")
 	}
 
-	if got := atomic.LoadInt32(&proxyConnectCount) - before; got != 1 {
+	if got := atomic.LoadInt32(&proxyConnectCount) - beforeConnects; got != 1 {
 		t.Fatalf("proxy saw %d new CONNECT requests, want exactly 1 — the call "+
 			"must be observed AT THE PROXY, not merely succeed", got)
 	}
+	if got := atomic.LoadInt32(&proxyBackendHits) - beforeBackendHits; got != 1 {
+		t.Fatalf("backend saw %d new requests, want exactly 1 — the tunnelled "+
+			"request must actually reach the backend, not merely open the tunnel", got)
+	}
 }
 
-// TestProxyNoProxyHonoured is the table's next row: NO_PROXY covering
+// TestProxyNoProxyHonoured is this suite's next row: NO_PROXY covering
 // the target host makes the client bypass a configured proxy entirely —
 // the proxy sees zero requests, and the call still succeeds because it
-// went straight to the real backend.
+// went straight to the real backend. The backend's own hit count proves
+// "still succeeds" means "actually reached the backend", not merely
+// "returned no error".
 //
 // proxyShouldBypassHost is deliberately NOT a loopback spelling:
 // net/http's own proxy resolution exempts loopback addresses
@@ -75,9 +84,10 @@ func TestProxyHonoured(t *testing.T) {
 // actually names is what makes this test exercise the variable it
 // claims to.
 func TestProxyNoProxyHonoured(t *testing.T) {
-	before := atomic.LoadInt32(&proxyConnectCount)
+	beforeConnects := atomic.LoadInt32(&proxyConnectCount)
+	beforeBackendHits := atomic.LoadInt32(&proxyBackendHits)
 
-	c, err := New("https://" + proxyShouldBypassHost)
+	c, err := api.New("https://" + proxyShouldBypassHost)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -91,8 +101,12 @@ func TestProxyNoProxyHonoured(t *testing.T) {
 		t.Errorf("Open = false, want true")
 	}
 
-	if got := atomic.LoadInt32(&proxyConnectCount) - before; got != 0 {
+	if got := atomic.LoadInt32(&proxyConnectCount) - beforeConnects; got != 0 {
 		t.Fatalf("proxy saw %d new CONNECT requests, want 0 — NO_PROXY should "+
 			"have sent this call directly to the backend", got)
+	}
+	if got := atomic.LoadInt32(&proxyBackendHits) - beforeBackendHits; got != 1 {
+		t.Fatalf("backend saw %d new requests, want exactly 1 — bypassing the "+
+			"proxy must still reach the real backend directly", got)
 	}
 }
