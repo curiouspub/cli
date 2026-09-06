@@ -139,8 +139,26 @@
 # this file has had to learn it. The identifier patterns above could not see these,
 # because there is no identifier in them — the guard's vocabulary was
 # its field of view.
+#
+# ONE PHRASE WAS REMOVED FROM THIS SET at a readiness pass, 2026-09-06,
+# and the reason is worth keeping. The name of this project's
+# mutation-proof convention was swept in here alongside the document
+# names, on a reviewer's list. It does not belong: it points at no
+# document, it sends a reader nowhere they cannot go, and it names a
+# local practice rather than a private artefact. Worse, the execution
+# protocol REQUIRES that comment be written beside any assertion whose
+# mutation has been run — so the guard was forbidding, in this
+# repository, a comment the process mandates. An implementer would have
+# met two instructions that cannot both be obeyed.
+#
+# It is also the opposite of a leak. A comment saying an assertion was
+# proved by mutating the code is a trust signal in a public repo, and
+# this repo's whole argument is that its claims are checkable.
+#
+# The general shape, for whoever extends this list next: a phrase earns
+# a place here only if following it requires a document the reader
+# cannot open. A phrase that merely sounds internal does not.
 \bLEARNINGS\b
-(?i:\brequired mutation\b)
 (?i:\bacceptance (table|check|row|bullet)s?\b)
 (?i:\bthe task file\b)
 (?i:\bthe task's\b)
