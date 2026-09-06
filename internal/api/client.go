@@ -71,18 +71,72 @@ var insecureLoopbackHosts = map[string]bool{
 // u.Host, would let a userinfo segment or a path/fragment substring
 // impersonate a host that was never actually being dialled.
 //
-// On success it returns raw with one trailing slash trimmed; it does not
-// otherwise rewrite the URL — a trailing dot inside the host is valid
-// DNS syntax and is left for the resolver to accept, since only the
-// COMPARISON needs it stripped.
+// Every clause below refuses outright, before the scheme is even looked
+// at, because each one names a way a base URL can carry more than "a
+// scheme and a host" while still looking superficially fine:
+//
+//   - An OPAQUE URL ("mailto:x", "https:opaque-thing") has no authority
+//     component at all — Hostname() reports an empty string for one, and
+//     letting it fall through to the empty-host case below would blame
+//     the wrong thing.
+//   - An EMPTY HOST ("https:///path") parses without error and without a
+//     scheme problem, so nothing else here would catch it.
+//   - USERINFO gets its own refusal and its own reason, because the
+//     failure mode is not "a strange base URL" but a credential leak by
+//     placement: net/http converts a "user:pass@" prefix into an
+//     Authorization: Basic header on every request this client sends,
+//     silently, whether or not the caller ever asked for one — and the
+//     password sits afterwards in c.baseURL, an ordinary string field.
+//     internal/guard's Secret check watches unexported fields that can
+//     reach a ui.Secret; a password folded into a plain string never
+//     reaches that type, so it passes the guard by never being the kind
+//     of value the guard was built to find. Refusing it here is the only
+//     place that failure mode can be stopped.
+//   - A QUERY or FRAGMENT has no legitimate reason to be part of a base
+//     URL a caller configures once at construction; either one existing
+//     is a sign the value came from somewhere that concatenated more
+//     than it meant to.
+//
+// On success it returns the URL with every trailing slash trimmed — not
+// just one — and does not otherwise rewrite it: a trailing dot inside
+// the host is valid DNS syntax and is left for the resolver to accept,
+// since only the COMPARISON above needed it stripped.
 func validateBaseURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("invalid API base URL %q: %w", raw, err)
 	}
 
+	if u.Opaque != "" {
+		return "", fmt.Errorf(
+			"refusing API base %q: not a URL with a scheme and a host — use a base "+
+				"URL naming a server, with the https scheme, such as api.example.com", raw)
+	}
+
 	host := strings.ToLower(u.Hostname())
 	host = strings.TrimSuffix(host, ".")
+
+	if host == "" {
+		return "", fmt.Errorf(
+			"refusing API base %q: missing a host — the base URL must name the "+
+				"server to talk to, such as api.example.com over https", raw)
+	}
+
+	if u.User != nil {
+		return "", fmt.Errorf(
+			"refusing API base %q: a base URL must not carry a username or "+
+				"password — remove the \"user:pass@\" segment from the host", raw)
+	}
+
+	if u.RawQuery != "" || u.ForceQuery {
+		return "", fmt.Errorf(
+			"refusing API base %q: a base URL must not carry a query string", raw)
+	}
+
+	if u.Fragment != "" {
+		return "", fmt.Errorf(
+			"refusing API base %q: a base URL must not carry a fragment", raw)
+	}
 
 	switch strings.ToLower(u.Scheme) {
 	case "https":
@@ -102,7 +156,7 @@ func validateBaseURL(raw string) (string, error) {
 				"host for local development", raw)
 	}
 
-	return strings.TrimSuffix(u.String(), "/"), nil
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 // Option configures a Client built by New.
@@ -176,6 +230,22 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 			// and every CI runner, and never the one desk behind a
 			// corporate proxy where it matters.
 			Proxy: http.ProxyFromEnvironment,
+		},
+		// CheckRedirect refuses every redirect outright, rather than
+		// following it as http.Client would by default. This API never
+		// legitimately redirects, and the address guard above only ever
+		// looks at the URL a call STARTS with — it has no say over where
+		// a redirect response points. net/http's own rule for forwarding
+		// a request's Authorization header across a redirect keys on
+		// host, never scheme, so a same-host https-to-http redirect
+		// would carry a bearer token onto the wire in clear; a 307 or
+		// 308 would also re-send the request body to whatever host the
+		// redirect names. Nothing attaches a token to a request in this
+		// package yet, but this is the Client every authenticated call
+		// will inherit, and the refusal belongs here before the first
+		// one exists rather than after.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 	return c, nil
