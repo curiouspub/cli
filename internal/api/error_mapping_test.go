@@ -111,6 +111,13 @@ func TestErrorMapping_UndecodableBody(t *testing.T) {
 		t.Errorf("Message %q contains a raw tag — an undecodable body must never "+
 			"surface its own content", apiErr.Message)
 	}
+	// Equality against the actual constant, not just "no '<'": a message
+	// silently set to "" would pass the substring check above too, and an
+	// empty message is exactly as unhelpful to a caller as raw HTML would
+	// be.
+	if apiErr.Message != undecodableBodyMessage {
+		t.Errorf("Message = %q, want the generic constant %q", apiErr.Message, undecodableBodyMessage)
+	}
 }
 
 // TestErrorMapping_AllCodes ranges wire.AllErrorCodes rather than a
@@ -142,11 +149,15 @@ func TestErrorMapping_AllCodes(t *testing.T) {
 	}
 }
 
-// TestErrorMapping_RetryAfterRanged ranges the same contract set for the
-// other half of the rule: Retry-After is parsed whenever the header is
-// present, independent of the code, while wire.CarriesRetryAfter names
-// which codes GUARANTEE the server sends it. Both branches are exercised
-// for every code so this stays true the day a code's guarantee changes.
+// TestErrorMapping_RetryAfterRanged proves Retry-After parsing does not
+// depend on which code comes with it: for every code in the contract, a
+// response carrying the header parses it, and one without it does not
+// invent a value. It does NOT call wire.CarriesRetryAfter, and does not
+// claim to: whether a given code obligates the server to send the header
+// is the contract's own concern, not something a client watching one
+// response can verify, so both subtests below are the same assertion
+// repeated over the whole code set — breadth against the codes this
+// client must not treat specially, not differentiated coverage per code.
 func TestErrorMapping_RetryAfterRanged(t *testing.T) {
 	for _, code := range wire.AllErrorCodes {
 		t.Run(string(code)+"/header present", func(t *testing.T) {
@@ -178,10 +189,10 @@ func TestErrorMapping_RetryAfterRanged(t *testing.T) {
 			}
 			_, err = c.AuthStart(context.Background(), wire.AuthStartRequest{})
 			apiErr := requireAPIError(t, err)
-			// wire.CarriesRetryAfter(code) says a response with THIS code
-			// is guaranteed to carry the header — a server that omits it
-			// for such a code has a defect of its own, which is not this
-			// client's to paper over by inventing a value it was never
+			// A code the contract guarantees will carry the header is not
+			// this client's own guarantee to enforce — a server that omits
+			// it for such a code has a defect of its own, which is not
+			// something to paper over by inventing a value that was never
 			// sent. So the observable result here is 0 regardless of the
 			// code, which is exactly what "the parse is code-independent"
 			// means.

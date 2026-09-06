@@ -16,13 +16,24 @@ import (
 
 const testToken = "sk-super-secret-token-value"
 
-// TestToken_NeverSentOnUnauthenticatedCalls is the acceptance table's
-// final bullet, its first half: none of this epic's four calls take a
+// TestToken_NeverSentOnUnauthenticatedCalls checks the first half of this
+// client's token-handling rule: none of this epic's four calls take a
 // bearer token — auth/verify RETURNS one, it does not spend one — so a
 // token set on the Client must never appear in the headers any of the
-// four calls actually sends. Checking c.Token itself first is this
-// test's own positive control: without it, a WithToken that silently
-// no-ops would make every assertion below pass for the wrong reason.
+// four calls actually sends.
+//
+// Two positive controls guard against this passing for the wrong reason.
+// Checking c.Token itself proves WithToken took effect at all — without
+// it, a WithToken that silently no-ops would make every assertion below
+// pass vacuously. The second, larger one is below, right after the
+// server is defined: a request that DOES carry the header must actually
+// be seen by this handler's own capture, or every "never sent" assertion
+// that follows is indistinguishable from a capture that does nothing.
+//
+// Read this test's result narrowly: until an authenticated call exists
+// in this client, it proves only that these four calls don't send a
+// token — not that one is sent correctly when it should be. That larger
+// claim needs its own test once such a call exists.
 func TestToken_NeverSentOnUnauthenticatedCalls(t *testing.T) {
 	var sawAuthHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +51,30 @@ func TestToken_NeverSentOnUnauthenticatedCalls(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+
+	// Positive control for the capture mechanism itself: a request that
+	// DOES carry the header, sent straight at this handler with no
+	// Client in between, must be seen. Without this, replacing the
+	// capture assignment above with a discard (`_ = h`) leaves every
+	// assertion below green for the wrong reason — none of this epic's
+	// four calls send the header either way, so a capture that silently
+	// does nothing looks identical to one that works.
+	probe, err := http.NewRequest(http.MethodGet, srv.URL+"/v1/capacity", nil)
+	if err != nil {
+		t.Fatalf("building the control request: %v", err)
+	}
+	probe.Header.Set("Authorization", "Bearer control-value")
+	probeResp, err := http.DefaultClient.Do(probe)
+	if err != nil {
+		t.Fatalf("sending the control request: %v", err)
+	}
+	_ = probeResp.Body.Close()
+	if sawAuthHeader != "Bearer control-value" {
+		t.Fatalf("the capture did not see a header that was actually sent — got "+
+			"%q, want %q; every assertion below would pass even with the capture "+
+			"disabled", sawAuthHeader, "Bearer control-value")
+	}
+	sawAuthHeader = "" // reset before exercising the real calls below
 
 	c, err := New(srv.URL, WithToken(ui.Secret(testToken)))
 	if err != nil {
@@ -80,8 +115,8 @@ func TestToken_NeverSentOnUnauthenticatedCalls(t *testing.T) {
 	}
 }
 
-// TestToken_NeverAppearsInLogOutput is the acceptance bullet's other
-// half: a Client formatted for a log line — the accident ui.Secret's
+// TestToken_NeverAppearsInLogOutput checks the other half of the rule: a
+// Client formatted for a log line — the accident ui.Secret's
 // own doc comment exists to survive — never shows the raw value, because
 // Token is an EXPORTED field of type ui.Secret and every formatting
 // path resolves through Secret's own methods rather than the underlying

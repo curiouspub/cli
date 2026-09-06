@@ -37,9 +37,9 @@ func captureServer(status int, respBody string) (*httptest.Server, *capturedRequ
 	return srv, captured
 }
 
-// TestCalls_RequestShapes is the acceptance table's first bullet: each
-// of the four calls sends the right method, path and Content-Type, and
-// — for the three that carry one — a request body that round-trips
+// TestCalls_RequestShapes checks the basic shape every one of the four
+// calls must get right: the right method, path and Content-Type, and —
+// for the three that carry one — a request body that round-trips
 // through the pkg/wire request type. Capacity carries no request body
 // (GET /v1/capacity takes none), so only the other three assert a
 // round trip.
