@@ -1,0 +1,19 @@
+# Every text file is stored and checked out with LF, on every platform.
+#
+# This is load bearing, not hygiene. Git for Windows installs with
+# core.autocrlf=true by default and the CI runner image keeps that
+# default, so without this file a Windows checkout rewrites every .go
+# file with CRLF — and `gofmt -l` lists a CRLF file as unformatted.
+# `fmt` is the first prerequisite of `make ci`, so the Windows job would
+# be red at step one, on files nobody had touched.
+#
+# It also keeps the citation guard and the pattern manifest reading
+# byte-identical line endings on all three platforms, which is one less
+# way for a guard to disagree with itself depending on where it ran.
+* text=auto eol=lf
+
+# Binaries are never line-ending translated.
+*.png binary
+*.jpg binary
+*.gz  binary
+*.zip binary

@@ -1,0 +1,122 @@
+# Citation patterns this repo forbids in any non-test Go source file.
+#
+# One RE2 regular expression per line (Go's regexp/syntax). Blank lines
+# and lines starting with "#" are ignored. internal/guard reads this file
+# directly at test time — it keeps no copy of its own — so deleting a
+# line here is deleting the one thing that made the matching mutation
+# visible.
+#
+# Each pattern describes the SHAPE of a private reference this repo's own
+# rules forbid, not any one instance of one: the point is to stop the
+# next occurrence before it ships, not to remember the one that already
+# did.
+#
+# These comments DESCRIBE the shapes rather than quoting examples of
+# them, and that is not fastidiousness: the guard reads these comment
+# lines like any other prose in the repository, so an example written out
+# here would be a citation shipping inside the file that forbids
+# citations. Only the pattern lines below are exempt.
+#
+# THE BOUNDARY, in one sentence: the NAME of a sibling repository may be
+# written here; its STRUCTURE may not. Saying that a server implementation
+# exists and conforms to this contract is public fact and is useful to a
+# reader; naming a path inside it, a document in it, or an identifier out
+# of its planning tree hands a reader a map they can never use and tells
+# them what is in it. So no pattern below matches a bare repository name,
+# and several match paths into one.
+
+# A section sign followed by a number: a private document's own numbered
+# heading. Optional whitespace after the sign, including a NON-BREAKING
+# space: typed in a word processor the separator is often U+00A0, which
+# RE2's \s does not match, and the citation reads identically.
+§[\s\x{00A0}]*[0-9]+(\.[0-9]+)*
+
+# A document version string, written as "spec" followed by a lowercase
+# "v" and a dotted number.
+(?i)\bspec[ _-]?v[0-9]+(\.[0-9]+)+\b
+
+# An internal task identifier: the capital letter T, a hyphen, and
+# digits.
+\bT-[0-9]+\b
+
+# An internal ruling identifier: the capital letter R, a hyphen, and
+# digits.
+\bR-[0-9]+\b
+
+# An internal epic identifier, spelled out as a word followed by a
+# number.
+(?i)\bEpic[ -]?[0-9]+\b
+
+# An internal decision identifier: a single capital letter directly
+# followed by digits, with no separator. Two forms, and the gap between
+# them is deliberate.
+#
+# Set off in parentheses — unambiguous, so matched bare:
+\([A-Z][0-9]+\)
+
+# Or introduced by a citing word. This form is CONTEXT-CUED rather than
+# bare, and that is a considered limit, not an oversight: a bare
+# \b[A-Z][0-9]+\b also matches P256, S3, H2 and every other legitimate
+# capital-letter-plus-digits token a Go source file may contain. A guard
+# that cries wolf on its first run is a guard somebody disables, so this
+# one asks for a citing word and accepts that "the D7 rule" slips past.
+\b(?i:see|per|ruled|rule|ruling|decision|finding)\s+[A-Z][0-9]+\b
+
+# Gap and cross-epic identifiers, which have no ambiguous twin and so are
+# matched bare.
+\bGAP-[0-9]+\b
+\bE[0-9]+-[0-9]+\b
+
+# Finding identifiers from this project's review registers. NAMED
+# prefixes rather than a generic [A-Z]+-[0-9]+, which would red on UTF-8,
+# SHA-256 and RFC-7235. These are the prefixes the registers actually
+# use. The register that produced this very file names its findings with
+# exactly these prefixes, and a comment citing one of them is the next
+# natural sentence somebody writes in a guard.
+\b(S|M|F|RQ|PUB|CMD)-[0-9]+\b
+\bG[0-9]-[0-9]+\b
+
+# A path segment naming the private documentation tree. Both separators:
+# a Windows-style path is the same disclosure, and this repo's CI runs on
+# Windows, so the backslash form is not hypothetical.
+\bdocs/epic
+\bdocs\\epic
+\bdocs/(tasks|curious-mvp-spec)
+\bdocs\\(tasks|curious-mvp-spec)
+\bplatform/docs
+\bplatform\\docs
+
+# The control plane's storage key scheme: an item-key prefix immediately
+# followed by "#".
+#
+# NAMED prefixes rather than "any uppercase word", and the narrowing is
+# deliberate. The broad form matched this repo's own CLAUDE.md, where the
+# rule is STATED using a placeholder — a guard reding on the sentence that
+# describes it is the fastest way to get the guard switched off. This list
+# is the canonical one the rule's own home carries; it is narrower than
+# "any uppercase word", so a NEW prefix invented later is not caught until
+# it is added here, and that trade is taken knowingly.
+\b(DEPLOY|SITE|TOKEN|CODE|EMAIL|QUOTA|CAP|WAIT|NAME|FLAG)#
+
+# Deployment-estate identifiers: the resource names and endpoint shapes
+# that say WHERE this service runs. Ruled 2026-09-06 — what serves the
+# API is not a fact this repository has any reason to carry, and a
+# hostname or resource id pasted into a comment while debugging is the
+# ordinary way it would arrive.
+#
+# The set covers SEVERAL providers rather than one, for the same reason
+# the dependency denylist does: a list naming one provider is itself the
+# disclosure, and a rule about one provider lets the rest through.
+#
+# These match RESOURCE and ENDPOINT shapes only, never a package import
+# path — the dependency guard's denylist has to spell provider module
+# paths out loud to do its job, and a pattern matching those would red
+# this repository against its own guard.
+\barn:[a-z0-9-]+:[a-z0-9-]+:
+\.amazonaws\.com\b
+\b[0-9]{12}\.dkr\.ecr\.
+\.blob\.core\.windows\.net\b
+\.azurewebsites\.net\b
+\.cloudfunctions\.net\b
+\.googleusercontent\.com\b
+\.r2\.cloudflarestorage\.com\b
