@@ -1,0 +1,74 @@
+# Import-path substrings this module refuses to carry, anywhere in its
+# dependency graph. One fragment per line; blank lines and lines starting
+# with "#" are ignored. Matching is case-insensitive and by SUBSTRING, so
+# a fragment has to be spelled the way a module path is.
+#
+# internal/guard reads this file on every run and keeps no copy of it, so
+# deleting a line measurably changes what the guard can see — which is
+# how anyone can check the guard is really reading it rather than a
+# hardcoded duplicate. That is the same design the citation manifest
+# uses, and it is here for the same reason.
+#
+# THIS FILE IS A RULE FILE, and its data lines are exempt from the
+# citation guard for the reason a rule file always is: it cannot name
+# what it forbids without writing it down. Its COMMENT lines are scanned
+# like any other prose, so nothing here quotes an example — the comments
+# describe classes, and the classes are named in CLAUDE.md.
+#
+# --- Class 1: infrastructure provider SDKs.
+# This binary speaks one protocol, its own project's public HTTP API, and
+# has no business holding any provider's SDK — whichever provider it is.
+# The list covers the CLASS rather than a vendor, which is both a real
+# widening (a guard naming one provider lets every other one through) and
+# the reason nothing here says where anything runs: a dozen names imply
+# none of them.
+aws-sdk
+aws/smithy
+azure-sdk
+azidentity
+cloud.google.com/go
+googleapis/gax-go
+cloudflare-go
+digitalocean/godo
+linodego
+scaleway-sdk-go
+hetznercloud
+govultr
+oci-go-sdk
+aliyun
+alibabacloud
+tencentcloud
+ibm-cloud
+
+# --- Class 2: telemetry and analytics. No phone-home, ever. This repo's
+# existence is a trust argument and one tracker ends it.
+segment.com
+segmentio
+mixpanel
+amplitude
+google-analytics
+getsentry
+sentry-go
+posthog
+datadog
+honeycombio
+newrelic
+# Telemetry that arrives as a "standard" rather than as a vendor, which
+# is how it gets waved through. It is a phone-home whatever the
+# governance model, and it was the gap a review found in a list that
+# named only vendors.
+opentelemetry.io
+opencensus.io
+go.elastic.co/apm
+bugsnag
+rollbar
+logrocket
+
+# --- Class 3: auto-updaters. CLAUDE.md's first screen promises this
+# class is enforced mechanically, and until these lines existed it was
+# not — the public repo was making a claim its code did not keep, which
+# is worse than a missing check because a reader stops looking.
+selfupdate
+go-update
+go-github-selfupdate
+equinox.io

@@ -56,7 +56,8 @@
 
 # Or introduced by a citing word. This form is CONTEXT-CUED rather than
 # bare, and that is a considered limit, not an oversight: a bare
-# \b[A-Z][0-9]+\b also matches P256, S3, H2 and every other legitimate
+# \b[A-Z][0-9]+\b also matches P256, H2, RFC7235 and every other
+# legitimate
 # capital-letter-plus-digits token a Go source file may contain. A guard
 # that cries wolf on its first run is a guard somebody disables, so this
 # one asks for a citing word and accepts that "the D7 rule" slips past.
@@ -120,3 +121,26 @@
 \.cloudfunctions\.net\b
 \.googleusercontent\.com\b
 \.r2\.cloudflarestorage\.com\b
+
+# Provider and service vocabulary is NOT matched here. It moved to
+# scripts/vendor-terms.txt and is matched by TOKENISING identifiers
+# rather than by a regular expression, because a word-boundary pattern
+# misses the spellings these names take in real Go — camelCase and
+# snake_case identifiers have no word boundary inside them — and a
+# substring match reds on ordinary English instead. See that file.
+
+# Names of PRIVATE DOCUMENTS, and the phrases that point at them. A
+# pointer is a citation even when it carries no identifier: a comment
+# naming one of these documents and telling the reader to consult it
+# sends a public reader somewhere they will never be able to go, which is
+# exactly what the rule at the top of CLAUDE.md forbids. This paragraph
+# DESCRIBES those phrases rather than quoting one, which is the same
+# discipline the top of this file already asks for and the third time
+# this file has had to learn it. The identifier patterns above could not see these,
+# because there is no identifier in them — the guard's vocabulary was
+# its field of view.
+\bLEARNINGS\b
+(?i:\brequired mutation\b)
+(?i:\bacceptance (table|check|row|bullet)s?\b)
+(?i:\bthe task file\b)
+(?i:\bthe task's\b)

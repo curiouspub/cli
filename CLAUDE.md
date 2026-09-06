@@ -40,9 +40,19 @@ code, comments, tests, fixtures, markdown, workflows or scripts:
   prefix-and-separator item keys and their attribute names — and the
   names of internal server-side packages.
 - **The deployment estate** — resource identifiers, account numbers,
-  internal endpoints, and which infrastructure provider serves the API.
-  What runs behind `/v1` is not a fact this repository has any reason to
-  carry, and the client could not act on it if it did.
+  internal endpoints, the name of the infrastructure provider serving the
+  API, and the names of its individual services. What runs behind `/v1`
+  is not a fact this repository has any reason to carry, and the client
+  could not act on it if it did.
+
+  **Runtime URLs are exempt, because they are physics rather than
+  authorship.** The client is handed upload targets by the server and
+  must send to whatever it receives; a hostname passing through a
+  variable discloses nothing anyone chose to write. That exemption needs
+  no mechanism, since such a URL never appears in a source file — and if
+  a test fixture ever seems to need one, that is a signal the fixture is
+  baking in an assumption this client is specifically designed not to
+  have.
 
 The examples above are deliberately described rather than quoted: a rule
 that forbids writing an identifier should not have to write one to say
@@ -178,10 +188,12 @@ Four rules the repo states about itself are tests, so a violation fails
 when it is introduced rather than at review. They live in
 `internal/guard`.
 
-1. **No provider SDK, no telemetry dependency** — checked against the
-   module's real dependency graph, both the package graph including test
-   imports and the module requirement list. A requirement nothing imports
-   yet is already the commitment.
+1. **No provider SDK, no telemetry dependency, no auto-updater** —
+   checked against the module's real dependency graph, both the package
+   graph including test imports and the module requirement list. A
+   requirement nothing imports yet is already the commitment. The
+   fragments live in `scripts/banned-dependencies.txt` and the guard
+   reads that file on every run, keeping no copy.
 2. **No compiled-in hostname**, beyond at most two named URL constants —
    the API base and the site base domain. A bare URL literal anywhere
    fails regardless of count: a URL a reader cannot find by grepping for
@@ -204,6 +216,28 @@ when it is introduced rather than at review. They live in
 
 Each guard fails loudly if it scanned nothing, so none of them can pass
 by looking at an empty set.
+
+**Three manifests are RULE FILES, and they get exactly one narrow
+carve-out.** `scripts/citation-patterns.txt`,
+`scripts/banned-dependencies.txt` and `scripts/vendor-terms.txt` have to
+spell the things they forbid — you cannot match a module path without
+writing one down — so their **data** lines are exempt **from the vendor
+check only, never from any other pattern**. That narrowness is the whole
+of it: the dependency denylist genuinely must name providers, and nothing
+else about a data line deserves a waiver, so a private identifier written
+on one still reds. Their **comment** lines are scanned like any other
+prose, which is why nothing in any of them quotes an example — a rule
+file that quoted its own targets would be a leak shipping inside the file
+that hunts leaks.
+
+**The vendor check TOKENISES rather than pattern-matches**, and that is
+not an optimisation. A word-boundary expression sees no boundary inside
+an identifier, so every camelCase and snake_case spelling walked past the
+first version of this rule; a substring match instead reds on ordinary
+English, because a common word for defects contains one of the terms. So
+the guard splits each alphanumeric run on camelCase and acronym
+boundaries and matches whole subwords, plus contiguous joins of them for
+names the convention itself splits.
 
 ## Hard don'ts
 

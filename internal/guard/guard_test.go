@@ -264,74 +264,56 @@ func displayPath(root, path string) string {
 // Guard 1: no provider SDK, no telemetry/analytics dependency.
 // ---------------------------------------------------------------------
 
-// bannedDependencyFragments are import-path substrings this guard refuses
-// to find anywhere in the module's dependency graph. Three classes, each
-// one a promise CLAUDE.md makes on its own first screen.
-var bannedDependencyFragments = []string{
-	// INFRASTRUCTURE PROVIDER SDKs. This client speaks one protocol —
-	// this project's own public HTTP API — and has no business holding
-	// any provider's SDK, whichever provider it is.
-	//
-	// The list names the CLASS rather than a vendor, and that is a real
-	// widening rather than a tidy-up: a guard that names one provider
-	// lets every other provider's SDK through, and the rule was never
-	// about one of them. An earlier version of this list named exactly
-	// one, which is the same defect as a guard proved only against the
-	// shape its author had in mind.
-	//
-	// The entries are import-path substrings and are matched
-	// case-insensitively, so they have to be spelled the way a module
-	// path is. Nothing about this list says which provider anything runs
-	// on, and nothing here should: what serves the API is not a fact
-	// this repository has any reason to carry.
-	"aws-sdk",
-	"aws/smithy",
-	"azure-sdk",
-	"azidentity",
-	"cloud.google.com/go",
-	"googleapis/gax-go",
-	"cloudflare-go",
-	"digitalocean/godo",
-	"linodego",
-	"scaleway-sdk-go",
-	"hetznercloud",
-	"govultr",
-	"oci-go-sdk",
-	"aliyun",
-	"alibabacloud",
-	"tencentcloud",
-	"ibm-cloud",
-	// TELEMETRY AND ANALYTICS. No phone-home, ever.
-	"segment.com",
-	"segmentio",
-	"mixpanel",
-	"amplitude",
-	"google-analytics",
-	"getsentry",
-	"sentry-go",
-	"posthog",
-	"datadog",
-	"honeycombio",
-	"newrelic",
-	// Telemetry that arrives as a "standard" rather than as a vendor,
-	// which is how it gets waved through. OpenTelemetry is a
-	// phone-home whatever the governance model, and it was the gap a
-	// review found in the vendor-name-only list above.
-	"opentelemetry.io",
-	"opencensus.io",
-	"go.elastic.co/apm",
-	"bugsnag",
-	"rollbar",
-	"logrocket",
-	// Auto-updaters. CLAUDE.md's first screen promises this class is
-	// "enforced mechanically by internal/guard", and until these lines
-	// existed it was not — the public repo was making a claim its code
-	// did not keep, which is worse than a missing check because a reader
-	// stops looking.
-	"selfupdate",
-	"go-update",
-	"go-github-selfupdate",
-	"equinox.io",
+// loadBannedDependencies reads the committed denylist of import-path
+// substrings this module refuses to carry. Like the citation manifest, it
+// is READ on every run and never cached in this package: the proof that a
+// rule file is load bearing is that deleting a line measurably changes
+// what the guard can see, and a guard consulting its own hardcoded copy
+// would pass that check while failing to do it.
+//
+// It moved out of this file 2026-09-06 for a second reason, and the
+// second one is why it is a file rather than a var. The denylist has to
+// SPELL the vendor names it forbids — you cannot match a module path
+// without writing it — and the citation guard now forbids those same
+// names in authored text. Two rules in one repository, each correct,
+// pointing opposite ways at the same string. A rule file resolves it the
+// way the citation manifest already did: its DATA lines are exempt from
+// the citation scan because a rule cannot name what it forbids without
+// writing it down, and its COMMENT lines are scanned like any other
+// prose, so the exemption buys exactly the lines that need it and not one
+// more.
+func loadBannedDependencies(t *testing.T, root string) []string {
+	t.Helper()
+	path := filepath.Join(root, "scripts", "banned-dependencies.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var fragments []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// A data line is a bare import-path substring. Neither whitespace
+		// nor "#" is legal in an import path, so either one means somebody
+		// wrote a trailing comment — and a trailing comment does not
+		// terminate a line here, it becomes PART of the fragment. The
+		// fragment then matches nothing and the ban is silently off, with
+		// the guard still green. Found by a reviewer within hours of this
+		// file being created, against a real banned import: baseline red,
+		// one inline comment later, green.
+		if strings.ContainsAny(line, " \t#") {
+			t.Fatalf("scripts/banned-dependencies.txt: %q is not a bare import-path fragment "+
+				"(whitespace or # present). A trailing comment silently disables the ban it "+
+				"is attached to; put the comment on its own line.", line)
+		}
+		fragments = append(fragments, strings.ToLower(line))
+	}
+	if len(fragments) == 0 {
+		t.Fatal("scripts/banned-dependencies.txt lists no fragments — this guard would silently pass")
+	}
+	return fragments
 }
 
 // Matching is case-INSENSITIVE, and two entries above earn it. The list
@@ -352,6 +334,7 @@ var bannedDependencyFragments = []string{
 // the very import path this test needs to see.
 func TestNoBannedDependencies(t *testing.T) {
 	root := moduleRoot(t)
+	bannedDependencyFragments := loadBannedDependencies(t, root)
 
 	// Two sources, because neither sees what the other does.
 	//
@@ -731,6 +714,115 @@ func loadCitationPatterns(t *testing.T, root string) []*regexp.Regexp {
 	return patterns
 }
 
+// loadVendorTerms reads the provider and service vocabulary this
+// repository may not name in authored text. Read on every run, no cached
+// copy, for the reason every rule file here is: deleting a line has to
+// measurably change what the guard can see.
+func loadVendorTerms(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	path := filepath.Join(root, "scripts", "vendor-terms.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	terms := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		terms[strings.ToLower(line)] = true
+	}
+	if len(terms) == 0 {
+		t.Fatal("scripts/vendor-terms.txt lists no terms — this guard would silently pass")
+	}
+	return terms
+}
+
+// splitSubwords splits one alphanumeric run the way an identifier is
+// actually built: an acronym run, a capitalised word, a lowercase word,
+// or a bare digit run. Digits stay attached to the letters they follow,
+// so a name ending in a digit survives as one subword.
+//
+// Written by hand rather than as a pattern because the natural
+// expression for the acronym boundary needs a negative lookahead, and
+// RE2 — Go's engine, chosen for its linear-time guarantee — does not
+// have one. The first version of this used one and panicked at init.
+func splitSubwords(run string) []string {
+	isUpper := func(b byte) bool { return b >= 'A' && b <= 'Z' }
+	isLower := func(b byte) bool { return b >= 'a' && b <= 'z' }
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+
+	var out []string
+	for i := 0; i < len(run); {
+		start := i
+		switch {
+		case isUpper(run[i]):
+			for i < len(run) && isUpper(run[i]) {
+				i++
+			}
+			// An uppercase run followed by lowercase is an acronym whose
+			// last letter opens the next word: a run then a capitalised
+			// word splits between them, not after them.
+			if i-start > 1 && i < len(run) && isLower(run[i]) {
+				i--
+			}
+			for i < len(run) && (isLower(run[i]) || isDigit(run[i])) {
+				i++
+			}
+		case isLower(run[i]):
+			for i < len(run) && (isLower(run[i]) || isDigit(run[i])) {
+				i++
+			}
+		default:
+			for i < len(run) && isDigit(run[i]) {
+				i++
+			}
+		}
+		out = append(out, run[start:i])
+	}
+	return out
+}
+
+// alphanumericRun finds the maximal runs a line is tokenised from.
+var alphanumericRun = regexp.MustCompile(`[A-Za-z0-9]+`)
+
+// identifierTokens returns every whole subword of a line, plus every
+// CONTIGUOUS JOIN of adjacent subwords.
+//
+// This is the whole of why the vendor rule is not a regular expression,
+// and both halves are load bearing.
+//
+// SPLITTING is what catches the real spellings. A word-boundary pattern
+// sees no boundary inside an identifier, so every camelCase and
+// snake_case spelling of a forbidden name walked straight past the
+// pattern that replaced it — which is how the rule shipped evadable in
+// the first place.
+//
+// JOINING is what catches a name that is itself split by the convention:
+// a two-part product name written in camelCase arrives as two subwords
+// and matches neither, until the adjacent pair is rejoined.
+//
+// And matching a whole subword rather than a SUBSTRING is what keeps the
+// guard quiet: an ordinary English word for a defect contains one of
+// these terms outright, and a substring match reds on it. Splitting
+// distinguishes an identifier that NAMES a provider from a word that
+// merely contains those letters.
+func identifierTokens(line string) map[string]bool {
+	out := map[string]bool{}
+	for _, run := range alphanumericRun.FindAllString(line, -1) {
+		subs := splitSubwords(run)
+		for i := range subs {
+			joined := ""
+			for j := i; j < len(subs); j++ {
+				joined += strings.ToLower(subs[j])
+				out[joined] = true
+			}
+		}
+	}
+	return out
+}
+
 // TestNoPrivateCitations scans EVERY text file this repository ships —
 // Go sources, tests, the Makefile, the CI workflow, shell scripts,
 // markdown — against every pattern the manifest declares, and fails
@@ -744,23 +836,61 @@ func loadCitationPatterns(t *testing.T, root string) []*regexp.Regexp {
 func TestNoPrivateCitations(t *testing.T) {
 	root := moduleRoot(t)
 	patterns := loadCitationPatterns(t, root)
+	vendorTerms := loadVendorTerms(t, root)
 
-	manifest := filepath.Join(root, "scripts", "citation-patterns.txt")
+	// RULE FILES: files whose job is to name what the repository forbids.
+	// Their DATA lines are exempt from this scan and their COMMENT lines
+	// are not, which is the narrowest exemption that works — a rule cannot
+	// name what it forbids without writing it down, but the prose
+	// explaining a rule has no such need and is scanned like any other.
+	//
+	// There are two, and the second one is here because two correct rules
+	// pointed opposite ways at the same string: the dependency denylist
+	// must spell vendor module paths to match them, and the citation
+	// manifest now forbids those vendor names in authored text. Without
+	// this, the repository reds against itself and the fastest way out is
+	// to delete one of the two rules.
+	ruleFiles := map[string]bool{
+		filepath.Join(root, "scripts", "citation-patterns.txt"):   true,
+		filepath.Join(root, "scripts", "banned-dependencies.txt"): true,
+		filepath.Join(root, "scripts", "vendor-terms.txt"):        true,
+	}
 	for _, path := range publishedTextFiles(t, root) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
 		}
-		isManifest := path == manifest
+		isRuleFile := ruleFiles[path]
 		for lineNum, line := range strings.Split(string(data), "\n") {
-			// In the manifest, only its prose is in scope: a pattern line
-			// is a description of a citation shape and matching patterns
-			// against themselves proves nothing.
-			if isManifest && !strings.HasPrefix(strings.TrimSpace(line), "#") {
-				continue
+			// A rule file's DATA line is exempt from the VENDOR check
+			// only — never from the patterns. That narrowness is the
+			// point, and it was the reviewer's remedy rather than the
+			// author's: the dependency denylist has to spell provider
+			// module paths to match them, so the vendor vocabulary is a
+			// genuine collision. No other pattern has any legitimate
+			// reason to match a denylist entry, so no other pattern is
+			// waived. An exemption drawn file-wide would have let a
+			// private identifier ship on a data line, which was measured
+			// rather than argued.
+			isRuleData := isRuleFile && !strings.HasPrefix(strings.TrimSpace(line), "#")
+			if !isRuleData {
+				for token := range identifierTokens(line) {
+					if vendorTerms[token] {
+						t.Errorf("%s:%d names infrastructure (%q) in authored text\n"+
+							"What serves the API is not a fact this repository carries. "+
+							"State the conclusion without the vendor; see CLAUDE.md.",
+							displayPath(root, path), lineNum+1, token)
+					}
+				}
 			}
 			for _, re := range patterns {
-				if m := re.FindString(line); m != "" {
+				// EVERY match on the line, not the first. Found while
+				// landing the vendor rule: a line naming several
+				// forbidden things reported one of them, so an author
+				// fixing violations discovers the next only by running
+				// again. A guard that reveals its findings one per run
+				// is a guard that gets a reputation for moving goalposts.
+				for _, m := range re.FindAllString(line, -1) {
 					t.Errorf("%s:%d matches citation pattern %q (matched %q): %q\n"+
 						"This repo states a conclusion and its reasoning, never the private "+
 						"document either came from — rewrite the line instead of citing it; "+
