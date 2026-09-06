@@ -147,7 +147,7 @@ var astroConfigTable = []struct {
 	// is what makes this path run at all.
 	{"srcdir-relative", nil},
 	{"srcdir-hardstop", []wantFinding{
-		{CheckIDPagesDir, SeverityHardStop, []string{"astro.config.mjs", "www", "www/pages"}, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
 	}},
 	{"srcdir-backtick", nil},
 	{"srcdir-template-interp", []wantFinding{
@@ -158,10 +158,10 @@ var astroConfigTable = []struct {
 		{CheckIDPagesDir, SeverityWarning, nil, nil},
 	}},
 	{"srcdir-commented-out", []wantFinding{
-		{CheckIDPagesDir, SeverityHardStop, []string{"src/pages"}, []string{"old"}},
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
 	}},
 	{"srcdir-block-comment", []wantFinding{
-		{CheckIDPagesDir, SeverityHardStop, []string{"src/pages"}, []string{"old"}},
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
 	}},
 	{"srcdir-url-before-key", nil},
 	{"srcdir-two-keys", []wantFinding{
@@ -180,6 +180,18 @@ var astroConfigTable = []struct {
 		{CheckIDPagesDir, SeverityWarning, []string{"astro.config"}, nil},
 	}},
 
+	// AMENDED: no live srcDir key at all is UNRESOLVED, never "the
+	// default of src applies" — a scanner reporting zero occurrences of
+	// a key cannot establish that the key is truly absent from what
+	// Astro would load; it can only establish that this scan didn't see
+	// one. Before this fix, this exact fixture (a config file that
+	// exists but never mentions srcDir) hard-stopped, claiming
+	// "astro.config.mjs sets srcDir to 'src'" — a claim the config
+	// never makes.
+	{"srcdir-no-key", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
+	}},
+
 	// The five rows below came from an independent reconstruction of this
 	// suite: a reader who wrote an acceptance suite from the written
 	// specification alone, without ever seeing this file, this table, or
@@ -188,18 +200,28 @@ var astroConfigTable = []struct {
 	// here with origin notes on the rows that close it.
 
 	// .cjs and .cts had NEVER been exercised, alone or together, before
-	// this row. That is notable specifically because their ORDER is the
-	// one Astro fact this check got wrong once already, in an earlier
-	// draft, and corrected only by reading Astro's own source rather than
-	// reasoning about it a second time (see the comment on
-	// configCandidates). A fact that was wrong once, then fixed and
-	// re-verified, still went untested until a reader who had never seen
-	// either the mistake or the fix wrote this row from the written rule
-	// alone. .cts's srcDir deliberately points at a directory with no
-	// pages/ subdirectory, so a regression back to the wrong order would
-	// flip this row from a warning to a wrong hard stop.
+	// this row. Their ORDER here is NOT a fact about current Astro —
+	// current Astro doesn't search for either extension at all, both
+	// having been dropped upstream after the 5.x line (see the comment
+	// on configCandidates for what was actually verified and against
+	// what). This row asserts this tool's OWN documented preference
+	// among the two legacy candidates, kept for the projects still on an
+	// older release that searches for both. .cts's srcDir deliberately
+	// points at a directory with no pages/ subdirectory, so a regression
+	// in that documented order would flip which file wins and change
+	// what this row's warning names.
 	{"srcdir-cjs-precedes-cts", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.cjs", "astro.config.cts"}, nil},
+		// Naming both files alone isn't order-sensitive: both appear in
+		// the ambiguity note regardless of which one wins. "picks
+		// astro.config.cjs" is the part that only holds if cjs actually
+		// precedes cts in configCandidates — the fixture's .cjs resolves
+		// cleanly (cjssrc/pages exists) while its .cts does not
+		// (ctssrc/pages doesn't), so a regression to cts-first would
+		// flip both the picked file AND the message shape (a warning
+		// about a missing ctssrc/pages, not a clean pass-plus-note).
+		{CheckIDPagesDir, SeverityWarning,
+			[]string{"astro.config.cjs", "astro.config.cts", "picks astro.config.cjs"},
+			[]string{"picks astro.config.cts", "ctssrc"}},
 	}},
 
 	// The existing "// inside a string" row proves the comment stripper
@@ -220,12 +242,112 @@ var astroConfigTable = []struct {
 	// together, and two independent warnings together, each asserting
 	// both findings are present rather than just one.
 	{"srcdir-hardstop-plus-buildformat-warning", []wantFinding{
-		{CheckIDPagesDir, SeverityHardStop, []string{"astro.config.mjs", "www", "www/pages"}, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
 		{CheckIDBuildFormat, SeverityWarning, []string{"file"}, nil},
 	}},
 	{"srcdir-pathjoin-plus-buildformat-warning", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, nil, nil},
 		{CheckIDBuildFormat, SeverityWarning, []string{"preserve"}, nil},
+	}},
+
+	// Rows added for the false-hard-stop fix round: every one of these
+	// was an executed false positive on the shipped code, found by two
+	// independent adversarial reviews. Every outcome below is a warning
+	// or a pass, never a hard stop — that is now true of every row in
+	// this entire table, not just these, since the hard stop this file
+	// used to be able to emit no longer exists as reachable code.
+
+	// The scanner must not claim knowledge it cannot have: a shorthand
+	// property has no "key:" pair to find at all.
+	{"srcdir-shorthand-property", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"./source", "sets srcDir to"}},
+	}},
+	// A spread from an imported base config: no live srcDir key is
+	// visible, and none should be invented.
+	{"srcdir-spread-base-config", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
+	}},
+	// The shape a documentation-site integration ships: routes injected
+	// by the integration, no srcDir key, and no pages directory
+	// anywhere. Must warn at most, never hard-stop — this is the
+	// concrete case the hard stop's removal exists for.
+	{"srcdir-integration-injects-routes", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
+	}},
+
+	// Scope anchoring: the key must belong to the EXPORTED config, not
+	// to any code in the file. A lone srcDir in an unused local object,
+	// with the real config imported and re-exported by identifier, must
+	// not resolve from that local object — "wrong" must never appear.
+	{"srcdir-scope-unused-local-object", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"wrong", "sets srcDir to"}},
+	}},
+	// srcDir inside an integration's own options is not Astro's own
+	// setting — it's nested inside the integration call's argument
+	// object, never a direct property of the exported config. Wrapped in
+	// defineConfig(), the shape nearly every real Astro project actually
+	// uses.
+	{"srcdir-scope-integration-options", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"wrong", "sets srcDir to"}},
+	}},
+
+	// The call-wrapped export shape itself — export default
+	// defineConfig({ ... }) — resolving cleanly on its own. Every other
+	// srcDir fixture in this table uses a bare object literal; without
+	// this row, findExportedConfigObject's call-wrapped branch has no
+	// positive-path coverage at all despite being the shape almost every
+	// generated Astro project actually ships.
+	{"srcdir-defineconfig-wrapper", nil},
+
+	// String values are decoded as JavaScript, not merely de-slashed.
+	// All three resolve cleanly to "source/pages" existing on disk; if
+	// the escape were merely stripped instead of decoded, the resolved
+	// path would be wrong and none of these would pass.
+	{"srcdir-unicode-escape", nil},
+	{"srcdir-hex-escape", nil},
+	{"srcdir-line-continuation", nil},
+
+	// URL semantics: the fileURLToPath(new URL(...)) idiom's argument is
+	// a URL reference, so a percent-escape in it is URL syntax, not
+	// JavaScript syntax. "source%20files" must decode to "source files"
+	// (with a real space) — the fixture directory is literally named
+	// with a space, so a raw-text reading would look for a directory
+	// that does not exist and this row would not pass.
+	{"srcdir-fileurltopath-percent-encoded", nil},
+
+	// Expression continuation: a string literal that only BEGINS an
+	// expression is not the value. The fixture directory "source/pages"
+	// exists on disk specifically so that a buggy scanner reading only
+	// the first literal ('./source') would incorrectly pass; the correct
+	// scanner must warn instead, because "./source" + "/nested" is not
+	// provably "./source".
+	{"srcdir-string-concat", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, nil, nil},
+	}},
+
+	// Windows path forms are invisible to path.IsAbs/path.Clean (POSIX,
+	// slash-only) and must be caught explicitly instead of silently
+	// treated as an ordinary relative path segment.
+	{"srcdir-windows-backslash-relative", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"Windows"}, nil},
+	}},
+	{"srcdir-windows-drive-absolute", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"Windows", "drive"}, nil},
+	}},
+	{"srcdir-windows-unc", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"Windows", "UNC"}, nil},
+	}},
+
+	// build.format scope anchoring: a build.format that belongs to some
+	// other object in the file — never exported, or nested inside
+	// something that isn't the real build key — must stay silent.
+	{"build-format-outside-export", nil},
+	// vite.build shadowing: the code used to take the first "build"
+	// object anywhere in the file, so "vite: { build: {...} } }" ahead
+	// of the real "build: { format: 'file' }" silently swallowed the
+	// warning. The real one must still warn.
+	{"build-format-vite-shadow", []wantFinding{
+		{CheckIDBuildFormat, SeverityWarning, []string{"file", "directory"}, nil},
 	}},
 }
 
@@ -368,6 +490,16 @@ func TestCheckAstroConfig_NoHardStopWhenPagesPresent(t *testing.T) {
 		"srcdir-outside-root",
 		"srcdir-both-configs-ambiguous",
 		"srcdir-no-config",
+		"srcdir-no-key",
+		"srcdir-shorthand-property",
+		"srcdir-spread-base-config",
+		"srcdir-integration-injects-routes",
+		"srcdir-scope-unused-local-object",
+		"srcdir-scope-integration-options",
+		"srcdir-string-concat",
+		"srcdir-windows-backslash-relative",
+		"srcdir-windows-drive-absolute",
+		"srcdir-windows-unc",
 	}
 
 	for _, name := range parserFailureFixtures {
@@ -473,15 +605,56 @@ func TestCheckAstroConfig_BuildFormatComputedStaysSilent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// The structural guarantee behind the central ruling of this round: this
+// check cannot hard-stop a deploy, full stop.
+// ---------------------------------------------------------------------
+
+// TestCheckAstroConfig_NeverHardStopsAnywhere is the mutation target for
+// the ruling that removed this file's one hard stop. It runs every
+// fixture the outcome table above knows about and fails if any of them
+// ever produces a SeverityHardStop finding. A real Astro build with no
+// pages directory does not fail — Astro warns and completes with zero
+// routes — so refusing a deploy on that evidence is refusing working
+// projects on a premise that doesn't hold, and an integration that
+// injects its own routes is the concrete case where it would be wrong
+// every time. Reintroducing SeverityHardStop anywhere this file's
+// resolution logic runs reds this test immediately, on the very fixture
+// (srcdir-hardstop) that named the defect in the first place.
+func TestCheckAstroConfig_NeverHardStopsAnywhere(t *testing.T) {
+	root := fixtureRoot(t)
+	for _, tc := range astroConfigTable {
+		t.Run(tc.dir, func(t *testing.T) {
+			findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, tc.dir))
+			for _, f := range findings {
+				if f.Severity == SeverityHardStop {
+					t.Errorf("got a hard stop: %+v — this check must never hard-stop a deploy", f)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------
 // No node, ever.
 // ---------------------------------------------------------------------
 
-// TestNoNodeProcessSpawned proves this package cannot spawn any process,
-// node included, by checking that os/exec is absent from its PRODUCTION
-// dependency graph. It deliberately omits -test: this test file itself
-// uses exec.Command to run `go list`, and a self-referential failure
-// from that would prove nothing about the check this package ships.
-func TestNoNodeProcessSpawned(t *testing.T) {
+// TestOSExecNotInProductionDependencyGraph proves exactly one thing:
+// os/exec is absent from this package's PRODUCTION dependency graph, so
+// this package's own code contains no path to exec.Command, exec.Cmd or
+// anything built on them — node included. It deliberately omits -test:
+// this test file itself uses exec.Command to run `go list`, and a
+// self-referential failure from that would prove nothing about the
+// check this package ships.
+//
+// What this does NOT prove, and the reason for this test's name: "no
+// os/exec import" is not the same fact as "no process can ever spawn".
+// This package legitimately imports "os" for Stat and Open, and os
+// itself exposes os.StartProcess — a lower-level primitive this test
+// cannot see, because it isn't os/exec. A test asserting "os/exec is
+// absent" is honest about proving exactly that; a test or comment
+// asserting "no process can spawn" would be claiming more than an
+// import-graph check can establish.
+func TestOSExecNotInProductionDependencyGraph(t *testing.T) {
 	root := moduleRootForTest(t)
 
 	cmd := exec.Command("go", "list", "-e", "-deps", "./internal/preflight")
@@ -492,9 +665,9 @@ func TestNoNodeProcessSpawned(t *testing.T) {
 		t.Fatalf("go list failed: %v\n%s", err, out)
 	}
 	if strings.Contains(string(out), "os/exec") {
-		t.Fatalf("internal/preflight's own dependency graph includes os/exec — "+
-			"this check reads someone else's project and must never be able to spawn a "+
-			"process, node included:\n%s", out)
+		t.Fatalf("internal/preflight's own dependency graph includes os/exec, which this "+
+			"package must never import — it reads someone else's project and has no business "+
+			"holding a way to run one:\n%s", out)
 	}
 }
 
