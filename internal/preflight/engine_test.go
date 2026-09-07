@@ -611,3 +611,67 @@ func TestEngineManifestOrderSurvivesACheckDeclaringItsIDsBackwards(t *testing.T)
 			"listed its own ids", got, want)
 	}
 }
+
+// TestCombinedCoverageEqualsTheDeclaredUniverse is the row that makes
+// several producers safe, and it is the reason the declared list had to
+// leave this package.
+//
+// Each producer can only see its own coverage. Only the UNION can be
+// compared against what was supposed to be covered — so a check that
+// nobody was wired up to run is invisible to every producer separately
+// and obvious here. Both directions are asserted: a declared check with
+// no row is a silent hole in the report, and a row for an id nobody
+// declared is a producer answering a question that is not on the list,
+// which reaches the user as the name of a check they have never heard of.
+//
+// TODAY THERE IS ONE PRODUCER — the engine — and the walk is not written
+// yet. This row is deliberately shaped for two: it combines rather than
+// inspecting the engine's manifest directly, so the walk arrives as an
+// extra argument and an extra entry in the declared list, and nothing
+// here has to be rewritten to notice it.
+//
+// MUTATION: leave one check out of the registered set. The missing half
+// reds. MUTATION: give one stand-in an id nobody declared. The
+// unexpected half reds.
+func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
+	var journal []string
+	engineChecks := []Check{
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
+		newStub(&journal, Result{}, check.IDLockfile).check(),
+		astroConfigCheck(),
+		newStub(&journal, Result{}, check.IDLocalhost).check(),
+	}
+
+	findings, manifest := Run(engineChecks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+
+	combined, err := check.Combine(check.Results{Findings: findings, Manifest: manifest})
+	if err != nil {
+		t.Fatalf("combining the producers: %v", err)
+	}
+
+	missing, unexpected := check.CoverageGaps(combined.Manifest)
+	if len(missing) != 0 {
+		t.Errorf("declared checks nobody covered: %v", missing)
+	}
+	if len(unexpected) != 0 {
+		t.Errorf("covered ids nobody declared: %v", unexpected)
+	}
+}
+
+// TestCombineRefusesASecondProducerClaimingAnEngineCheck is the other
+// half of the same seam, from this side of it. The engine has no way to
+// know what another producer claimed, so the refusal has to happen where
+// the two meet — and this row is what says the engine's output really
+// does flow through that gate rather than around it.
+func TestCombineRefusesASecondProducerClaimingAnEngineCheck(t *testing.T) {
+	var journal []string
+	findings, manifest := Run([]Check{
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
+	}, OSFileSystem{}, "irrelevant")
+
+	imposter := check.Results{Manifest: check.Manifest{{CheckID: check.IDAstroDep, Ran: true}}}
+
+	if _, err := check.Combine(check.Results{Findings: findings, Manifest: manifest}, imposter); err == nil {
+		t.Fatal("a second producer claimed a check the engine had already run, and it was accepted")
+	}
+}
