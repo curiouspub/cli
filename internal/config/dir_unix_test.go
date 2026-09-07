@@ -73,8 +73,8 @@ func TestSaveCreatesEveryMissingDirectoryLevelUsably(t *testing.T) {
 			leaf := filepath.Dir(path)
 			shared := filepath.Dir(leaf)
 
-			cfg := &Config{Token: testToken, APIURL: endpoint}
-			if err := cfg.Save(); err != nil {
+			cfg := &Config{}
+			if err := cfg.Save(testToken, endpoint); err != nil {
 				t.Fatalf("Save() under umask %04o: %v — a first run on an account "+
 					"whose shared config root does not exist yet cannot store a "+
 					"token at all, and every later run asks for another login",
@@ -132,8 +132,8 @@ func TestSaveCreatesEveryMissingDirectoryLevelUsably(t *testing.T) {
 		t.Setenv(envXDGConfigHome, "")
 		t.Setenv("HOME", home)
 
-		cfg := &Config{Token: testToken, APIURL: endpoint}
-		if err := cfg.Save(); err != nil {
+		cfg := &Config{}
+		if err := cfg.Save(testToken, endpoint); err != nil {
 			t.Fatalf("Save(): %v", err)
 		}
 		fi, err := os.Stat(shared)

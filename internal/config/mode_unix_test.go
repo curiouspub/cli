@@ -117,8 +117,8 @@ func TestSaveIntoAnUnwritableDirectoryLeavesTheOriginalUntouched(t *testing.T) {
 	// harness cannot delete what it made.
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	cfg := &Config{Token: testToken, APIURL: "https://api.example.com", Path: path}
-	if err := cfg.Save(); err == nil {
+	cfg := &Config{Path: path}
+	if err := cfg.Save(testToken, "https://api.example.com"); err == nil {
 		t.Error("Save() into a directory it cannot write to reported success")
 	}
 	if after := readFile(t, path); string(after) != string(before) {
@@ -159,8 +159,8 @@ func TestPathPlatformDefaultOnUnix(t *testing.T) {
 
 	// And the whole flow really does land there, rather than the path
 	// merely being computed correctly and then ignored.
-	cfg := &Config{Token: testToken, APIURL: "https://api.example.com"}
-	if err := cfg.Save(); err != nil {
+	cfg := &Config{}
+	if err := cfg.Save(testToken, "https://api.example.com"); err != nil {
 		t.Fatalf("Save(): %v", err)
 	}
 	if _, err := os.Stat(want); err != nil {

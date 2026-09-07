@@ -36,6 +36,14 @@
 // an older binary once silently destroys state a newer one is relying
 // on.
 //
+// That promise is about a particular flow, and the flow is named rather
+// than assumed: LOAD, THEN SAVE ON THE VALUE LOAD RETURNED. The fields
+// being preserved are the ones the read put there, so a value built
+// fresh has none and preserves none — it writes the fields this build
+// knows and claims nothing about any others. Saving is a Config method
+// taking the token and the endpoint it was issued against together, so
+// the value carrying the file's other state is the value that writes it.
+//
 // # The endpoint the token was issued against
 //
 // A token is only valid at the server that issued it. Sending a

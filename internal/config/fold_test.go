@@ -258,7 +258,7 @@ func TestLoadNormalisesALoneOddSpelling(t *testing.T) {
 			"the format accepts: %v", loaded.NoTokenReason)
 	}
 
-	if err := loaded.Save(); err != nil {
+	if err := loaded.Save(loaded.Token, loaded.APIURL); err != nil {
 		t.Fatalf("Save(): %v", err)
 	}
 	var reread map[string]json.RawMessage
@@ -315,8 +315,7 @@ func TestSaveDoesNotWriteAFileItWouldRefuseToRead(t *testing.T) {
 			// keys, a file carrying two spellings round-trips
 			// perfectly and proves nothing.
 			const relogin = "the-token-this-run-just-obtained"
-			loaded.Token = relogin
-			if err := loaded.Save(); err != nil {
+			if err := loaded.Save(relogin, endpoint); err != nil {
 				t.Fatalf("Save(): %v", err)
 			}
 

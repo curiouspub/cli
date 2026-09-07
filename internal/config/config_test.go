@@ -132,8 +132,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	path := hermeticPath(t)
 	const endpoint = "https://api.example.com"
 
-	saved := &Config{Token: testToken, APIURL: endpoint}
-	if err := saved.Save(); err != nil {
+	saved := &Config{}
+	if err := saved.Save(testToken, endpoint); err != nil {
 		t.Fatalf("Save(): %v", err)
 	}
 
@@ -188,8 +188,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 func TestSaveWritesThePlainTokenNotThePlaceholder(t *testing.T) {
 	path := hermeticPath(t)
 
-	cfg := &Config{Token: testToken, APIURL: "https://api.example.com"}
-	if err := cfg.Save(); err != nil {
+	cfg := &Config{}
+	if err := cfg.Save(testToken, "https://api.example.com"); err != nil {
 		t.Fatalf("Save(): %v", err)
 	}
 	written := string(readFile(t, path))
@@ -246,7 +246,7 @@ func TestLoadPreservesUnknownFields(t *testing.T) {
 	if loaded.NoTokenReason != nil {
 		t.Fatalf("Load() reported no usable token: %v", loaded.NoTokenReason)
 	}
-	if err := loaded.Save(); err != nil {
+	if err := loaded.Save(testToken, endpoint); err != nil {
 		t.Fatalf("Save(): %v", err)
 	}
 
@@ -340,8 +340,8 @@ func TestLoadCorruptFileIsReportedAndLeftAlone(t *testing.T) {
 		writeConfigFile(t, path, `{"version":1,"token":"old","api_url":"https://api.example.com"}`)
 		before := readFile(t, path)
 
-		cfg := &Config{Token: testToken, APIURL: "https://api.example.com", Path: path}
-		if err := cfg.Save(); err != nil {
+		cfg := &Config{Path: path}
+		if err := cfg.Save(testToken, "https://api.example.com"); err != nil {
 			t.Fatalf("Save(): %v", err)
 		}
 		if after := readFile(t, path); string(after) == string(before) {
@@ -591,26 +591,191 @@ func TestLoadRefusesAnEmptyEffectiveEndpoint(t *testing.T) {
 	}
 }
 
-// TestSaveRefusesAnEmptyToken stops this package writing the very file
-// it reports as corrupt on the next run. The refusal is also the only
-// thing standing between a bug in a caller and a destroyed credential:
-// saving an empty token over a good file loses it.
+// TestSaveRefusesAPairTheNextLoadWouldReject holds the two halves of the
+// pair to the SAME standard the read path applies, which is the whole
+// point of them arriving together.
 //
-// REQUIRED MUTATION: in Save (config.go), delete the empty-token guard.
-// This test reds on both assertions. Run, observed red, and the file
-// restored from a checksum-verified copy.
-func TestSaveRefusesAnEmptyToken(t *testing.T) {
-	path := hermeticPath(t)
-	writeConfigFile(t, path, `{"version":1,"token":"`+testToken+`","api_url":"https://api.example.com"}`)
-	before := readFile(t, path)
+// A save used to refuse an empty token and nothing else, while a load
+// required a non-whitespace token AND an endpoint that canonicalises. So
+// three caller mistakes passed the write and were rejected by the next
+// read — each having already replaced a file that worked. Every row
+// below is one of them, and every row also asserts that the good file is
+// still there afterwards: a caller's bug must not cost the user their
+// credential.
+//
+// REQUIRED MUTATIONS, two, because the halves fail independently:
+//
+//  1. In Save (config.go), drop the token guard. The two token rows red
+//     on both assertions and the endpoint rows stay green.
+//  2. In Save, drop the api.CanonicalKey guard. The four endpoint rows
+//     red and the token rows stay green.
+//
+// Both run, both observed, and the file restored from a
+// checksum-verified copy after each.
+func TestSaveRefusesAPairTheNextLoadWouldReject(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		token    ui.Secret
+		endpoint string
+	}{
+		{"an empty token", "", "https://api.example.com"},
+		// Whitespace is the sharp one: it is not empty, so the old
+		// guard let it through, and the next run reports a file with
+		// nothing in it.
+		{"a token that is only whitespace", "   ", "https://api.example.com"},
+		{"a forgotten endpoint", testToken, ""},
+		{"an endpoint that is not an address", testToken, "not a url"},
+		{"a scheme this client does not speak", testToken, "ftp://files.example.com"},
+		{"an endpoint carrying credentials", testToken, "https://user:pass@api.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := hermeticPath(t)
+			writeConfigFile(t, path,
+				`{"version":1,"token":"`+testToken+`","api_url":"https://api.example.com"}`)
+			before := readFile(t, path)
 
-	cfg := &Config{APIURL: "https://api.example.com", Path: path}
-	if err := cfg.Save(); err == nil {
-		t.Error("Save() wrote a config file with no token in it")
+			cfg := &Config{Path: path}
+			if err := cfg.Save(tc.token, tc.endpoint); err == nil {
+				t.Error("Save() wrote a config file the next run would refuse to use")
+			}
+			if after := readFile(t, path); string(after) != string(before) {
+				t.Error("the refused Save still overwrote the existing config — a " +
+					"caller's bug must not cost the user their token")
+			}
+			// A refused Save must not leave the value claiming a
+			// credential was stored either, or a caller that checks the
+			// Config rather than the error is told the opposite of what
+			// happened.
+			if cfg.Token != "" || cfg.APIURL != "" {
+				t.Errorf("a refused Save left the value reporting token=%v endpoint=%q",
+					cfg.Token, cfg.APIURL)
+			}
+		})
 	}
-	if after := readFile(t, path); string(after) != string(before) {
-		t.Error("the refused Save still overwrote the existing config — a caller's " +
-			"bug must not cost the user their token")
+}
+
+// TestSaveRecordsTheEndpointItWasGiven is the trap that made the pair a
+// shape rather than a check, and it is the realistic one.
+//
+// The natural login flow is: load, find no usable token, obtain one,
+// save. If the endpoint came from the loaded value, that save would
+// record the NEW token against the OLD endpoint — and the next run would
+// be a mismatch again, on a file that looks perfectly correct. There is
+// no order of field assignments that can produce it now, because the
+// endpoint is not a field this call reads.
+//
+// REQUIRED MUTATION: in Save (config.go), pass c.APIURL to marshal in
+// place of the issuedAgainst argument. Run, and the blast radius is
+// larger than was predicted here, for a reason worth keeping: every
+// fixture in this package now builds the value FRESH and hands the pair
+// to Save, so c.APIURL is empty at the point the mutation reads it and
+// the endpoint goes to disk empty everywhere. This row reds, and so do
+// TestSaveLoadRoundTrip and all four legs of
+// TestSaveCreatesEveryMissingDirectoryLevelUsably. The prediction that
+// only this row would move was written against the old fixture shape,
+// where the two values agreed. Restored from a checksum-verified copy.
+func TestSaveRecordsTheEndpointItWasGiven(t *testing.T) {
+	const oldEndpoint = "http://localhost:8080"
+	const newEndpoint = "https://api.example.com"
+	path := hermeticPath(t)
+	writeConfigFile(t, path,
+		`{"version":1,"token":"the-development-token","api_url":"`+oldEndpoint+`"}`)
+
+	loaded, err := Load(newEndpoint)
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if loaded.Token != "" {
+		t.Fatalf("the fixture did not produce the mismatch it exists for")
+	}
+	if loaded.APIURL != oldEndpoint {
+		t.Fatalf("the loaded value does not carry the old endpoint, so this row "+
+			"cannot see the trap: %q", loaded.APIURL)
+	}
+
+	if err := loaded.Save(testToken, newEndpoint); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+
+	var onDisk map[string]any
+	if err := json.Unmarshal(readFile(t, path), &onDisk); err != nil {
+		t.Fatalf("re-reading the rewritten file: %v", err)
+	}
+	if onDisk[keyAPIURL] != newEndpoint {
+		t.Errorf("the file records %v as the server the token was issued against, "+
+			"want %q — a new token filed under the old endpoint is a login loop with "+
+			"a perfect-looking file", onDisk[keyAPIURL], newEndpoint)
+	}
+
+	again, err := Load(newEndpoint)
+	if err != nil {
+		t.Fatalf("Load() after Save(): %v", err)
+	}
+	if string(again.Token) != testToken {
+		t.Errorf("the token saved against this run's endpoint was not offered back "+
+			"to it: %v", again.NoTokenReason)
+	}
+}
+
+// TestSaveFromAFreshValueClaimsNothingAboutUnknownFields makes the doc's
+// distinction checkable rather than merely written down.
+//
+// The forward-compatibility promise — an older release runs once and a
+// newer release's field survives — is true of the LOAD-THEN-MODIFY flow
+// and only of it, because the fields being preserved are the ones the
+// read put there. A Config built fresh has none, so it writes the three
+// this build knows and claims nothing about any others. That was
+// ambiguous for as long as nothing said which shape was correct, and an
+// ambiguity in the only flow that ever saves is not a documentation
+// problem.
+//
+// REQUIRED MUTATION: none is possible for the first half — a fresh value
+// has no unknown map to lose. The second half is the mutation-bearing
+// one and it already has a row: deleting the unknown-copying loop in
+// marshal reds TestLoadPreservesUnknownFields. Recorded here rather than
+// invented, because a row asserting that another row cannot exist is a
+// guard for a guard.
+func TestSaveFromAFreshValueClaimsNothingAboutUnknownFields(t *testing.T) {
+	const endpoint = "https://api.example.com"
+	path := hermeticPath(t)
+	writeConfigFile(t, path, `{"version":1,"token":"old","api_url":"`+endpoint+
+		`","future_flag":true}`)
+
+	// A FRESH value, which is what a caller that did not read first
+	// has. The future field is on disk and this value knows nothing
+	// about it.
+	fresh := &Config{Path: path}
+	if err := fresh.Save(testToken, endpoint); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+	var afterFresh map[string]any
+	if err := json.Unmarshal(readFile(t, path), &afterFresh); err != nil {
+		t.Fatalf("re-reading the rewritten file: %v", err)
+	}
+	if _, ok := afterFresh["future_flag"]; ok {
+		t.Errorf("a value that never read the file preserved a field out of it, " +
+			"which it has no way to know about — the promise this package makes is " +
+			"about the flow that reads first, and a stronger-looking claim here " +
+			"would be one nothing supports")
+	}
+
+	// And the named flow, on the same fixture, keeps it.
+	writeConfigFile(t, path, `{"version":1,"token":"old","api_url":"`+endpoint+
+		`","future_flag":true}`)
+	loaded, err := Load(endpoint)
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if err := loaded.Save(testToken, endpoint); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+	var afterLoad map[string]any
+	if err := json.Unmarshal(readFile(t, path), &afterLoad); err != nil {
+		t.Fatalf("re-reading the rewritten file: %v", err)
+	}
+	if flag, ok := afterLoad["future_flag"].(bool); !ok || !flag {
+		t.Errorf("future_flag = %v after the load-then-modify flow, want true",
+			afterLoad["future_flag"])
 	}
 }
 
@@ -649,9 +814,18 @@ func TestSaveFailedRenameLeavesTheOriginalUntouched(t *testing.T) {
 		return errors.New("injected failure standing exactly where a crash would")
 	}
 
-	cfg := &Config{Token: testToken, APIURL: "https://api.example.com", Path: path}
-	if err := cfg.Save(); err == nil {
+	cfg := &Config{Path: path}
+	if err := cfg.Save(testToken, "https://api.example.com"); err == nil {
 		t.Error("Save() reported success even though the rename failed")
+	}
+	// The value must not claim a credential is stored either. This is
+	// the seam where that matters: the guards at the top of Save reject
+	// their rows before anything could be assigned, so a failure AFTER
+	// them is the only place the ordering can be observed.
+	if cfg.Token != "" || cfg.APIURL != "" {
+		t.Errorf("a Save that failed left the value reporting token=%v endpoint=%q — "+
+			"a caller that checks the Config rather than the error is then told the "+
+			"opposite of what happened", cfg.Token, cfg.APIURL)
 	}
 
 	if after := readFile(t, path); string(after) != string(before) {

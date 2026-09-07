@@ -82,8 +82,8 @@ func TestUmaskDoesNotWidenTheConfigFile(t *testing.T) {
 			previous := syscall.Umask(mask)
 			defer syscall.Umask(previous)
 
-			cfg := &Config{Token: testToken, APIURL: "https://api.example.com"}
-			if err := cfg.Save(); err != nil {
+			cfg := &Config{}
+			if err := cfg.Save(testToken, "https://api.example.com"); err != nil {
 				t.Fatalf("Save() under umask %04o: %v", mask, err)
 			}
 

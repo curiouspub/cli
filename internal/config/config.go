@@ -513,8 +513,51 @@ func createConfigDir(dir string) error {
 	return nil
 }
 
-// Save writes c to its Path atomically, with the file mode this token
-// deserves.
+// Save writes a credential to c.Path atomically, with the file mode this
+// token deserves.
+//
+// # It takes the PAIR, and that is the shape rather than a convenience
+//
+// A token and the endpoint it was ISSUED AGAINST are one fact, so they
+// arrive together at one entry point and are validated together. Load
+// hands a stored token back only when the endpoint recorded beside it
+// canonicalises AND matches the run, so a file holding one without the
+// other is guaranteed useless — and by the time anything notices, it has
+// already replaced a file that was not.
+//
+// Three caller mistakes used to pass a save and be rejected by the next
+// load. They are not caught here; they are UNCONSTRUCTIBLE, because no
+// order of field assignments feeds this call:
+//
+//   - a token that is empty or only whitespace, which the next run
+//     reports as a file with nothing in it;
+//   - a forgotten endpoint, which makes every later run say the file
+//     does not record which server its token came from — for ever;
+//   - the realistic one: reusing the *Config that Load just returned,
+//     setting a NEW token on it and saving, so the file records the new
+//     token against the OLD endpoint and every run afterwards is a
+//     mismatch. That is a loop with a perfect-looking file, and it is
+//     the reason the endpoint is an ARGUMENT rather than a field this
+//     call reads.
+//
+// Both endpoint mistakes are hard errors here, and the asymmetry Load
+// draws does not apply: on the read side an empty stored endpoint can
+// only be a caller's bug while an unparseable one most likely came from
+// the user's own environment, so one is fatal and the other is a soft
+// mismatch. On the write side both can only be the caller's.
+//
+// # Load-then-modify is THE saving flow
+//
+// Load, then Save on the value it returned. That is not a suggestion:
+// a Config built fresh has no unknown-fields map, so the promise that an
+// older binary preserves a newer one's field is true only of a value
+// that was READ — the fields it is preserving are the ones the read put
+// there. It also carries the file's own schema version, which is what
+// stops this build quietly rewriting a newer file as its own.
+//
+// A fresh &Config{} is still a legitimate way to write a first config,
+// and it does exactly what it says: it writes the three fields this
+// build knows and claims nothing about any others, because it read none.
 //
 // The shape, and why each step is there:
 //
@@ -562,12 +605,20 @@ func createConfigDir(dir string) error {
 //     crash, a signal or any timing at all. Reproduced directly: 26
 //     bytes of real config to 0, in a directory chmod'ed 0500, while
 //     the atomic path returned "permission denied" and changed nothing.
-func (c *Config) Save() error {
-	if c.Token == "" {
+func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
+	if strings.TrimSpace(string(token)) == "" {
 		return errors.New(
-			"refusing to write a config file with no token in it: the file exists to " +
-				"hold one, and a token-less file is exactly what Load reports as " +
-				"corrupt on the next run")
+			"refusing to write a config file with no usable token in it: the file " +
+				"exists to hold one, a token that is empty or only whitespace is " +
+				"exactly what the next run reports as unusable, and writing it over a " +
+				"good file loses the good one")
+	}
+	if _, err := api.CanonicalKey(issuedAgainst); err != nil {
+		return fmt.Errorf(
+			"refusing to write a config file that does not say which server its token "+
+				"was issued against: %w — without it the next run cannot tell whether "+
+				"the stored token belongs to it, so it would ask for a login every "+
+				"time and the file would look perfectly correct while it did", err)
 	}
 
 	if c.Path == "" {
@@ -583,7 +634,7 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	data, err := c.marshal()
+	data, err := c.marshal(token, issuedAgainst)
 	if err != nil {
 		return err
 	}
@@ -626,6 +677,13 @@ func (c *Config) Save() error {
 				"config, if there was one, is untouched", c.Path, err)
 	}
 	renamed = true
+
+	// The Config describes the file, so it is brought into line with it
+	// — and only now. A Save that failed leaves the value exactly as it
+	// was, so a caller cannot end up holding a Config that claims a
+	// credential is stored when nothing was written.
+	c.Token = token
+	c.APIURL = issuedAgainst
 	return nil
 }
 
@@ -637,7 +695,7 @@ func (c *Config) Save() error {
 // preserved, and it is also the exact spot where marshalling a struct
 // that held a ui.Secret would put the redaction placeholder into the
 // file. Both reasons point at the same code; see fileConfig.
-func (c *Config) marshal() ([]byte, error) {
+func (c *Config) marshal(token ui.Secret, issuedAgainst string) ([]byte, error) {
 	out := make(map[string]json.RawMessage, len(c.unknown)+3)
 	for k, v := range c.unknown {
 		out[k] = v
@@ -652,8 +710,8 @@ func (c *Config) marshal() ([]byte, error) {
 		// string(c.Token) is the boundary conversion, and the only one in
 		// this package. Anything else here writes "[redacted]" into the
 		// file and produces a login that never sticks.
-		keyToken:  string(c.Token),
-		keyAPIURL: c.APIURL,
+		keyToken:  string(token),
+		keyAPIURL: issuedAgainst,
 	} {
 		encoded, err := json.Marshal(value)
 		if err != nil {
