@@ -604,38 +604,58 @@ func TestPreflightRenderLoneHardFindingWithoutCopyIsSynthesised(t *testing.T) {
 }
 
 // TestPreflightRenderTwoHardFindingsAlwaysSynthesise, whether or not
-// either carries copy. The FIRST one here carries a full three-part
-// message on purpose: a renderer that quietly preferred it would show
-// one problem to somebody who has two, and the second would be
-// discovered only after the first was fixed — which is the round-trip
-// the whole engine exists to prevent.
+// either carries copy. A renderer that quietly preferred a carried copy
+// would show one problem to somebody who has two, and the second would
+// be discovered only after the first was fixed — the round-trip the
+// whole engine exists to prevent.
 //
-// The assertion names both joined summaries, so that preference reds
+// BOTH ORDERS ARE RUN, and the second case is here because a mutation
+// went green without it. The row originally put the copy-carrying
+// finding second, so "prefer the first finding's copy" changed nothing
+// and passed — the row could not catch the thing it was written to
+// catch, and its own comment said otherwise. Position is exactly what
+// such a preference keys on, so position is what the table varies.
+//
+// Each case asserts the joined summaries as bytes, so a preference reds
 // rather than merely looking different.
 func TestPreflightRenderTwoHardFindingsAlwaysSynthesise(t *testing.T) {
-	r := &recorder{}
 	withCopy := lockfileFinding()
 	withCopy.Message = "No lockfile found."
+	bare := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
 
-	err := RenderPreflight(r, []check.Finding{
-		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
-		withCopy,
-	}, fullManifest(check.IDAstroDep, check.IDLockfile), 0)
+	cases := []struct {
+		name     string
+		findings []check.Finding
+		golden   string
+	}{
+		{"copy second", []check.Finding{bare, withCopy}, "two-hard-findings.golden"},
+		{"copy first", []check.Finding{withCopy, bare}, "two-hard-findings-copy-first.golden"},
+	}
 
-	got, code := renderedBytes(t, err)
-	if want := readGolden(t, "two-hard-findings.golden"); got != want {
-		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
-	}
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
-	}
-	for _, summary := range []string{"This doesn't look like an Astro project.", "No lockfile found."} {
-		if !strings.Contains(got, summary) {
-			t.Errorf("rendering does not carry the summary %q:\n%s", summary, got)
-		}
-	}
-	if strings.Contains(got, "curious installs your dependencies") {
-		t.Errorf("the first finding's own copy was preferred over the summary of both:\n%s", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{}
+			err := RenderPreflight(r, tc.findings,
+				fullManifest(check.IDAstroDep, check.IDLockfile), 0)
+
+			got, code := renderedBytes(t, err)
+			if want := readGolden(t, tc.golden); got != want {
+				t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+			}
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			for _, summary := range []string{
+				"This doesn't look like an Astro project.", "No lockfile found.",
+			} {
+				if !strings.Contains(got, summary) {
+					t.Errorf("rendering does not carry the summary %q:\n%s", summary, got)
+				}
+			}
+			if strings.Contains(got, "curious installs your dependencies") {
+				t.Errorf("a finding's own copy was preferred over the summary of both:\n%s", got)
+			}
+		})
 	}
 }
 
