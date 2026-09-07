@@ -1091,3 +1091,31 @@ func TestPreflightRenderWarningsWithoutCopyAreUnchanged(t *testing.T) {
 		t.Errorf("output = %q, want %q", got, want)
 	}
 }
+
+// TestPreflightRenderPrefersAnAuthoredHeadline. A check that wrote a
+// What has written the sentence it wants leading its finding, and the
+// list shows that rather than the summary underneath it.
+//
+// ADDED BECAUSE A MUTATION WENT GREEN: replacing the headline with the
+// summary changed no row, so the line was unguarded. Guarding it rather
+// than deleting it is the deliberate half — silently dropping a field an
+// author set is the defect this round exists to close, and doing it one
+// field over would be the same mistake wearing a different name.
+//
+// MUTATION: use Message and ignore What. Reds here.
+// MUST NOT MOVE: the row for a warning with no copy, whose Message is
+// the only headline there is.
+func TestPreflightRenderPrefersAnAuthoredHeadline(t *testing.T) {
+	r := &recorder{answer: true}
+	warn := warning(check.IDLocalhost, "a development URL is hard-coded")
+	warn.What = "A development URL is hard-coded in 2 files."
+
+	if err := RenderPreflight(r, reportOf(t, []check.Finding{warn}), 0); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	out := r.out.String()
+	if !strings.Contains(out, warn.What) {
+		t.Errorf("output does not carry the authored headline %q:\n%s", warn.What, out)
+	}
+}
