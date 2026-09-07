@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/curiouspub/cli/internal/api"
@@ -45,6 +46,90 @@ const (
 	keyToken   = "token"
 	keyAPIURL  = "api_url"
 )
+
+// knownKeys is every field this build understands, in one place, so the
+// reader, the writer and the ambiguity check cannot disagree about what
+// "known" means.
+var knownKeys = []string{keyVersion, keyToken, keyAPIURL}
+
+// stripKnownKeys removes from raw every key this build understands, so
+// what is left is exactly the fields it does not.
+//
+// THE COMPARISON IS THE DECODER'S OWN RELATION, NOT AN EXACT MATCH, and
+// that is the whole of it. Filling the struct and stripping the map are
+// two answers to one question — "is this key one this build knows?" —
+// and for a while they were computed by two different relations. The
+// JSON decoder matches a field name by folding case in the Unicode
+// sense; strings.EqualFold is that same relation, which the row beside
+// this asserts rather than assumes, so a change to either side is a
+// failure somebody sees instead of a defect nobody does.
+//
+// What the disagreement cost: a key known to the decoder and unknown to
+// the stripper was read as the token AND preserved as a field from the
+// future. Written back beside the real one, it then decided every later
+// run — a login writing a fresh token into a file whose other spelling
+// of the same field kept answering with the old one.
+func stripKnownKeys(raw map[string]json.RawMessage) {
+	for key := range raw {
+		for _, known := range knownKeys {
+			if strings.EqualFold(key, known) {
+				delete(raw, key)
+				break
+			}
+		}
+	}
+}
+
+// ambiguousSpellings reports the spellings of ONE known field that a
+// file carries more than one of, or nil when it carries at most one of
+// each.
+//
+// There is deliberately no merge and no precedence rule. Two spellings
+// of one field is a file nobody can read the intent of: the format says
+// they are the same field, the person who wrote them plainly meant
+// something, and no rule this package could pick would be more than a
+// guess about which. Picking one silently is exactly how the stale-token
+// failure happened — the run kept saving a fresh token under one
+// spelling and kept sending an old one from the other.
+//
+// The result is sorted so the report is the same on every run; a map's
+// iteration order is not something a user should see change underneath
+// them while they are trying to fix their file.
+func ambiguousSpellings(raw map[string]json.RawMessage) []string {
+	for _, known := range knownKeys {
+		var found []string
+		for key := range raw {
+			if strings.EqualFold(key, known) {
+				found = append(found, key)
+			}
+		}
+		if len(found) > 1 {
+			slices.Sort(found)
+			return found
+		}
+	}
+	return nil
+}
+
+// ambiguousError names BOTH spellings, escaped to ASCII.
+//
+// The escaping is the message. Two keys that fold together can render
+// identically — a capital K and U+212A KELVIN SIGN are the same picture
+// — so a report that printed them as they are would read as the same
+// word twice and tell the user nothing they could act on. %+q is what
+// makes the difference visible in a terminal.
+func ambiguousError(path string, spellings []string) error {
+	rendered := make([]string, len(spellings))
+	for i, s := range spellings {
+		rendered[i] = fmt.Sprintf("%+q", s)
+	}
+	return fmt.Errorf(
+		"the config file at %s carries %s, which the file format treats as the same "+
+			"field — so there is no way to tell which one was meant and nothing is "+
+			"being read from it. Open the file and keep exactly one of them, or "+
+			"delete it and run this command again to log in from scratch",
+		path, strings.Join(rendered, " and "))
+}
 
 // fileConfig is the ON-DISK shape, and its Token is a plain string ON
 // PURPOSE. This is the single most dangerous line in the package, so it
@@ -237,10 +322,18 @@ func Load(effectiveAPIURL string) (*Config, error) {
 	if fc.Version != 0 {
 		cfg.Version = fc.Version
 	}
-	cfg.APIURL = fc.APIURL
-	for _, known := range []string{keyVersion, keyToken, keyAPIURL} {
-		delete(raw, known)
+
+	// Before anything is read OUT of the file, whether it can be read at
+	// all. Nothing below this point — not the endpoint, not the
+	// preserved unknown fields — is taken from a file whose own field
+	// names disagree about what it says.
+	if spellings := ambiguousSpellings(raw); spellings != nil {
+		cfg.NoTokenReason = ambiguousError(path, spellings)
+		return cfg, nil
 	}
+
+	cfg.APIURL = fc.APIURL
+	stripKnownKeys(raw)
 	cfg.unknown = raw
 
 	if strings.TrimSpace(fc.Token) == "" {
