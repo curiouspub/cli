@@ -66,6 +66,16 @@ const (
 	IDPagesDir    = "pages-dir"
 	IDBuildFormat = "build-format"
 	IDLocalhost   = "localhost"
+
+	// The four the file walk owns. They are stated here with the rest
+	// rather than in the package that produces them for the same reason
+	// the others are: the set has to be enumerable from ONE place, and a
+	// renderer naming a check it did not run needs the id without
+	// depending on whoever produced it.
+	IDSymlinks      = "symlinks"
+	IDCaseCollision = "case-collision"
+	IDUnicodeMarks  = "unicode-marks"
+	IDPathCharset   = "path-charset"
 )
 
 // Finding is one pre-flight check's result: which check produced it, how

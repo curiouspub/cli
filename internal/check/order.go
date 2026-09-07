@@ -19,12 +19,23 @@ import "sort"
 // first line and not as the fourth. build-format sits immediately after
 // pages-dir because one check produces both off one parse of one file,
 // and splitting them would put two facts about one file in two places.
+// The file walk's four sit after the engine's five, and the reason is
+// the same ordering principle: the engine answers whether this is an
+// Astro project at all, which a reader has to know before being told
+// that one of its file names is spelled in a way the platform cannot
+// serve. Severity outranks this order in the report, so the hard stop
+// among the four still appears above every warning — what this decides
+// is the sequence WITHIN a severity, and the order of the manifest.
 var declaredOrder = []string{
 	IDAstroDep,
 	IDLockfile,
 	IDPagesDir,
 	IDBuildFormat,
 	IDLocalhost,
+	IDSymlinks,
+	IDCaseCollision,
+	IDUnicodeMarks,
+	IDPathCharset,
 }
 
 // DeclaredOrder returns the declared universe, in report order.

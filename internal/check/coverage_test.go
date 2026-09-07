@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/curiouspub/cli/internal/check"
+	"github.com/curiouspub/cli/internal/pack"
 	"github.com/curiouspub/cli/internal/preflight"
 )
 
@@ -43,14 +44,22 @@ func standIn(ids ...string) preflight.Check {
 // is a producer answering a question that is not on the list, which
 // reaches a user as the name of a check they have never heard of.
 //
-// TODAY THERE IS ONE PRODUCER. The walk is not written yet, and this row
-// is deliberately shaped for two: it combines rather than reading one
-// manifest, so the walk arrives as one more argument and one more entry
-// in the declared list, and nothing here is rewritten to notice it.
+// THERE ARE NOW TWO PRODUCERS, which is what this row was shaped for.
+// The file walk arrived as one more argument and four more entries in
+// the declared list, and the shape held: the row combines rather than
+// reading one manifest, so nothing here had to learn that a second
+// producer exists beyond being handed it.
+//
+// The walk is asked to scan A REAL DIRECTORY THAT IS EMPTY — the test's
+// own scratch directory — because this row is about WHICH QUESTIONS GET
+// ANSWERED and not about the answers. Its manifest is complete whatever
+// it finds, which is the property that makes the row cheap; a fixture
+// with something wrong in it would only add findings nobody here reads.
 //
 // MUTATION: leave one check out of the registered set — the missing half
 // reds. MUTATION: give a stand-in an id nobody declared — the unexpected
-// half reds.
+// half reds. MUTATION: drop one id from the walk's own manifest rows —
+// the missing half reds and no finding row moves.
 func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 	engine := preflight.Run([]preflight.Check{
 		standIn(check.IDAstroDep),
@@ -59,7 +68,12 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 		standIn(check.IDLocalhost),
 	}, preflight.OSFileSystem{}, "irrelevant")
 
-	combined, err := check.Combine(engine)
+	tree, err := pack.Walk(pack.OSFileSystem{}, t.TempDir())
+	if err != nil {
+		t.Fatalf("walking an empty directory: %v", err)
+	}
+
+	combined, err := check.Combine(engine, tree.Results)
 	if err != nil {
 		t.Fatalf("combining the producers: %v", err)
 	}

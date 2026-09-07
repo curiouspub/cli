@@ -35,20 +35,27 @@ func messages(findings []Finding) []string {
 func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 	walk := Results{
 		Findings: []Finding{
-			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "a development URL"},
+			{CheckID: IDUnicodeMarks, Severity: SeverityWarning, Message: "an accented file name"},
 		},
-		Manifest: Manifest{{CheckID: IDLocalhost, Ran: true}},
+		Manifest: Manifest{
+			{CheckID: IDSymlinks, Ran: true},
+			{CheckID: IDCaseCollision, Ran: true},
+			{CheckID: IDUnicodeMarks, Ran: true},
+			{CheckID: IDPathCharset, Ran: true},
+		},
 	}
 	engine := Results{
 		Findings: []Finding{
 			{CheckID: IDAstroDep, Severity: SeverityHardStop, Message: "not an Astro project"},
 			{CheckID: IDPagesDir, Severity: SeverityWarning, Message: "no pages directory"},
+			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "a development URL"},
 		},
 		Manifest: Manifest{
 			{CheckID: IDAstroDep, Ran: true},
 			{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
 			{CheckID: IDPagesDir, Ran: true},
 			{CheckID: IDBuildFormat, Ran: true},
+			{CheckID: IDLocalhost, Ran: true},
 		},
 	}
 
@@ -57,12 +64,17 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 		t.Fatalf("Combine: %v", err)
 	}
 
-	wantFindings := []string{"not an Astro project", "no pages directory", "a development URL"}
+	wantFindings := []string{
+		"not an Astro project", "no pages directory", "a development URL", "an accented file name",
+	}
 	if msgs := messages(got.Findings()); !reflect.DeepEqual(msgs, wantFindings) {
 		t.Errorf("findings = %v, want %v — hard stops first, then the declared order",
 			msgs, wantFindings)
 	}
-	wantManifest := []string{IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost}
+	wantManifest := []string{
+		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
+		IDSymlinks, IDCaseCollision, IDUnicodeMarks, IDPathCharset,
+	}
 	if rows := ids(got.Manifest()); !reflect.DeepEqual(rows, wantManifest) {
 		t.Errorf("manifest = %v, want the declared order %v", rows, wantManifest)
 	}
@@ -188,6 +200,10 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 			{CheckID: IDLockfile, Ran: true},
 			{CheckID: IDPagesDir, Ran: true},
 			{CheckID: IDBuildFormat, Ran: true},
+			{CheckID: IDSymlinks, Ran: true},
+			{CheckID: IDCaseCollision, Ran: true},
+			{CheckID: IDUnicodeMarks, Ran: true},
+			{CheckID: IDPathCharset, Ran: true},
 		},
 	}
 
@@ -198,8 +214,10 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 	if msgs := messages(producer.Findings); !reflect.DeepEqual(msgs, []string{"second", "first"}) {
 		t.Errorf("the caller's findings were reordered: %v", msgs)
 	}
-	if rows := ids(producer.Manifest); !reflect.DeepEqual(rows,
-		[]string{IDLocalhost, IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat}) {
+	if rows := ids(producer.Manifest); !reflect.DeepEqual(rows, []string{
+		IDLocalhost, IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat,
+		IDSymlinks, IDCaseCollision, IDUnicodeMarks, IDPathCharset,
+	}) {
 		t.Errorf("the caller's manifest was reordered: %v", rows)
 	}
 }
@@ -221,7 +239,10 @@ func TestCoverageGapsReportsBothDirections(t *testing.T) {
 
 	missing, unexpected := CoverageGaps(m)
 
-	wantMissing := []string{IDLockfile, IDPagesDir, IDBuildFormat}
+	wantMissing := []string{
+		IDLockfile, IDPagesDir, IDBuildFormat,
+		IDSymlinks, IDCaseCollision, IDUnicodeMarks, IDPathCharset,
+	}
 	if !reflect.DeepEqual(missing, wantMissing) {
 		t.Errorf("missing = %v, want %v in the declared order", missing, wantMissing)
 	}

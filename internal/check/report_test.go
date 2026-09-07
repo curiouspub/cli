@@ -233,7 +233,13 @@ func TestCombineIsIndependentOfArgumentOrder(t *testing.T) {
 		Findings: []Finding{{CheckID: IDAstroDep, Severity: SeverityWarning, Message: "from the engine"}},
 	}
 	late := Results{
-		Manifest: Manifest{{CheckID: IDLocalhost, Ran: true}},
+		Manifest: Manifest{
+			{CheckID: IDLocalhost, Ran: true},
+			{CheckID: IDSymlinks, Ran: true},
+			{CheckID: IDCaseCollision, Ran: true},
+			{CheckID: IDUnicodeMarks, Ran: true},
+			{CheckID: IDPathCharset, Ran: true},
+		},
 		Findings: []Finding{{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "from the walk"}},
 	}
 

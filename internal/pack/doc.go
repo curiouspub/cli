@@ -1,6 +1,27 @@
-// Package pack will turn an Astro project directory into the tarball the
-// CLI uploads: honoring .gitignore, excluding the build and dependency
-// directories no deploy should ship, and enforcing the local file-count
-// and size limits before a single byte leaves the machine. Empty for now;
-// a later change fills it in.
+// Package pack turns an Astro project directory into the archive the CLI
+// uploads.
+//
+// WHAT EXISTS TODAY IS THE WALK. It produces one canonical, ordered file
+// list — the forced exclusions applied first and absolutely, the
+// project's own ignore rules after them with their full semantics — plus
+// the links it skipped and what it has to say about the names it found.
+// The local file-count and size limits and the archive writer are later
+// changes; this package describes what it does rather than what it will
+// do, because a package comment read by a stranger is a claim like any
+// other.
+//
+// ONE WALK, THREE READERS. The limits, the scan for hard-coded
+// development URLs, and the archive all read the same list, so the list
+// has to be canonical: sorted byte-wise on the slash-separated relative
+// path, identical across two runs, across two machines, and independent
+// of the order a filesystem hands its directories back in.
+//
+// IT IS NOT ONE OF THE PRE-FLIGHT CHECKS, and it is not run by their
+// engine. The engine hands a check a filesystem seam that cannot express
+// directory enumeration, and widening it would add a method for one
+// caller that no check has any use for. What this package owes instead
+// is the same SHAPE the engine returns — findings, and a manifest row
+// for each question it claims — so the two producers meet in the leaf
+// package that holds the result model, which is a leaf precisely so that
+// this walk and the checks reading its output cannot import each other.
 package pack
