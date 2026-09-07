@@ -683,11 +683,19 @@ func TestPreflightRenderTwoHardFindingsAlwaysSynthesise(t *testing.T) {
 	}
 }
 
-// TestPreflightRenderFillsAMissingHeadlineFromTheSummary. Copy is
-// optional part by part, and a check that wrote only a reason has still
-// worked its copy out — so the headline falls back to the required
-// one-line summary rather than the whole message falling back to
-// synthesis and throwing that reason away.
+// TestPreflightRenderFillsAMissingHeadlineFromTheSummary, and the
+// action too. Copy is optional part by part, and a check that wrote only
+// a reason has still worked its copy out — so the headline falls back to
+// the required one-line summary rather than the whole message falling
+// back to synthesis and throwing that reason away.
+//
+// THE GOLDEN WAS WRONG AND IS CORRECTED HERE. It pinned a hard stop that
+// ended after its reason with no action at all, as though that were
+// right — while a row in this same file calls an actionless hard stop an
+// error, on the grounds that it leaves a first-timer guessing. One row
+// asserted the property and a golden two files away pinned its
+// violation; supplying one part of the copy REMOVED the action line, so
+// adding copy made the message worse than leaving it off.
 //
 // MUTATION: leave What empty rather than filling it. The golden reds on
 // the missing headline.
@@ -781,5 +789,305 @@ func TestPreflightRenderRefusesAResultThatNeverPassedTheGate(t *testing.T) {
 	}
 	if code := exitCodeFor(t, err); code == 0 {
 		t.Errorf("exit code = %d, want non-zero", code)
+	}
+}
+
+// ---------------------------------------------------------------------
+// A check that did not run is a decision, not a line
+// ---------------------------------------------------------------------
+
+// TestPreflightRenderAsksAboutAChecksThatDidNotRun. The manifest exists
+// because a skipped check rendered as a tick is a lie the reader will
+// act on — and the renderer read it, printed a line, and then decided
+// exactly as it would have for a tick. A project whose package.json
+// could not be read reached the packer with nobody having confirmed it
+// has a lockfile, and the user was told so in one line that changed
+// nothing.
+//
+// MUTATION: leave not-run out of the decision. Reds here and on the
+// non-interactive row.
+// MUST NOT MOVE: the clean-project row, whose manifest is full.
+func TestPreflightRenderAsksAboutChecksThatDidNotRun(t *testing.T) {
+	r := &recorder{answer: true}
+
+	packed, err := gatedDeploy(r, reportOf(t, nil,
+		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+
+	if err != nil {
+		t.Fatalf("error = %v, want nil after the user agreed", err)
+	}
+	if !packed {
+		t.Error("the packer did not run after the user agreed")
+	}
+	if len(r.prompts) != 1 {
+		t.Fatalf("prompts = %d %v, want one — a check nobody could run is a decision",
+			len(r.prompts), r.prompts)
+	}
+}
+
+// TestPreflightRenderDeclinedOnANotRunCheckStopsTheDeploy is the half
+// that matters most: the recorder in the reproduction was set to
+// decline and was never asked.
+func TestPreflightRenderDeclinedOnANotRunCheckStopsTheDeploy(t *testing.T) {
+	r := &recorder{answer: false}
+
+	packed, err := gatedDeploy(r, reportOf(t, nil,
+		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+
+	if packed {
+		t.Error("the packer ran after the user declined")
+	}
+	if !errors.Is(err, ui.ErrAborted) {
+		t.Errorf("error = %#v, want the cancellation sentinel", err)
+	}
+	if code := exitCodeFor(t, err); code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+// TestPreflightRenderNonInteractiveRefusesOnANotRunCheck. Same rule as a
+// pending warning: with nobody to ask, neither continue nor abort. A
+// check that could not look is exactly the state where proceeding
+// silently is worst.
+func TestPreflightRenderNonInteractiveRefusesOnANotRunCheck(t *testing.T) {
+	r := &recorder{answerTo: ui.ErrNotInteractive}
+
+	packed, err := gatedDeploy(r, reportOf(t, nil,
+		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+
+	if packed {
+		t.Error("the packer ran with a check nobody could be asked about")
+	}
+	if !errors.Is(err, ui.ErrNotInteractive) {
+		t.Errorf("error = %#v, want the no-terminal sentinel", err)
+	}
+}
+
+// TestPreflightRenderNotRunPromptMatrix walks the combinations, because
+// a not-run check has to compose with the other two states rather than
+// have a rule of its own.
+func TestPreflightRenderNotRunPromptMatrix(t *testing.T) {
+	skipped := check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}
+	warn := warning(check.IDLocalhost, "A development URL is hard-coded.")
+	stop := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
+
+	cases := []struct {
+		name     string
+		findings []check.Finding
+		prompts  int
+	}{
+		{"not-run alone", nil, 1},
+		{"not-run with a warning", []check.Finding{warn}, 1},
+		{"not-run with a hard stop", []check.Finding{stop}, 0},
+		{"not-run with a hard stop and a warning", []check.Finding{stop, warn}, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{answer: true}
+			RenderPreflight(r, reportOf(t, tc.findings, skipped), 0)
+			if len(r.prompts) != tc.prompts {
+				t.Errorf("prompts = %d %v, want %d", len(r.prompts), r.prompts, tc.prompts)
+			}
+		})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name+", non-interactive", func(t *testing.T) {
+			r := &recorder{answerTo: ui.ErrNotInteractive}
+			err := RenderPreflight(r, reportOf(t, tc.findings, skipped), 0)
+			if err == nil {
+				t.Fatal("the deploy proceeded with nobody to ask")
+			}
+			wantSentinel := tc.prompts > 0
+			if got := errors.Is(err, ui.ErrNotInteractive); got != wantSentinel {
+				t.Errorf("no-terminal sentinel = %v, want %v (error %#v)", got, wantSentinel, err)
+			}
+		})
+	}
+}
+
+// TestPreflightRenderNotRunWithNoReasonSaysSomething. A row carrying no
+// reason rendered as "Skipped astro-dep: " — a trailing colon with
+// nothing after it, which reads as truncated output rather than as a
+// fact about the project.
+func TestPreflightRenderNotRunWithNoReasonSaysSomething(t *testing.T) {
+	r := &recorder{answer: true}
+
+	RenderPreflight(r, reportOf(t, nil, check.Ran{CheckID: check.IDAstroDep}), 0)
+
+	out := r.out.String()
+	if strings.Contains(out, ": \n") || strings.HasSuffix(strings.TrimRight(out, "\n"), ":") {
+		t.Errorf("a reasonless row rendered as a bare colon:\n%q", out)
+	}
+	if !strings.Contains(out, check.IDAstroDep) {
+		t.Errorf("output does not name the skipped check:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------
+// A hard stop must not hide the warnings
+// ---------------------------------------------------------------------
+
+// TestPreflightRenderShowsWarningsBesideAHardStop. The ruling was that a
+// hard stop renders NO PROMPT. The code took that as licence to drop the
+// findings, so warnings were collected and never rendered on that path —
+// and the user fixes the hard stop, re-runs, and only then meets them.
+// That is the round-trip this engine's own documentation says it exists
+// to prevent: learn every fact in one run.
+//
+// MUTATION: return the failure before rendering the warnings. Reds here.
+// MUST NOT MOVE: the no-prompt assertion, which this row also carries.
+func TestPreflightRenderShowsWarningsBesideAHardStop(t *testing.T) {
+	r := &recorder{answer: true}
+
+	err := RenderPreflight(r, reportOf(t, []check.Finding{
+		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
+		warning(check.IDPagesDir, "Couldn't find src/pages."),
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+	}), 0)
+
+	got, _ := renderedBytes(t, err)
+	everything := r.out.String() + got
+
+	for _, want := range []string{
+		"This doesn't look like an Astro project.",
+		"Couldn't find src/pages.",
+		"A development URL is hard-coded.",
+	} {
+		if !strings.Contains(everything, want) {
+			t.Errorf("nothing rendered %q — a warning a user never sees is one they meet "+
+				"on the next run:\n%s", want, everything)
+		}
+	}
+	if len(r.prompts) != 0 {
+		t.Errorf("prompts = %v, want none beside a hard stop", r.prompts)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Copy
+// ---------------------------------------------------------------------
+
+// TestPreflightRenderAlwaysNamesAnAction is the row the tree used to
+// contradict. A bare finding got the synthesised next step; one that
+// supplied a HEADLINE lost it — so adding a part of the copy REMOVED the
+// action, and a golden two files away pinned that as correct while a row
+// in this one calls an actionless hard stop an error.
+//
+// Copy is optional part by part; the action is not optional at all.
+//
+// MUTATION: drop the Next fallback. All four cases red.
+// MUST NOT MOVE: the with-copy golden, whose finding supplies its own
+// Next.
+func TestPreflightRenderAlwaysNamesAnAction(t *testing.T) {
+	base := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
+
+	withWhat := base
+	withWhat.What = "This doesn't look like an Astro project."
+	withWhy := base
+	withWhy.Why = "package.json here doesn't list astro as a dependency."
+	withNext := base
+	withNext.Next = "Pass the right folder: `curious deploy ./my-site`."
+
+	cases := []struct {
+		name    string
+		finding check.Finding
+	}{
+		{"no copy at all", base},
+		{"headline only", withWhat},
+		{"reason only", withWhy},
+		{"action only", withNext},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RenderPreflight(&recorder{}, reportOf(t, []check.Finding{tc.finding}), 0)
+
+			var failure *ui.Failure
+			if !errors.As(err, &failure) {
+				t.Fatalf("error = %#v, want a failure", err)
+			}
+			if failure.What == "" {
+				t.Error("no headline: a failure with no What renders as a bare paragraph")
+			}
+			if failure.Next == "" {
+				t.Error("no action: a hard stop that does not say what to do next leaves " +
+					"a first-timer guessing, which is what the row beside this one calls " +
+					"an error")
+			}
+		})
+	}
+}
+
+// TestPreflightRenderKeepsASuppliedAction. The fallback must not
+// overwrite a check that wrote its own.
+func TestPreflightRenderKeepsASuppliedAction(t *testing.T) {
+	f := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
+	f.Next = "Pass the right folder: `curious deploy ./my-site`."
+
+	err := RenderPreflight(&recorder{}, reportOf(t, []check.Finding{f}), 0)
+
+	var failure *ui.Failure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error = %#v, want a failure", err)
+	}
+	if failure.Next != f.Next {
+		t.Errorf("Next = %q, want the check's own %q", failure.Next, f.Next)
+	}
+}
+
+// TestPreflightRenderShowsCopyOnWarnings. The warning path rendered
+// Message and Paths and nothing else, so a check that worked out why its
+// warning matters and what to do about it had both dropped — while the
+// machine-readable result would carry them. The model documents copy
+// with no severity qualifier, and the question "does this finding have
+// copy" is asked in one place precisely so the two surfaces cannot
+// disagree. For warnings they disagreed every time.
+//
+// MUTATION: render Message alone in the warnings loop. Reds here.
+// MUST NOT MOVE: the single-prompt count, asserted here too.
+func TestPreflightRenderShowsCopyOnWarnings(t *testing.T) {
+	r := &recorder{answer: true}
+	warn := warning(check.IDLocalhost, "A development URL is hard-coded.")
+	warn.Paths = []string{"src/lib/api.ts"}
+	warn.Why = "It will not resolve once the site is published."
+	warn.Next = "Read the URL from import.meta.env.PUBLIC_API_URL instead."
+
+	if err := RenderPreflight(r, reportOf(t, []check.Finding{warn}), 0); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	out := r.out.String()
+	for _, want := range []string{
+		"A development URL is hard-coded.",
+		"src/lib/api.ts",
+		"It will not resolve once the site is published.",
+		"Read the URL from import.meta.env.PUBLIC_API_URL instead.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not carry %q:\n%s", want, out)
+		}
+	}
+	if len(r.prompts) != 1 {
+		t.Errorf("prompts = %d, want exactly one", len(r.prompts))
+	}
+}
+
+// TestPreflightRenderWarningsWithoutCopyAreUnchanged is the floor beside
+// the row above: a warning that carries no copy must not grow blank
+// paragraphs now that copy is rendered.
+func TestPreflightRenderWarningsWithoutCopyAreUnchanged(t *testing.T) {
+	r := &recorder{answer: true}
+	warn := warning(check.IDLocalhost, "A development URL is hard-coded.")
+	warn.Paths = []string{"src/lib/api.ts"}
+
+	if err := RenderPreflight(r, reportOf(t, []check.Finding{warn}), 0); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	want := "A development URL is hard-coded.\n  src/lib/api.ts\n"
+	if got := r.out.String(); got != want {
+		t.Errorf("output = %q, want %q", got, want)
 	}
 }

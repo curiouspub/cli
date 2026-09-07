@@ -2,3 +2,6 @@ No lockfile found.
 
 curious installs your dependencies from a lockfile, so it builds the
 exact versions you tested.
+
+Fix what's listed above and run `curious deploy` again. Nothing has
+been uploaded.
