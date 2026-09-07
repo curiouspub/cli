@@ -87,12 +87,12 @@ func warning(id, message string) check.Finding {
 // row that forgets its status reads as a TICK — and a check reported as
 // having answered when it did not is the lie this whole manifest exists
 // to prevent.
-func environmental(id, reason string) check.Ran {
-	return check.Ran{CheckID: id, Status: check.Declined, Kind: check.Environmental, Reason: reason}
+func environmental(id, reason string) check.Status {
+	return check.Status{CheckID: id, Outcome: check.Declined, Kind: check.Environmental, Reason: reason}
 }
 
-func byDesign(id, reason string) check.Ran {
-	return check.Ran{CheckID: id, Status: check.Declined, Kind: check.ByDesign, Reason: reason}
+func byDesign(id, reason string) check.Status {
+	return check.Status{CheckID: id, Outcome: check.Declined, Kind: check.ByDesign, Reason: reason}
 }
 
 // reportOf builds the validated article the renderer requires, THROUGH
@@ -102,9 +102,9 @@ func byDesign(id, reason string) check.Ran {
 //
 // A helper that assembled a Report directly would be a second door, and
 // the whole point of the type is that there is one.
-func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Ran) check.Report {
+func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Status) check.Report {
 	t.Helper()
-	skipped := map[string]check.Ran{}
+	skipped := map[string]check.Status{}
 	for _, row := range notRun {
 		skipped[row.CheckID] = row
 	}
@@ -115,7 +115,7 @@ func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Ran) check
 			m = append(m, row)
 			continue
 		}
-		m = append(m, check.Ran{CheckID: id})
+		m = append(m, check.Status{CheckID: id})
 	}
 
 	report, err := check.Combine(check.Results{Findings: findings, Manifest: m})
@@ -932,7 +932,7 @@ func TestPreflightRenderNotRunPromptMatrix(t *testing.T) {
 func TestPreflightRenderNotRunWithNoReasonSaysSomething(t *testing.T) {
 	r := &recorder{answer: true}
 
-	RenderPreflight(r, reportOf(t, nil, check.Ran{CheckID: check.IDAstroDep, Status: check.Declined}), 0)
+	RenderPreflight(r, reportOf(t, nil, check.Status{CheckID: check.IDAstroDep, Outcome: check.Declined}), 0)
 
 	out := r.out.String()
 	if strings.Contains(out, ": \n") || strings.HasSuffix(strings.TrimRight(out, "\n"), ":") {
@@ -1178,7 +1178,7 @@ func TestPreflightRenderKeepsAByDesignDeclineOutOfSight(t *testing.T) {
 	for _, row := range report.Manifest() {
 		if row.CheckID == check.IDBuildFormat {
 			found = true
-			if row.Status != check.Declined || row.Kind != check.ByDesign {
+			if row.Outcome != check.Declined || row.Kind != check.ByDesign {
 				t.Errorf("row = %+v, want a by-design decline", row)
 			}
 			if row.Reason == "" {

@@ -245,7 +245,7 @@ const standingAction = "Fix what's listed above and run `curious deploy` again. 
 // A row with no reason is a producer's omission rather than a fact about
 // the project, and it used to render as a bare trailing colon — which
 // reads as truncated output rather than as information.
-func skipped(row check.Ran) string {
+func skipped(row check.Status) string {
 	if row.Reason == "" {
 		return fmt.Sprintf("Skipped %s: no reason was recorded.", row.CheckID)
 	}

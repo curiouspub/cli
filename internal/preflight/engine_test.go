@@ -81,7 +81,7 @@ func render(r check.Results) string {
 		fmt.Fprintf(&b, "finding %s %s %q %v\n", f.CheckID, f.Severity, f.Message, f.Paths)
 	}
 	for _, row := range r.Manifest {
-		fmt.Fprintf(&b, "manifest %s ran=%v reason=%q\n", row.CheckID, row.Status, row.Reason)
+		fmt.Fprintf(&b, "manifest %s ran=%v reason=%q\n", row.CheckID, row.Outcome, row.Reason)
 	}
 	return b.String()
 }
@@ -304,8 +304,8 @@ func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 			got, wantIDs)
 	}
 	for _, row := range manifest {
-		if row.Status != check.Answered {
-			t.Errorf("%s: Ran = false on a clean project, want true", row.CheckID)
+		if row.Outcome != check.Answered {
+			t.Errorf("%s: not answered on a clean project", row.CheckID)
 		}
 		if row.Reason != "" {
 			t.Errorf("%s: Reason = %q on a check that ran, want empty", row.CheckID, row.Reason)
@@ -326,7 +326,7 @@ func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 // are indistinguishable from outside, which is the entire reason the
 // manifest exists.
 //
-// MUTATION: stop copying Result.NotRun into the row. The Ran and Reason
+// MUTATION: stop copying the decline into the row. The outcome and Reason
 // assertions both red.
 func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 	var journal []string
@@ -353,7 +353,7 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 		t.Errorf("Paths = %v, want the file the finding is about", findings[0].Paths)
 	}
 
-	var lockfile check.Ran
+	var lockfile check.Status
 	var found bool
 	for _, row := range manifest {
 		if row.CheckID == check.IDLockfile {
@@ -363,8 +363,8 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 	if !found {
 		t.Fatalf("manifest = %v, want a row for %s", manifestIDs(manifest), check.IDLockfile)
 	}
-	if lockfile.Status != check.Declined {
-		t.Errorf("%s: status = %v, want declined — it could not look", check.IDLockfile, lockfile.Status)
+	if lockfile.Outcome != check.Declined {
+		t.Errorf("%s: status = %v, want declined — it could not look", check.IDLockfile, lockfile.Outcome)
 	}
 	if !strings.Contains(lockfile.Reason, "package.json") {
 		t.Errorf("%s: Reason = %q, want it to name package.json", check.IDLockfile, lockfile.Reason)
@@ -674,13 +674,13 @@ func TestCombineRefusesASecondProducerClaimingAnEngineCheck(t *testing.T) {
 // FOUND NOTHING from NEVER LOOKED, and a check registered without a
 // function is the purest case of never looked there is — so it was the
 // one case the manifest got wrong. The engine tolerated the missing
-// function, computed Ran from a zero result whose reason is empty, and
+// function, computed its outcome from a zero result, and
 // reported a tick.
 //
 // The distinction the manifest was built to carry must not fail on the
 // wiring mistake it should be loudest about.
 //
-// MUTATION: report Ran: true for a nil function. Reds here.
+// MUTATION: report a nil function as answered. Reds here.
 // MUTATION: change the reason to anything not naming the check. Reds
 // here. Both directions, because the branch was previously unpinned in
 // both — a reason could be added or removed with every suite green.
@@ -692,7 +692,7 @@ func TestEngineNilRunReportsThatItDidNotRun(t *testing.T) {
 		t.Fatalf("manifest = %v, want one row", manifestIDs(res.Manifest))
 	}
 	row := res.Manifest[0]
-	if row.Status != check.Declined {
+	if row.Outcome != check.Declined {
 		t.Errorf("%s: reported as answered, but nothing was executed", row.CheckID)
 	}
 	if !strings.Contains(row.Reason, check.IDAstroDep) {
@@ -714,7 +714,7 @@ func TestEngineNilRunReportsThatItDidNotRun(t *testing.T) {
 // project; the caller was pointed at the wrong place, and the report
 // described a project that does not exist as though it had been read.
 //
-// MUTATION: drop the stat. Both rows here red on Ran.
+// MUTATION: drop the stat. Both rows here red on the outcome.
 // MUST NOT MOVE: every row that passes a real fixture directory.
 func TestEngineStatsTheRootBeforeAnythingElse(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nothing-here")
@@ -756,7 +756,7 @@ func TestEngineStatsTheRootBeforeAnythingElse(t *testing.T) {
 				t.Fatalf("manifest = %v, want a row per requested id %v", got, wantIDs)
 			}
 			for _, row := range res.Manifest {
-				if row.Status != check.Declined {
+				if row.Outcome != check.Declined {
 					t.Errorf("%s: reported as answered against an unusable root", row.CheckID)
 				}
 				if row.Reason == "" {
@@ -782,7 +782,7 @@ func TestEngineStatsTheRootThroughTheFilesystemItWasGiven(t *testing.T) {
 	if len(journal) != 1 {
 		t.Fatalf("the check did not run against a good root: %v", journal)
 	}
-	if len(res.Manifest) != 1 || res.Manifest[0].Status != check.Answered {
+	if len(res.Manifest) != 1 || res.Manifest[0].Outcome != check.Answered {
 		t.Errorf("manifest = %+v, want the check reported as having run", res.Manifest)
 	}
 }
@@ -854,7 +854,7 @@ func TestRunProducesReportsTheGateRefuses(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // declineRow finds one id's row, or fails.
-func declineRow(t *testing.T, m check.Manifest, id string) check.Ran {
+func declineRow(t *testing.T, m check.Manifest, id string) check.Status {
 	t.Helper()
 	for _, row := range m {
 		if row.CheckID == id {
@@ -862,7 +862,7 @@ func declineRow(t *testing.T, m check.Manifest, id string) check.Ran {
 		}
 	}
 	t.Fatalf("manifest = %v, want a row for %s", manifestIDs(m), id)
-	return check.Ran{}
+	return check.Status{}
 }
 
 // TestEngineCarriesAPerIDDecline is the state the manifest could not
@@ -908,17 +908,17 @@ func TestEngineCarriesAPerIDDecline(t *testing.T) {
 	}
 
 	answered := declineRow(t, res.Manifest, check.IDPagesDir)
-	if answered.Status != check.Answered {
+	if answered.Outcome != check.Answered {
 		t.Errorf("%s: status = %v, want answered — the check did answer it",
-			check.IDPagesDir, answered.Status)
+			check.IDPagesDir, answered.Outcome)
 	}
 	if answered.Reason != "" {
 		t.Errorf("%s: Reason = %q on an answered row", check.IDPagesDir, answered.Reason)
 	}
 
 	declined := declineRow(t, res.Manifest, check.IDBuildFormat)
-	if declined.Status != check.Declined {
-		t.Errorf("%s: status = %v, want declined", check.IDBuildFormat, declined.Status)
+	if declined.Outcome != check.Declined {
+		t.Errorf("%s: status = %v, want declined", check.IDBuildFormat, declined.Outcome)
 	}
 	if declined.Kind != check.ByDesign {
 		t.Errorf("%s: kind = %v, want by-design — the check looked and chose not to guess",
@@ -961,7 +961,7 @@ func TestEngineDeclinesEveryIDWhenTheWholeCheckCannotRun(t *testing.T) {
 				t.Fatalf("manifest = %v, want a row per covered id", manifestIDs(res.Manifest))
 			}
 			for _, row := range res.Manifest {
-				if row.Status != check.Declined {
+				if row.Outcome != check.Declined {
 					t.Errorf("%s: reported as answered", row.CheckID)
 				}
 				if row.Kind != check.Environmental {

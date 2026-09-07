@@ -115,22 +115,22 @@ func TestAdvisoriesKeepsOrderAndDropsNotes(t *testing.T) {
 	}
 }
 
-// TestRanRecordsWhyNot pins the row a manifest exists to carry. A check
+// TestStatusRecordsWhyNot pins the row a manifest exists to carry. A check
 // that ran carries no reason; one that did not carries the reason, and
 // the reason is the only thing standing between a reader and the
 // assumption that silence means a clean result.
-func TestRanRecordsWhyNot(t *testing.T) {
-	ran := Ran{CheckID: IDPagesDir}
-	if ran.Status != Answered {
-		t.Error("Ran = false on a row that ran")
+func TestStatusRecordsWhyNot(t *testing.T) {
+	ran := Status{CheckID: IDPagesDir}
+	if ran.Outcome != Answered {
+		t.Error("outcome is not answered on a row that answered")
 	}
 	if ran.Reason != "" {
 		t.Errorf("Reason = %q on a row that ran, want empty", ran.Reason)
 	}
 
-	skipped := Ran{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"}
-	if skipped.Status != Declined {
-		t.Error("Ran = true on a row that did not run")
+	skipped := Status{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"}
+	if skipped.Outcome != Declined {
+		t.Error("outcome is not declined on a row that declined")
 	}
 	if skipped.Reason != "couldn't read package.json" {
 		t.Errorf("Reason = %q, want %q", skipped.Reason, "couldn't read package.json")
@@ -144,7 +144,7 @@ func TestRanRecordsWhyNot(t *testing.T) {
 func TestManifestKeepsDeclaredOrder(t *testing.T) {
 	m := Manifest{
 		{CheckID: IDAstroDep},
-		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 		{CheckID: IDPagesDir},
 	}
 
@@ -185,14 +185,14 @@ func TestManifestKeepsDeclaredOrder(t *testing.T) {
 func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 	m := Manifest{
 		{CheckID: IDAstroDep},
-		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 		{CheckID: IDPagesDir},
-		{CheckID: IDBuildFormat, Status: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
+		{CheckID: IDBuildFormat, Outcome: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
 	}
 
-	want := []Ran{
-		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
-		{CheckID: IDBuildFormat, Status: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
+	want := []Status{
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDBuildFormat, Outcome: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
 	}
 	if got := m.Declines(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Declines() = %#v, want %#v", got, want)
@@ -329,7 +329,7 @@ func TestSortManifestFollowsTheDeclaredOrder(t *testing.T) {
 		{CheckID: IDLocalhost},
 		{CheckID: IDAstroDep},
 		{CheckID: IDBuildFormat},
-		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 	}
 
 	SortManifest(m)

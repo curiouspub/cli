@@ -51,7 +51,7 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 		},
 		Manifest: Manifest{
 			{CheckID: IDAstroDep},
-			{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+			{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 			{CheckID: IDPagesDir},
 			{CheckID: IDBuildFormat},
 			{CheckID: IDLocalhost},
@@ -92,7 +92,7 @@ func TestCombineRefusesTwoProducersClaimingOneCheck(t *testing.T) {
 	a := Results{Manifest: Manifest{{CheckID: IDAstroDep}}}
 	b := Results{Manifest: Manifest{
 		{CheckID: IDLockfile},
-		{CheckID: IDAstroDep, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDAstroDep, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 	}}
 
 	_, err := Combine(a, b)
@@ -255,7 +255,7 @@ func TestCoverageGapsReportsBothDirections(t *testing.T) {
 func TestCoverageGapsIsSilentOnAFullManifest(t *testing.T) {
 	var m Manifest
 	for _, id := range DeclaredOrder() {
-		m = append(m, Ran{CheckID: id})
+		m = append(m, Status{CheckID: id})
 	}
 
 	missing, unexpected := CoverageGaps(m)

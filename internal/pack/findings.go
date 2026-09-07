@@ -50,8 +50,8 @@ var walkIDs = []string{
 // thing that separates FOUND NOTHING from NEVER LOOKED, and a report
 // that simply omitted a check nobody could see would say the same
 // nothing as a report of a clean project.
-func answered(id string) check.Ran {
-	return check.Ran{CheckID: id}
+func answered(id string) check.Status {
+	return check.Status{CheckID: id}
 }
 
 func walkManifest() check.Manifest {

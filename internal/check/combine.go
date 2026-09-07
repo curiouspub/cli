@@ -157,7 +157,7 @@ func unclaimedIDs(findings []Finding, m Manifest) []string {
 func contradictedIDs(findings []Finding, m Manifest) []string {
 	declined := make(map[string]bool, len(m))
 	for _, row := range m {
-		if row.Status == Declined {
+		if row.Outcome == Declined {
 			declined[row.CheckID] = true
 		}
 	}

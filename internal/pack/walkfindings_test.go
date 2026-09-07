@@ -177,7 +177,7 @@ func TestEveryManifestRowIsBuiltInOnePlace(t *testing.T) {
 					return true
 				}
 				sel, ok := lit.Type.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Ran" {
+				if !ok || sel.Sel.Name != "Status" {
 					return true
 				}
 				if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "check" {

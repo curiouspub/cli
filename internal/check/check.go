@@ -180,7 +180,7 @@ func Advisories(findings []Finding) []Finding {
 	return out
 }
 
-// Ran is one row per check the engine was ASKED to run, whether or not
+// Status is one row per check the engine was ASKED to run, whether or not
 // it produced a finding.
 //
 // It exists to pay for a findings-only stream. A check emits a Finding
@@ -189,9 +189,9 @@ func Advisories(findings []Finding) []Finding {
 // check rendered as a tick is a lie the reader will act on. The
 // distinction is not recoverable from the findings, so it is recorded
 // separately and exactly once.
-type Ran struct {
+type Status struct {
 	CheckID string
-	Status  Status
+	Outcome Outcome
 
 	// Kind and Reason describe a decline, and are empty on an answered
 	// row. The reason is written for a person and reaches a surface
@@ -209,7 +209,7 @@ type Ran struct {
 // the value is built at run time — and a single flag for the whole check
 // reported both as looked-at. The row the manifest exists for was
 // therefore wrong about exactly the case that motivated it.
-type Status int
+type Outcome int
 
 const (
 	// Answered is the zero value. A row built without a status reads as
@@ -218,7 +218,7 @@ const (
 	// two places — the engine, from a check's own per-id declines, and
 	// the walk, at a single site its own suite guards — rather than at
 	// every emission point the way a finding's severity is.
-	Answered Status = iota
+	Answered Outcome = iota
 	Declined
 )
 
@@ -267,16 +267,16 @@ type Decline struct {
 // caller of this type wants and renders in a different order on every
 // run, and the report has to be byte-identical across two runs over one
 // project.
-type Manifest []Ran
+type Manifest []Status
 
 // Declines returns every row that did not answer, in manifest order. A
 // renderer reads this from HERE and never from the absence of a finding,
 // which is the one mistake this type exists to make impossible: under a
 // findings-only stream the two look identical from the outside.
-func (m Manifest) Declines() []Ran {
-	var out []Ran
+func (m Manifest) Declines() []Status {
+	var out []Status
 	for _, row := range m {
-		if row.Status == Declined {
+		if row.Outcome == Declined {
 			out = append(out, row)
 		}
 	}
@@ -290,10 +290,10 @@ func (m Manifest) Declines() []Ran {
 // front of somebody" is asking a question with one right answer, and two
 // surfaces answering it separately is how they come to disagree about
 // the same row.
-func (m Manifest) DeclinesOfKind(kind DeclineKind) []Ran {
-	var out []Ran
+func (m Manifest) DeclinesOfKind(kind DeclineKind) []Status {
+	var out []Status
 	for _, row := range m {
-		if row.Status == Declined && row.Kind == kind {
+		if row.Outcome == Declined && row.Kind == kind {
 			out = append(out, row)
 		}
 	}

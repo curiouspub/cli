@@ -118,7 +118,7 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 			// A CHECK REGISTERED WITH NO FUNCTION. The manifest exists
 			// to tell "found nothing" from "never looked", and this is
 			// the purest case of never looked there is — so it was the
-			// one the manifest got wrong, computing Ran from a zero
+			// one the manifest got wrong, computing its outcome from a zero
 			// result whose reason is empty and reporting a tick. The
 			// distinction must not fail on the wiring mistake it should
 			// be loudest about.
@@ -177,12 +177,12 @@ func declineEvery(ids []string, kind check.DeclineKind, reason string) map[strin
 
 // row turns one id and a check's declines into a manifest row. An id
 // absent from the map was answered.
-func row(id string, declined map[string]check.Decline) check.Ran {
+func row(id string, declined map[string]check.Decline) check.Status {
 	d, ok := declined[id]
 	if !ok {
-		return check.Ran{CheckID: id}
+		return check.Status{CheckID: id}
 	}
-	return check.Ran{CheckID: id, Status: check.Declined, Kind: d.Kind, Reason: d.Reason}
+	return check.Status{CheckID: id, Outcome: check.Declined, Kind: d.Kind, Reason: d.Reason}
 }
 
 // strayDeclines returns the declined ids a check did not claim, in a

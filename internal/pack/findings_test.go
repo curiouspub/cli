@@ -377,7 +377,7 @@ func TestWalkManifestAnswersEveryIDItClaims(t *testing.T) {
 	var ids []string
 	for _, row := range m {
 		ids = append(ids, row.CheckID)
-		if row.Status != check.Answered {
+		if row.Outcome != check.Answered {
 			t.Errorf("%s reports as not run: %+v", row.CheckID, row)
 		}
 		if row.Reason != "" {

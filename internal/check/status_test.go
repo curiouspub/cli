@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestRanCarriesAStatusAndADeclineKind. A row used to say only whether a
+// TestStatusCarriesAnOutcomeAndADeclineKind. A row used to say only whether a
 // check ran, which could not express the state the tree has actually had
 // all along: one check covering two ids, ANSWERING one and giving up on
 // the other. The row is per id, so the status is too.
@@ -14,32 +14,32 @@ import (
 // different things — one is something outside the check that they may be
 // able to fix, the other is the check declining to guess — and a row
 // that could not tell them apart would have to charge the same for both.
-func TestRanCarriesAStatusAndADeclineKind(t *testing.T) {
-	answered := Ran{CheckID: IDPagesDir}
-	if answered.Status != Answered {
-		t.Errorf("Status = %v, want Answered", answered.Status)
+func TestStatusCarriesAnOutcomeAndADeclineKind(t *testing.T) {
+	answered := Status{CheckID: IDPagesDir}
+	if answered.Outcome != Answered {
+		t.Errorf("Status = %v, want Answered", answered.Outcome)
 	}
 	if answered.Reason != "" {
 		t.Errorf("Reason = %q on an answered row, want empty", answered.Reason)
 	}
 
-	environmental := Ran{
+	environmental := Status{
 		CheckID: IDLockfile,
-		Status:  Declined,
+		Outcome: Declined,
 		Kind:    Environmental,
 		Reason:  "couldn't read package.json",
 	}
-	if environmental.Status != Declined || environmental.Kind != Environmental {
+	if environmental.Outcome != Declined || environmental.Kind != Environmental {
 		t.Errorf("row = %+v, want an environmental decline", environmental)
 	}
 
-	byDesign := Ran{
+	byDesign := Status{
 		CheckID: IDBuildFormat,
-		Status:  Declined,
+		Outcome: Declined,
 		Kind:    ByDesign,
 		Reason:  "the config builds this value at run time",
 	}
-	if byDesign.Status != Declined || byDesign.Kind != ByDesign {
+	if byDesign.Outcome != Declined || byDesign.Kind != ByDesign {
 		t.Errorf("row = %+v, want a by-design decline", byDesign)
 	}
 }
@@ -55,9 +55,9 @@ func TestRanCarriesAStatusAndADeclineKind(t *testing.T) {
 // per-id declines, and the walk, at a single guarded site — where a
 // finding's severity is set at every emission point in every check.
 func TestAnsweredIsTheZeroStatus(t *testing.T) {
-	var row Ran
-	if row.Status != Answered {
-		t.Errorf("the zero Status is %v, want Answered", row.Status)
+	var row Status
+	if row.Outcome != Answered {
+		t.Errorf("the zero Status is %v, want Answered", row.Outcome)
 	}
 	if row.Kind != Environmental {
 		t.Errorf("the zero DeclineKind is %v, want Environmental — the costlier of the "+
@@ -74,9 +74,9 @@ func TestAnsweredIsTheZeroStatus(t *testing.T) {
 func TestManifestDeclinesSelectsByKind(t *testing.T) {
 	m := Manifest{
 		{CheckID: IDAstroDep},
-		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 		{CheckID: IDPagesDir},
-		{CheckID: IDBuildFormat, Status: Declined, Kind: ByDesign, Reason: "the value is built at run time"},
+		{CheckID: IDBuildFormat, Outcome: Declined, Kind: ByDesign, Reason: "the value is built at run time"},
 	}
 
 	if got := ids(m.Declines()); !reflect.DeepEqual(got, []string{IDLockfile, IDBuildFormat}) {
@@ -96,7 +96,7 @@ func TestManifestDeclinesSelectsByKind(t *testing.T) {
 func TestManifestDeclinesIsSilentOnAFullyAnsweredManifest(t *testing.T) {
 	var m Manifest
 	for _, id := range DeclaredOrder() {
-		m = append(m, Ran{CheckID: id})
+		m = append(m, Status{CheckID: id})
 	}
 
 	if got := m.Declines(); got != nil {

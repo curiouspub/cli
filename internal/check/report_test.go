@@ -13,7 +13,7 @@ import (
 func everyDeclaredID() Manifest {
 	var m Manifest
 	for _, id := range DeclaredOrder() {
-		m = append(m, Ran{CheckID: id})
+		m = append(m, Status{CheckID: id})
 	}
 	return m
 }
@@ -94,7 +94,7 @@ func TestCombineRefusesAnIncompleteUniverse(t *testing.T) {
 // list, which in practice is a mistyped id and reaches the user as the
 // name of a check they have never heard of.
 func TestCombineRefusesAnIDNobodyDeclared(t *testing.T) {
-	m := append(everyDeclaredID(), Ran{CheckID: "lockfle"})
+	m := append(everyDeclaredID(), Status{CheckID: "lockfle"})
 
 	_, err := Combine(Results{Manifest: m})
 	var gap *CoverageError
@@ -282,7 +282,7 @@ func TestReportAccessorsHandBackTheirOwnSlices(t *testing.T) {
 	}
 
 	rows := report.Manifest()
-	rows[0] = Ran{CheckID: "clobbered"}
+	rows[0] = Status{CheckID: "clobbered"}
 	if report.Manifest()[0].CheckID != IDAstroDep {
 		t.Errorf("a caller overwriting its copy changed the report: %v", ids(report.Manifest()))
 	}
@@ -310,9 +310,9 @@ func TestCombineRefusesAFindingUnderADeclinedID(t *testing.T) {
 	m := everyDeclaredID()
 	for i := range m {
 		if m[i].CheckID == IDLockfile {
-			m[i] = Ran{
+			m[i] = Status{
 				CheckID: IDLockfile,
-				Status:  Declined,
+				Outcome: Declined,
 				Kind:    Environmental,
 				Reason:  "couldn't read package.json",
 			}
@@ -348,9 +348,9 @@ func TestCombineAllowsAFindingUnderAnAnsweredIDBesideOtherDeclines(t *testing.T)
 	m := everyDeclaredID()
 	for i := range m {
 		if m[i].CheckID == IDBuildFormat {
-			m[i] = Ran{
+			m[i] = Status{
 				CheckID: IDBuildFormat,
-				Status:  Declined,
+				Outcome: Declined,
 				Kind:    ByDesign,
 				Reason:  "the config builds this value at run time",
 			}
