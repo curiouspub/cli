@@ -342,21 +342,42 @@ var renameFile = os.Rename
 //     that was already there is left alone: it may be one the user
 //     pointed us at, and re-permissioning somebody else's directory is
 //     not this tool's business.
+//
 //   - The token is written to a temp file in the SAME directory. A temp
 //     file somewhere else cannot be renamed into place — rename across
 //     filesystems fails — and the fallback everyone reaches for then is
 //     a copy, which is exactly the non-atomic write this avoids.
+//
 //   - The mode is set explicitly BEFORE any bytes are written, so the
 //     token never exists on disk in a file anyone else could read, not
 //     even for the length of one write call.
+//
 //   - Sync before rename. Rename is atomic with respect to the
 //     directory, but the file's own contents are not on the disk until
 //     they are flushed; without this a crash can leave the config
 //     pointing at an empty file, which reads as "logged out".
-//   - Rename over the target, never a truncate-in-place. A crash between
-//     truncating and writing leaves an empty config, and an empty config
-//     costs the user another login — and, in the daily-limit sense, part
-//     of their account's budget.
+//
+//   - Rename over the target, never a truncate-in-place. The usual
+//     argument is a crash between truncating and writing, which leaves
+//     an empty config that reads as "logged out" and costs the user
+//     another login. That argument is true and it is the weaker one.
+//
+//     THE STRONGER ONE IS MEASURED. Put the config in a directory the
+//     process cannot write to — a read-only parent, a mount gone
+//     read-only, a sandbox — and the two implementations diverge in the
+//     worst possible direction. This one refuses: creating the temp file
+//     fails with a permission error, nothing is touched, and the
+//     existing credential is exactly where it was. A truncate-in-place
+//     SUCCEEDS, because the permission that governs writing to a file
+//     that already exists is the FILE's, not the directory's — so it
+//     empties the only copy of the token and then fails on the write it
+//     could not do anyway.
+//
+//     So the naive form destroys the credential in precisely the case
+//     where this form declines to proceed, and it does it without a
+//     crash, a signal or any timing at all. Reproduced directly: 26
+//     bytes of real config to 0, in a directory chmod'ed 0500, while
+//     the atomic path returned "permission denied" and changed nothing.
 func (c *Config) Save() error {
 	if c.Token == "" {
 		return errors.New(

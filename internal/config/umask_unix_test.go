@@ -17,7 +17,7 @@ import (
 // same code produces different permissions on two machines whose users
 // have configured different umasks, and neither of them is wrong about
 // their own umask. So the mode is set explicitly after creation, and
-// this test runs the whole save under three masks to prove it.
+// this test runs the whole save under four masks to prove it.
 //
 // The four masks are chosen, not sampled, and two of them exist only
 // because a mutation proved the other two could not see the defect:
