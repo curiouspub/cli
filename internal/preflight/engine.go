@@ -20,14 +20,21 @@ import (
 type Result struct {
 	Findings []check.Finding
 
-	// NotRun says the check did not look, and why. Empty means it ran.
+	// Declined records, PER ID, that this check did not answer that
+	// question — with why, and with what kind.
 	//
-	// The reason is written for a person: it goes into the report
-	// verbatim, beside the name of the check that was skipped, because a
-	// skipped check rendered as a tick is a lie the reader will act on.
-	// A check that cannot read package.json says so; it does not stay
-	// quiet and let silence be read as approval.
-	NotRun string
+	// Per id rather than per check, because a check may cover more than
+	// one question off one read and may answer one of them. The config
+	// check answers where the pages live and gives up on the build
+	// format whenever the value is built at run time; a whole-check flag
+	// reported that give-up as a tick, on the very check the manifest
+	// was invented for.
+	//
+	// An id absent from this map was ANSWERED. The reason is written for
+	// a person and reaches a surface verbatim: a check that cannot read
+	// package.json says so, rather than staying quiet and letting
+	// silence be read as approval.
+	Declined map[string]check.Decline
 }
 
 // Check is one pre-flight check as the engine sees it: the ids it
@@ -99,11 +106,14 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 	var manifest check.Manifest
 
 	for _, c := range ordered {
-		result := Result{NotRun: unusableRoot}
+		var result Result
 		switch {
 		case unusableRoot != "":
-			// Nothing is read and nothing is asked. Every row below
-			// carries the same reason, which is the honest one.
+			// Nothing is read and nothing is asked. EVERY id this check
+			// covers is declined with the same reason, which is the
+			// honest one — the failure is about the check, so it lands
+			// on all of its questions.
+			result = Result{Declined: declineEvery(c.IDs, check.Environmental, unusableRoot)}
 		case c.Run == nil:
 			// A CHECK REGISTERED WITH NO FUNCTION. The manifest exists
 			// to tell "found nothing" from "never looked", and this is
@@ -112,23 +122,28 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 			// result whose reason is empty and reporting a tick. The
 			// distinction must not fail on the wiring mistake it should
 			// be loudest about.
-			result = Result{NotRun: "nothing is wired up to run " + strings.Join(c.IDs, " and ")}
+			result = Result{Declined: declineEvery(c.IDs, check.Environmental,
+				"nothing is wired up to run "+strings.Join(c.IDs, " and "))}
 		default:
 			result = c.Run(fsys, root)
 		}
 
 		findings = append(findings, result.Findings...)
+
+		covered := make(map[string]bool, len(c.IDs))
 		for _, id := range c.IDs {
-			if result.NotRun != "" {
-				manifest = append(manifest, check.Ran{
-					CheckID: id,
-					Status:  check.Declined,
-					Kind:    check.Environmental,
-					Reason:  result.NotRun,
-				})
-				continue
-			}
-			manifest = append(manifest, check.Ran{CheckID: id})
+			covered[id] = true
+			manifest = append(manifest, row(id, result.Declined))
+		}
+
+		// A DECLINE FOR AN ID THE CHECK NEVER CLAIMED is a wiring
+		// mistake, and this function has no way to tell it from a
+		// deliberate choice. It emits the row rather than dropping it,
+		// and the gate refuses the result — because dropping it is the
+		// failure with no symptom: the report looks complete and a
+		// producer's answer has quietly gone.
+		for _, id := range strayDeclines(c.IDs, result.Declined) {
+			manifest = append(manifest, row(id, result.Declined))
 		}
 	}
 
@@ -147,6 +162,45 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 	// — and a second producer added later cannot arrive in a shape the
 	// combiner has to learn.
 	return check.Results{Findings: findings, Manifest: manifest}
+}
+
+// declineEvery declines all of a check's ids for one reason, which is
+// what a failure ABOUT THE CHECK means: it lands on every question that
+// check was going to answer.
+func declineEvery(ids []string, kind check.DeclineKind, reason string) map[string]check.Decline {
+	out := make(map[string]check.Decline, len(ids))
+	for _, id := range ids {
+		out[id] = check.Decline{Kind: kind, Reason: reason}
+	}
+	return out
+}
+
+// row turns one id and a check's declines into a manifest row. An id
+// absent from the map was answered.
+func row(id string, declined map[string]check.Decline) check.Ran {
+	d, ok := declined[id]
+	if !ok {
+		return check.Ran{CheckID: id}
+	}
+	return check.Ran{CheckID: id, Status: check.Declined, Kind: d.Kind, Reason: d.Reason}
+}
+
+// strayDeclines returns the declined ids a check did not claim, in a
+// deterministic order — two runs over one project have to produce the
+// same report, and a map's range order is not one.
+func strayDeclines(ids []string, declined map[string]check.Decline) []string {
+	covered := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		covered[id] = true
+	}
+	var out []string
+	for id := range declined {
+		if !covered[id] {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // rootProblem reports why the project directory cannot be read, or "" if
