@@ -197,7 +197,7 @@ func TestCheckAstroConfigNamesTheFileItFound(t *testing.T) {
 		t.Fatalf("writing the fixture: %v", err)
 	}
 
-	findings := CheckAstroConfig(OSFileSystem{}, root)
+	findings := CheckAstroConfig(OSFileSystem{}, root).Findings
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want one", findings)
 	}

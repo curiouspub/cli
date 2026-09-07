@@ -65,7 +65,7 @@ func astroConfigCheck() Check {
 	return Check{
 		IDs: []string{check.IDPagesDir, check.IDBuildFormat},
 		Run: func(fsys FS, root string) Result {
-			return Result{Findings: CheckAstroConfig(fsys, root)}
+			return CheckAstroConfig(fsys, root)
 		},
 	}
 }

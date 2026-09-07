@@ -171,7 +171,7 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 // alone if none does — the ambiguity note used to be decided inside the
 // pages-dir path, and was therefore silently dropped on every project
 // whose pages directory was already where Astro expects it.
-func CheckAstroConfig(fsys FS, root string) []check.Finding {
+func CheckAstroConfig(fsys FS, root string) Result {
 	defaultPagesDir := filepath.Join(root, "src", "pages")
 	pagesDir := isDir(fsys, defaultPagesDir)
 	var pagesBlocker string
@@ -237,7 +237,29 @@ func CheckAstroConfig(fsys FS, root string) []check.Finding {
 		findings = attachPagesDirNote(findings, ambiguousConfigNote(configName, extraCandidates))
 	}
 
-	return finish(findings, configName, uncheckedCandidates)
+	res := finish(findings, configName, uncheckedCandidates)
+
+	// A GATE TRIP IS A DECLINE, NOT A FINDING. The check read the config
+	// and could not settle build.format, so it answers pages-dir and
+	// declines this one — by design, because it looked and chose not to
+	// guess rather than being stopped by anything outside itself.
+	//
+	// It used to be recorded as a note-severity finding. Two homes for
+	// one fact diverge, and the row now carries strictly more than the
+	// note did: a kind, which decides that this costs the reader no
+	// question, and a reason a caller can read. The note's own wording
+	// is what the reason says, so nothing a person could have read is
+	// lost — and the gate refuses a finding under a declined id, so
+	// keeping both stopped being untidy and became impossible.
+	if parsed.unresolved {
+		res.Declined = map[string]check.Decline{
+			check.IDBuildFormat: {
+				Kind:   check.ByDesign,
+				Reason: buildFormatUnresolvedReason(configName, parsed),
+			},
+		}
+	}
+	return res
 }
 
 // advisoryTail is the sentence every pages-dir warning ends with, held in
@@ -288,13 +310,13 @@ func noConfigClause(unchecked []string) string {
 // this check read may not be the one that counts. With no winner there is
 // nothing to qualify — noConfigClause has already said, in the finding
 // itself, which candidates could not be checked.
-func finish(findings []check.Finding, winner string, unchecked []string) []check.Finding {
+func finish(findings []check.Finding, winner string, unchecked []string) Result {
 	if len(unchecked) == 0 || winner == "" {
-		return findings
+		return Result{Findings: findings}
 	}
-	return attachPagesDirNote(findings, fmt.Sprintf(
+	return Result{Findings: attachPagesDirNote(findings, fmt.Sprintf(
 		"%s couldn't be checked for, so %s may not be the config Astro actually loads.",
-		joinWithAnd(unchecked), winner))
+		joinWithAnd(unchecked), winner))}
 }
 
 // attachPagesDirNote folds a standalone note into findings: onto the
@@ -691,19 +713,12 @@ func isASCIILetter(b byte) bool {
 // look at and nothing to do.
 func buildFormatFinding(configName string, parsed astroConfig) *check.Finding {
 	if parsed.unresolved {
-		// Recorded below advisory severity: no surface shows this by
-		// default. It is kept because "the scan gave up" and "the key is
-		// absent" are different states, and a caller that needs to tell
-		// them apart — a future --verbose, a support transcript — has
-		// nowhere else to learn it.
-		return &check.Finding{
-			CheckID:  check.IDBuildFormat,
-			Severity: check.SeverityNote,
-			Message: fmt.Sprintf(
-				"%s couldn't be fully read: it contains %s, so build.format couldn't be "+
-					"confirmed either way.",
-				configName, parsed.unresolvedReason),
-		}
+		// Recorded as a by-design DECLINE on the row rather than as a
+		// finding here — see the call site. It is kept because "the scan
+		// gave up" and "the key is absent" are different states, and a
+		// caller that needs to tell them apart — a future --verbose, a
+		// support transcript — has nowhere else to learn it.
+		return nil
 	}
 	if parsed.buildFormatAmbiguous {
 		return &check.Finding{
@@ -885,6 +900,16 @@ func missingOrUnanswerable(fsys FS, name string) presence {
 		}
 		parent = next
 	}
+}
+
+// buildFormatUnresolvedReason is the sentence a gate trip records. It
+// is the wording the note carried before the fact moved to the row, kept
+// unchanged so nothing a person could read was lost in the move.
+func buildFormatUnresolvedReason(configName string, parsed astroConfig) string {
+	return fmt.Sprintf(
+		"%s couldn't be fully read: it contains %s, so build.format couldn't be "+
+			"confirmed either way.",
+		configName, parsed.unresolvedReason)
 }
 
 // blockingFile returns the nearest ancestor of name that exists and is
