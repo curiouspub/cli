@@ -66,6 +66,7 @@ func TestCombineRefusesAnIncompleteUniverse(t *testing.T) {
 	}
 
 	short := everyDeclaredID()
+	dropped := short[len(short)-1].CheckID
 	short = short[:len(short)-1]
 
 	_, err := Combine(Results{Manifest: short})
@@ -73,13 +74,17 @@ func TestCombineRefusesAnIncompleteUniverse(t *testing.T) {
 	if !errors.As(err, &gap) {
 		t.Fatalf("error = %#v, want a coverage failure", err)
 	}
-	if !reflect.DeepEqual(gap.Missing, []string{IDLocalhost}) {
-		t.Errorf("Missing = %v, want [%s]", gap.Missing, IDLocalhost)
+	// The dropped id is taken from the list rather than written out.
+	// This row's subject is the REFUSAL, and naming a particular id here
+	// would make it red every time the universe grows — which the
+	// universe's own row already covers, and covers better.
+	if !reflect.DeepEqual(gap.Missing, []string{dropped}) {
+		t.Errorf("Missing = %v, want [%s]", gap.Missing, dropped)
 	}
 	if len(gap.Unexpected) != 0 {
 		t.Errorf("Unexpected = %v, want none", gap.Unexpected)
 	}
-	if !strings.Contains(err.Error(), IDLocalhost) {
+	if !strings.Contains(err.Error(), dropped) {
 		t.Errorf("message = %q, want it to name the check nobody covered", err.Error())
 	}
 }
@@ -109,12 +114,21 @@ func TestCombineRefusesAnIDNobodyDeclared(t *testing.T) {
 //
 // MUTATION: skip the claimed-id enforcement. Reds here.
 // MUST NOT MOVE: rows whose findings all sit under claimed ids.
+//
+// THE UNCLAIMED ID IS DELIBERATELY NOT A PLAUSIBLE ONE. This row used to
+// invent "symlinks" as a name nothing could claim, and then the file
+// walk arrived and claimed it — so the row silently stopped testing what
+// it was written for and reported that the combiner had accepted an
+// unclaimed finding. A stand-in id has to be one no real check will ever
+// be called, or the test is a bet on what gets built next.
 func TestCombineRefusesAFindingUnderAnIDNobodyClaimed(t *testing.T) {
+	const neverAChoice = "not-a-check-anybody-would-name"
+
 	_, err := Combine(Results{
 		Manifest: everyDeclaredID(),
 		Findings: []Finding{
 			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "claimed, fine"},
-			{CheckID: "symlinks", Severity: SeverityWarning, Message: "never claimed"},
+			{CheckID: neverAChoice, Severity: SeverityWarning, Message: "never claimed"},
 		},
 	})
 
@@ -122,8 +136,8 @@ func TestCombineRefusesAFindingUnderAnIDNobodyClaimed(t *testing.T) {
 	if !errors.As(err, &unclaimed) {
 		t.Fatalf("error = %#v, want an unclaimed-finding failure", err)
 	}
-	if !reflect.DeepEqual(unclaimed.CheckIDs, []string{"symlinks"}) {
-		t.Errorf("CheckIDs = %v, want [symlinks]", unclaimed.CheckIDs)
+	if !reflect.DeepEqual(unclaimed.CheckIDs, []string{neverAChoice}) {
+		t.Errorf("CheckIDs = %v, want [%s]", unclaimed.CheckIDs, neverAChoice)
 	}
 }
 
