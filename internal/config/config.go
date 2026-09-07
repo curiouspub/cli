@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -291,6 +292,21 @@ func Load(effectiveAPIURL string) (*Config, error) {
 	cfg := &Config{Version: SchemaVersion, Path: path}
 
 	if fi, statErr := os.Stat(path); statErr == nil {
+		// A DIRECTORY GETS ITS OWN BRANCH, because it is the natural
+		// mistake rather than an exotic one: the base-directory variable
+		// takes a directory, so pointing the file override at one is
+		// following the convention. Without this the read fails with the
+		// operating system's own "is a directory" and the generic
+		// message advises changing the permissions of the directory and
+		// then deleting it — two actions, neither of them the problem.
+		if fi.IsDir() {
+			cfg.NoTokenReason = fmt.Errorf(
+				"%s names %s, which is a directory rather than a file — it has to be "+
+					"the full path to the config file itself, ending in %s. (The "+
+					"base-directory variable %s is the one that takes a directory.)",
+				envConfigPath, path, fileName, envXDGConfigHome)
+			return cfg, nil
+		}
 		warning, checked := modeWarning(path, fi)
 		cfg.PermissionsChecked = checked
 		if warning != "" {
@@ -312,6 +328,15 @@ func Load(effectiveAPIURL string) (*Config, error) {
 		return cfg, nil
 	}
 
+	// A BYTE-ORDER MARK IS TOLERATED AT THE FRONT. The comments in this
+	// package say, correctly, that a person will open this file by hand,
+	// and some editors write a mark when they save a UTF-8 file. A
+	// config that stops working because somebody looked at it is a
+	// miserable thing to be on the receiving end of. Only at the front,
+	// and only one: anything else in front of the JSON is still not
+	// JSON.
+	data = bytes.TrimPrefix(data, utf8BOM)
+
 	// Decoded TWICE, into the struct and into a map, and both results are
 	// kept. The struct is what this build understands; the map is
 	// everything the file actually contains, which is what makes writing
@@ -329,6 +354,18 @@ func Load(effectiveAPIURL string) (*Config, error) {
 
 	if fc.Version != 0 {
 		cfg.Version = fc.Version
+	}
+
+	// THE VERSION GATE COMES FIRST, before anything else this function
+	// might complain about. A file from a release this build does not
+	// know is a file whose every other property this build is not
+	// entitled to have an opinion about — including how its field names
+	// are spelled. It also used to be reported as corrupted, which the
+	// code already knew was wrong: the map decode had succeeded and the
+	// version had been read before the sentence was printed.
+	if cfg.Version != SchemaVersion {
+		cfg.NoTokenReason = versionError(path, cfg.Version)
+		return cfg, nil
 	}
 
 	// Before anything is read OUT of the file, whether it can be read at
@@ -370,6 +407,35 @@ func corruptError(path string, err error) error {
 			"the file and run this command again to log in from scratch", path, err)
 }
 
+// utf8BOM is the byte-order mark an editor may write at the front of a
+// UTF-8 file. It carries no information here — the encoding is fixed —
+// so it is trimmed on the way in and never written on the way out.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// versionError explains a schema this build does not read.
+//
+// Two sentences rather than one, because the two cases suggest opposite
+// actions. A HIGHER version is almost certainly a newer release's file,
+// and the useful advice is to upgrade — deleting it would work and would
+// throw away whatever the newer release put there. Any other unknown
+// value was never written by anything, so there is no newer release to
+// upgrade to and the file is simply not usable.
+func versionError(path string, version int) error {
+	if version > SchemaVersion {
+		return fmt.Errorf(
+			"the config file at %s was written by a newer curious: it records schema "+
+				"version %d and this build reads version %d, so nothing is being taken "+
+				"from it. Upgrade curious to use the file. Deleting it and logging in "+
+				"again would also work, at the cost of whatever the newer version "+
+				"stored there", path, version, SchemaVersion)
+	}
+	return fmt.Errorf(
+		"the config file at %s records schema version %d, which no release of "+
+			"curious has ever written (this build reads version %d) — delete the file "+
+			"and run this command again to log in from scratch",
+		path, version, SchemaVersion)
+}
+
 // endpointMismatch reports why a stored token must not be used against
 // the endpoint in force, or nil when it may be.
 //
@@ -401,27 +467,108 @@ func endpointMismatch(stored, effective string) error {
 					"against, so the token is not being reused — you will be asked to " +
 					"log in again")
 		}
+		// %s of a redacted error rather than %w, and the trade is
+		// deliberate: the wrapped error quotes the raw URL a second
+		// time, which is where half of the userinfo leak lived. Nothing
+		// inspects this reason with errors.Is — it is read by a person,
+		// and the Config reports "no token" through a field rather than
+		// through an error's identity.
 		return fmt.Errorf(
 			"the config file records %q as the server its token was issued against, "+
-				"and that cannot be read as an address (%w), so the token is not being "+
-				"reused — you will be asked to log in again", stored, err)
+				"and that cannot be read as an address (%s), so the token is not being "+
+				"reused — you will be asked to log in again",
+			redactUserinfo(stored), redactUserinfo(err.Error()))
 	}
 
 	effectiveKey, err := api.CanonicalKey(effective)
 	if err != nil {
 		return fmt.Errorf(
-			"this run is talking to %q, which cannot be read as an address (%w), so "+
+			"this run is talking to %q, which cannot be read as an address (%s), so "+
 				"the stored token is not being reused — you will be asked to log in "+
-				"again", effective, err)
+				"again", redactUserinfo(effective), redactUserinfo(err.Error()))
 	}
 
 	if storedKey != effectiveKey {
 		return fmt.Errorf(
 			"the stored token was issued against %s and this run is talking to %s, "+
 				"so it is not being reused — you will be asked to log in again",
-			stored, effective)
+			redactUserinfo(stored), redactUserinfo(effective))
 	}
 	return nil
+}
+
+// authorityMark is what starts a URL's authority. Written as the two
+// slashes alone rather than with the scheme separator, because a literal
+// carrying that separator is a compiled-in URL as far as this
+// repository's own guard is concerned — correctly, and the guard is not
+// loosened for the code that trips it.
+const authorityMark = "//"
+
+// userinfoPlaceholder stands in for a username and password. It replaces
+// them rather than dropping them, so a reader can still see that the URL
+// carried credentials — a silently shortened URL is a second, quieter
+// way of telling somebody something untrue about their own file.
+const userinfoPlaceholder = "[redacted]"
+
+// redactUserinfo replaces the userinfo of every URL-shaped substring
+// with a placeholder. It is the ONE helper every printed URL in this
+// package goes through.
+//
+// The canonical form this package compares against refuses a URL
+// carrying a username or password, and argues that doing so keeps a
+// credential out of a comparison string. It was in the PRINTED string
+// instead — measured twice inside one report, once from the stored value
+// and once from inside the wrapped error explaining why it could not be
+// read. A comparison string is seen by nobody; a printed one is in a
+// terminal, a CI log and a screenshot.
+//
+// It works on whole MESSAGES rather than on URLs alone, which is why
+// there is one helper and not two. Half of the leak arrived inside an
+// error string built somewhere else, and a helper that only accepted a
+// bare URL would have missed exactly that half.
+func redactUserinfo(s string) string {
+	var b strings.Builder
+	rest := s
+	for {
+		start := strings.Index(rest, authorityMark)
+		if start < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		start += len(authorityMark)
+		b.WriteString(rest[:start])
+		rest = rest[start:]
+
+		end := strings.IndexFunc(rest, endsAuthority)
+		if end < 0 {
+			end = len(rest)
+		}
+		authority := rest[:end]
+		// The LAST at-sign, not the first: a password may contain one,
+		// and only the last can be the separator.
+		if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+			b.WriteString(userinfoPlaceholder)
+			b.WriteString(authority[at:])
+		} else {
+			b.WriteString(authority)
+		}
+		rest = rest[end:]
+	}
+}
+
+// endsAuthority reports whether r ends a URL's authority.
+//
+// The set is deliberately generous. None of these can appear in a host
+// or a port, and the message this runs over has the URL embedded in
+// prose and usually in quotes, so stopping at any of them is right and
+// stopping early is harmless — what is between the slashes and the last
+// at-sign is what gets replaced.
+func endsAuthority(r rune) bool {
+	switch r {
+	case '/', '?', '#', '"', '\'', '`', ' ', '\t', '\n', ',', '(', ')', ';':
+		return true
+	}
+	return false
 }
 
 // renameFile is os.Rename, reached through a variable so the failure that
@@ -624,9 +771,18 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 	if _, err := api.CanonicalKey(issuedAgainst); err != nil {
 		return fmt.Errorf(
 			"refusing to write a config file that does not say which server its token "+
-				"was issued against: %w — without it the next run cannot tell whether "+
+				"was issued against: %s — without it the next run cannot tell whether "+
 				"the stored token belongs to it, so it would ask for a login every "+
-				"time and the file would look perfectly correct while it did", err)
+				"time and the file would look perfectly correct while it did",
+			redactUserinfo(err.Error()))
+	}
+	if c.Version != 0 && c.Version != SchemaVersion {
+		return fmt.Errorf(
+			"refusing to rewrite the config file at %s: it records schema version %d "+
+				"and this build writes version %d, so saving would replace a version "+
+				"number with a claim about the file that is not true. The load path "+
+				"declined to repair this file; writing it a moment later is the same "+
+				"repair with a different name", c.Path, c.Version, SchemaVersion)
 	}
 
 	if c.Path == "" {
@@ -647,7 +803,7 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 		return err
 	}
 
-	f, err := os.CreateTemp(dir, ".config-*.json")
+	f, err := os.CreateTemp(dir, tempPattern)
 	if err != nil {
 		return fmt.Errorf("could not create a temporary file in %s: %w", dir, err)
 	}
@@ -685,6 +841,7 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 				"config, if there was one, is untouched", c.Path, err)
 	}
 	renamed = true
+	sweepTempLitter(dir)
 
 	// The Config describes the file, so it is brought into line with it
 	// — and only now. A Save that failed leaves the value exactly as it
@@ -693,6 +850,54 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 	c.Token = token
 	c.APIURL = issuedAgainst
 	return nil
+}
+
+// tempPattern is the name the temp file is created under, and the
+// pattern the sweep looks for. One constant, because a sweep that
+// searched for a shape the writer had stopped using would find nothing
+// and report success.
+const tempPattern = ".config-*.json"
+
+// sweepTempLitter removes this package's own leftover temp files from
+// dir. BEST EFFORT: it never reports, and it never fails a save.
+//
+// # What it is for
+//
+// The deferred remove in Save covers the ERROR path. A crash between the
+// write and the rename is a different thing and a defer never runs for
+// it — what is left is a 0600 file holding the complete token, under a
+// name nothing ever looks at again, so it outlives every later rotation
+// of the credential inside it.
+//
+// # The residue, stated rather than implied
+//
+// A crash DURING the sweep leaves litter, and this makes no attempt to
+// be atomic about tidying. A failed remove is ignored, because the file
+// being written is worth more than the files being tidied and there is
+// nothing useful to tell a user about either.
+//
+// It also runs after the rename rather than before it, which is the
+// deliberate half of a real trade: a second process writing its own
+// config at the same instant has a temp file in this directory, and this
+// would remove it. That costs the other process a failed save and
+// nothing else — its rename fails, its own original is untouched — where
+// sweeping first would risk the same thing while ALSO leaving this
+// call's litter behind if it went on to fail.
+func sweepTempLitter(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		// A directory whose name matches is not litter this made, and
+		// removing one needs a different call anyway.
+		if entry.IsDir() {
+			continue
+		}
+		if matched, err := filepath.Match(tempPattern, entry.Name()); err == nil && matched {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 // marshal renders the file's bytes: every field this build does not know
