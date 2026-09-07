@@ -67,13 +67,26 @@ func RenderPreflight(p Prompter, report check.Report, elapsed time.Duration) err
 		p.Step("Pre-flight took %s.", elapsed.Round(100*time.Millisecond))
 	}
 
-	// NOT-RUN IS READ FROM THE MANIFEST, never from the absence of a
+	// A DECLINE IS READ FROM THE MANIFEST, never from the absence of a
 	// finding. A check emits nothing when it finds nothing and nothing
 	// when it could not look, so from out here those two are the same
 	// silence — and a skipped check rendered as a tick is a lie the user
 	// will act on.
-	notRun := manifest.Declines()
-	for _, row := range notRun {
+	//
+	// ONLY THE ENVIRONMENTAL ONES REACH A PERSON, and that split is the
+	// whole of what the kind buys. Something outside the check stopped
+	// it looking: the user can see that and may be able to fix it, so it
+	// is shown and it is asked about. A check that LOOKED and chose not
+	// to guess is naming nothing anybody did and nothing anybody can
+	// change — the standing criterion says an advisory names something
+	// the user can act on or observe, or it does not fire, and that
+	// holds through the manifest exactly as it holds through a finding.
+	// The by-design rows stay in the report for a caller that asks.
+	//
+	// The alternative is a deploy that stops to ask a person about a
+	// config containing a template literal.
+	environmental := manifest.DeclinesOfKind(check.Environmental)
+	for _, row := range environmental {
 		p.Step("%s", skipped(row))
 	}
 
@@ -111,7 +124,7 @@ func RenderPreflight(p Prompter, report check.Report, elapsed time.Duration) err
 	// with a sentence in front of it. A project whose package.json could
 	// not be read would otherwise reach the packer with nobody having
 	// confirmed it has a lockfile.
-	if len(warnings) == 0 && len(notRun) == 0 {
+	if len(warnings) == 0 && len(environmental) == 0 {
 		return nil
 	}
 

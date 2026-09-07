@@ -222,6 +222,14 @@ func duplicateIDs(m Manifest) []string {
 // This is the assertion that makes several producers safe. Each one can
 // only see its own coverage; only the union can be compared against what
 // was supposed to be covered.
+//
+// IT IS A LAMP, NOT A DOOR. Combine calls it and refuses on failure, so
+// the gate is the answer and a caller reaching for this is asking about
+// a manifest that has NOT passed the gate. That is a legitimate thing to
+// want — a producer diagnosing its own coverage before combining wants
+// exactly this — and the only risk is a reader mistaking it for the
+// enforcement. It is not: nothing downstream is safer because somebody
+// called it.
 func CoverageGaps(m Manifest) (missing, unexpected []string) {
 	covered := make(map[string]bool, len(m))
 	for _, row := range m {

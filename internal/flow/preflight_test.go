@@ -1137,3 +1137,103 @@ func TestPreflightRenderPrefersAnAuthoredHeadline(t *testing.T) {
 		t.Errorf("output does not carry the authored headline %q:\n%s", warn.What, out)
 	}
 }
+
+// ---------------------------------------------------------------------
+// The two kinds of decline cost different things
+// ---------------------------------------------------------------------
+
+// TestPreflightRenderKeepsAByDesignDeclineOutOfSight. A check that
+// looked and chose not to guess is naming nothing the user did and
+// nothing they can change, so it renders below advisory: shown by no
+// surface by default, asked about by nothing, and still present in the
+// structured result for a caller that wants it.
+//
+// That is the standing criterion holding through the manifest — an
+// advisory names something the user can act on or observe, or it does
+// not fire — and the alternative is a deploy that stops to ask about a
+// config containing a template literal.
+//
+// MUTATION (required): make ByDesign behave as Environmental. This row
+// reds on the prompt count and on the output. MUST NOT MOVE: every
+// environmental row below and above.
+func TestPreflightRenderKeepsAByDesignDeclineOutOfSight(t *testing.T) {
+	r := &recorder{answer: true}
+	report := reportOf(t, nil,
+		byDesign(check.IDBuildFormat, "the config builds this value at run time"))
+
+	packed, err := gatedDeploy(r, report, 0)
+
+	if err != nil || !packed {
+		t.Fatalf("packed = %v, err = %v, want the deploy to carry on", packed, err)
+	}
+	if len(r.prompts) != 0 {
+		t.Errorf("prompts = %v, want none — nothing here is anybody's decision", r.prompts)
+	}
+	if r.out.Len() != 0 {
+		t.Errorf("output = %q, want silence", r.out.String())
+	}
+
+	// Kept, not discarded: a caller that asks gets it.
+	found := false
+	for _, row := range report.Manifest() {
+		if row.CheckID == check.IDBuildFormat {
+			found = true
+			if row.Status != check.Declined || row.Kind != check.ByDesign {
+				t.Errorf("row = %+v, want a by-design decline", row)
+			}
+			if row.Reason == "" {
+				t.Error("the reason was dropped; the whole point of keeping the row is the reason")
+			}
+		}
+	}
+	if !found {
+		t.Error("the by-design row is not in the report at all")
+	}
+}
+
+// TestPreflightRenderNonInteractiveProceedsOnAByDesignDecline. The other
+// half of "no prompt": with nobody to ask, there is still nothing to
+// ask, so the deploy is not refused. An environmental decline in the
+// same position refuses, and the row below asserts the pair together.
+func TestPreflightRenderNonInteractiveProceedsOnAByDesignDecline(t *testing.T) {
+	r := &recorder{answerTo: ui.ErrNotInteractive}
+
+	packed, err := gatedDeploy(r, reportOf(t, nil,
+		byDesign(check.IDBuildFormat, "the config builds this value at run time")), 0)
+
+	if err != nil {
+		t.Errorf("error = %#v, want nil — there was no question to fail to ask", err)
+	}
+	if !packed {
+		t.Error("the deploy was refused over something nobody can act on")
+	}
+}
+
+// TestPreflightRenderChargesTheTwoKindsDifferently is the pair in one
+// report, which is the only place the distinction can be seen working
+// rather than asserted twice. One question, about the environmental one
+// only; the by-design one appears nowhere.
+func TestPreflightRenderChargesTheTwoKindsDifferently(t *testing.T) {
+	r := &recorder{answer: true}
+
+	err := RenderPreflight(r, reportOf(t, nil,
+		environmental(check.IDLockfile, "couldn't read package.json"),
+		byDesign(check.IDBuildFormat, "the config builds this value at run time")), 0)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(r.prompts) != 1 {
+		t.Fatalf("prompts = %d %v, want one, covering the environmental decline",
+			len(r.prompts), r.prompts)
+	}
+	out := r.out.String()
+	if !strings.Contains(out, check.IDLockfile) {
+		t.Errorf("output does not name the environmental decline:\n%s", out)
+	}
+	for _, hidden := range []string{check.IDBuildFormat, "builds this value at run time"} {
+		if strings.Contains(out, hidden) {
+			t.Errorf("output carries the by-design decline (%q):\n%s", hidden, out)
+		}
+	}
+}
