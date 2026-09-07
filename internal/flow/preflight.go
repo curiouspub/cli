@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,7 +51,18 @@ const slowPreflight = 2 * time.Second
 //   - the no-terminal sentinel — warnings pending with nobody to ask.
 //     Neither continue nor abort: both would be the program deciding
 //     something it was not asked to decide.
-func RenderPreflight(p Prompter, findings []check.Finding, manifest check.Manifest, elapsed time.Duration) error {
+func RenderPreflight(p Prompter, report check.Report, elapsed time.Duration) error {
+	// THE ONLY DOOR. A Report cannot be built outside the result
+	// package, so reaching this function means the gate ran: coverage,
+	// duplicates, claimed ids and declared severities were all checked
+	// by a type rather than by a caller remembering to ask. The zero
+	// value is the one thing a caller can still name, and it is a
+	// programming error rather than anything a user did.
+	if !report.Valid() {
+		return errors.New("pre-flight was handed a result that never passed the gate")
+	}
+	findings, manifest := report.Findings(), report.Manifest()
+
 	if elapsed > slowPreflight {
 		p.Step("Pre-flight took %s.", elapsed.Round(100*time.Millisecond))
 	}

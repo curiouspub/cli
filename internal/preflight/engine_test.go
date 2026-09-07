@@ -777,3 +777,65 @@ func TestEngineStatsTheRootThroughTheFilesystemItWasGiven(t *testing.T) {
 		t.Errorf("manifest = %+v, want the check reported as having run", res.Manifest)
 	}
 }
+
+// TestRunProducesReportsTheGateRefuses covers the two shapes this engine
+// can legally emit that must never reach a renderer.
+//
+// NEITHER IS A DEFECT IN Run, and that is the point of putting them
+// here. An empty registration and a duplicated id are wiring mistakes
+// the engine has no way to distinguish from a deliberate choice, so it
+// reports what it was asked to do and the gate is what refuses the
+// result. Before the gate existed, both rendered: the empty one as a
+// clean project that let a deploy proceed, the duplicated one as three
+// skipped-check lines for one check with the deploy proceeding after.
+//
+// MUTATION: skip the coverage enforcement — the empty case reds.
+// MUTATION: skip the duplicate enforcement — the duplicate case reds.
+// MUST NOT MOVE: every row that registers each id exactly once.
+func TestRunProducesReportsTheGateRefuses(t *testing.T) {
+	root := engineFixture(t, "clean")
+
+	t.Run("no checks registered at all", func(t *testing.T) {
+		res := Run(nil, OSFileSystem{}, root)
+		if len(res.Findings) != 0 || len(res.Manifest) != 0 {
+			t.Fatalf("Run(nil) = %+v, want an empty result", res)
+		}
+
+		report, err := check.Combine(res)
+		if err == nil {
+			t.Fatal("an engine with no checks produced a usable report")
+		}
+		if report.Valid() {
+			t.Error("a refused Combine returned a validated report")
+		}
+		var gap *check.CoverageError
+		if !errors.As(err, &gap) {
+			t.Fatalf("error = %#v, want a coverage failure naming what nobody ran", err)
+		}
+		if len(gap.Missing) != len(check.DeclaredOrder()) {
+			t.Errorf("Missing = %v, want every declared check", gap.Missing)
+		}
+	})
+
+	t.Run("two legal registrations claiming one id", func(t *testing.T) {
+		var journal []string
+		res := Run([]Check{
+			newStub(&journal, Result{}, check.IDAstroDep, check.IDAstroDep).check(),
+			newStub(&journal, Result{}, check.IDAstroDep).check(),
+		}, OSFileSystem{}, root)
+
+		if len(res.Manifest) != 3 {
+			t.Fatalf("manifest = %v, want the three rows two registrations produce",
+				manifestIDs(res.Manifest))
+		}
+
+		_, err := check.Combine(res)
+		var dup *check.DuplicateCoverageError
+		if !errors.As(err, &dup) {
+			t.Fatalf("error = %#v, want a duplicate-claim failure", err)
+		}
+		if !equalStrings(dup.CheckIDs, []string{check.IDAstroDep}) {
+			t.Errorf("CheckIDs = %v, want [%s]", dup.CheckIDs, check.IDAstroDep)
+		}
+	})
+}

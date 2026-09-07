@@ -54,24 +54,104 @@ func (e *DuplicateCoverageError) Error() string {
 // development URLs in three files are three findings from one check, and
 // that is the shape the report wants.
 //
-// Nothing the caller passed in is disturbed. A producer may hold on to
-// its own result — to render it separately, or to report on itself — and
-// a merge that sorted its argument in place would reorder something it
-// does not own, with the symptom surfacing far from here.
-func Combine(parts ...Results) (Results, error) {
-	var out Results
+// Nothing the caller passed in is disturbed, and that includes the
+// CONTENTS of what it passed. Paths is copied rather than shared: a
+// producer may keep its own result to render or report on separately,
+// and a caller writing to a path in the combined report used to reach
+// into the producer's own finding, with the symptom surfacing a long way
+// from here.
+//
+// IT IS THE ONLY THING THAT RETURNS A Report, which is what turns every
+// promise below from a property of a call site into a property of a
+// type. See Report.
+//
+// FOUR ENFORCEMENTS, in this order:
+//
+//  1. Duplicate claims, first — a check claimed twice makes every later
+//     question ill-posed, so it is worth answering before them.
+//  2. Coverage, in both directions.
+//  3. Findings under ids nobody claimed.
+//  4. Severities that are not one of the three constants.
+//
+// A caller gets the first failure rather than all four. They are not
+// independent — one wiring mistake usually trips several — and a reader
+// fixing the first will re-run anyway.
+func Combine(parts ...Results) (Report, error) {
+	var findings []Finding
+	var manifest Manifest
 	for _, part := range parts {
-		out.Findings = append(out.Findings, part.Findings...)
-		out.Manifest = append(out.Manifest, part.Manifest...)
+		for _, f := range part.Findings {
+			findings = append(findings, copyFinding(f))
+		}
+		manifest = append(manifest, part.Manifest...)
 	}
 
-	if duplicates := duplicateIDs(out.Manifest); len(duplicates) > 0 {
-		return Results{}, &DuplicateCoverageError{CheckIDs: duplicates}
+	if duplicates := duplicateIDs(manifest); len(duplicates) > 0 {
+		return Report{}, &DuplicateCoverageError{CheckIDs: duplicates}
 	}
 
-	SortFindings(out.Findings)
-	SortManifest(out.Manifest)
-	return out, nil
+	if missing, unexpected := CoverageGaps(manifest); len(missing) > 0 || len(unexpected) > 0 {
+		return Report{}, &CoverageError{Missing: missing, Unexpected: unexpected}
+	}
+
+	if unclaimed := unclaimedIDs(findings, manifest); len(unclaimed) > 0 {
+		return Report{}, &UnclaimedFindingError{CheckIDs: unclaimed}
+	}
+
+	if undeclared := undeclaredSeverityIDs(findings); len(undeclared) > 0 {
+		return Report{}, &UndeclaredSeverityError{CheckIDs: undeclared}
+	}
+
+	SortFindings(findings)
+	SortManifest(manifest)
+	return Report{findings: findings, manifest: manifest, validated: true}, nil
+}
+
+// copyFinding returns a finding that shares nothing with the one it was
+// given. Only Paths needs it — every other field is a string.
+func copyFinding(f Finding) Finding {
+	if f.Paths == nil {
+		return f
+	}
+	paths := make([]string, len(f.Paths))
+	copy(paths, f.Paths)
+	f.Paths = paths
+	return f
+}
+
+// unclaimedIDs returns every check id a finding reports on that no
+// manifest row claims, deterministically ordered.
+func unclaimedIDs(findings []Finding, m Manifest) []string {
+	claimed := make(map[string]bool, len(m))
+	for _, row := range m {
+		claimed[row.CheckID] = true
+	}
+
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range findings {
+		if !claimed[f.CheckID] && !seen[f.CheckID] {
+			seen[f.CheckID] = true
+			out = append(out, f.CheckID)
+		}
+	}
+	sortIDs(out)
+	return out
+}
+
+// undeclaredSeverityIDs returns the check ids of findings whose severity
+// is not one of the three constants, deterministically ordered.
+func undeclaredSeverityIDs(findings []Finding) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range findings {
+		if !f.Severity.Declared() && !seen[f.CheckID] {
+			seen[f.CheckID] = true
+			out = append(out, f.CheckID)
+		}
+	}
+	sortIDs(out)
+	return out
 }
 
 // duplicateIDs returns every check id claimed more than once, in the

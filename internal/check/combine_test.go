@@ -58,12 +58,12 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 	}
 
 	wantFindings := []string{"not an Astro project", "no pages directory", "a development URL"}
-	if msgs := messages(got.Findings); !reflect.DeepEqual(msgs, wantFindings) {
+	if msgs := messages(got.Findings()); !reflect.DeepEqual(msgs, wantFindings) {
 		t.Errorf("findings = %v, want %v — hard stops first, then the declared order",
 			msgs, wantFindings)
 	}
 	wantManifest := []string{IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost}
-	if rows := ids(got.Manifest); !reflect.DeepEqual(rows, wantManifest) {
+	if rows := ids(got.Manifest()); !reflect.DeepEqual(rows, wantManifest) {
 		t.Errorf("manifest = %v, want the declared order %v", rows, wantManifest)
 	}
 }
@@ -145,16 +145,24 @@ func TestCombineRefusesADuplicateInsideOneProducer(t *testing.T) {
 	}
 }
 
-// TestCombineOfNothingIsEmptyAndFine. Zero producers is a legitimate
-// question with a legitimate answer, and an error there would make every
-// caller special-case a state that means nothing went wrong.
-func TestCombineOfNothingIsEmptyAndFine(t *testing.T) {
+// TestCombineOfNothingIsRefused, and this row's assertion is the REVERSE
+// of what it used to make. It read that zero producers was a legitimate
+// question with a legitimate answer, and that erroring would make every
+// caller special-case a state where nothing went wrong.
+//
+// Nothing HAS gone wrong in the project, and everything has gone wrong
+// in the wiring: an engine registered with no checks produced an empty
+// manifest, no findings and no error, and a renderer read that as a
+// clean project and let the deploy proceed. The empty answer is
+// indistinguishable from a passing one at exactly the layer that
+// decides, which is what the coverage rule exists to prevent.
+func TestCombineOfNothingIsRefused(t *testing.T) {
 	got, err := Combine()
-	if err != nil {
-		t.Fatalf("Combine() of nothing: %v", err)
+	if err == nil {
+		t.Fatalf("Combine() of nothing produced a usable report: %+v", got)
 	}
-	if len(got.Findings) != 0 || len(got.Manifest) != 0 {
-		t.Errorf("Combine() of nothing = %+v, want empty", got)
+	if got.Valid() {
+		t.Error("a refused Combine still returned a validated report")
 	}
 }
 
@@ -171,9 +179,15 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "second"},
 			{CheckID: IDAstroDep, Severity: SeverityHardStop, Message: "first"},
 		},
+		// Deliberately out of declared order, and complete: the row is
+		// about what Combine does to its argument, and a manifest that
+		// did not pass the gate would never reach the sort at all.
 		Manifest: Manifest{
 			{CheckID: IDLocalhost, Ran: true},
 			{CheckID: IDAstroDep, Ran: true},
+			{CheckID: IDLockfile, Ran: true},
+			{CheckID: IDPagesDir, Ran: true},
+			{CheckID: IDBuildFormat, Ran: true},
 		},
 	}
 
@@ -184,7 +198,8 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 	if msgs := messages(producer.Findings); !reflect.DeepEqual(msgs, []string{"second", "first"}) {
 		t.Errorf("the caller's findings were reordered: %v", msgs)
 	}
-	if rows := ids(producer.Manifest); !reflect.DeepEqual(rows, []string{IDLocalhost, IDAstroDep}) {
+	if rows := ids(producer.Manifest); !reflect.DeepEqual(rows,
+		[]string{IDLocalhost, IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat}) {
 		t.Errorf("the caller's manifest was reordered: %v", rows)
 	}
 }

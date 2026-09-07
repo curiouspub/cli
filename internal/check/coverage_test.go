@@ -64,7 +64,7 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 		t.Fatalf("combining the producers: %v", err)
 	}
 
-	missing, unexpected := check.CoverageGaps(combined.Manifest)
+	missing, unexpected := check.CoverageGaps(combined.Manifest())
 	if len(missing) != 0 {
 		t.Errorf("declared checks nobody covered: %v — every id in the declared "+
 			"universe needs a producer, or the report has a hole nothing reports", missing)
