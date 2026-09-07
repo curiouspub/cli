@@ -36,47 +36,49 @@ var errConfigTooLarge = errors.New("exceeds the 256 KB limit this check reads")
 // names it searches for, in the order it searches for them, with the
 // first match winning.
 //
-// All six names Astro has ever searched for are carried, in two groups:
+//	position  candidate
+//	1         astro.config.mjs
+//	2         astro.config.js
+//	3         astro.config.ts
+//	4         astro.config.mts
 //
-//	position  candidate            status
-//	1         astro.config.mjs     current
-//	2         astro.config.js      current
-//	3         astro.config.ts      current
-//	4         astro.config.mts     current
-//	5         astro.config.cjs     legacy — dropped upstream after 5.x
-//	6         astro.config.cts     legacy — dropped upstream after 5.x
+// Confirmed directly against two real, independently installed Astro
+// packages — versions 7.2.1 and 7.2.10 — both of which freeze exactly
+// these four names, in this order, in their own config-search module.
 //
-// The first four are confirmed directly against two real, independently
-// installed CURRENT Astro packages — versions 7.2.1 and 7.2.10 — both of
-// which freeze exactly these four names, in this order, in their own
-// config-search module, with no trace of the legacy two. A project still
-// on a version that searches for six is rare, but this check reads the
-// legacy two anyway — the lenient direction, since a project still
-// carrying one gets its srcDir read rather than ignored — in the same
-// order those older releases searched for them, because resolving from
-// the file Astro would NOT load is exactly the false positive this check
-// exists to avoid, and guessing an order is how that happens. This tool
-// has no live copy of an Astro release old enough to search for six to
-// re-confirm today — a version 5.4.2 install checked during this file's
-// own history turned out to belong to an unrelated project and does not
-// stand in for one — so positions 5 and 6 are this tool's own documented
-// preference among the legacy pair rather than a fact re-derived from a
-// running instance, unlike positions 1 through 4, which are.
+// WHY ".cjs" AND ".cts" ARE ABSENT, since a reader who remembers them
+// will assume an omission. Astro searched for six names on its 5.x line
+// and dropped the two CommonJS spellings after it. This check carried
+// them anyway for a while, reasoning that reading one was the lenient
+// direction — a project still on 5.x would get its srcDir read rather
+// than ignored. That reasoning was wrong in the direction this whole
+// task is about: on a CURRENT Astro, a stale astro.config.cjs left in a
+// project is a file the build never loads, so every claim this check
+// drew from one was a confident statement about a file with no effect.
+// For srcDir that produced a warning about the wrong directory; for
+// build.format it produced a routing warning about a setting Astro would
+// never read at all. The lenience was priced against a project on a
+// version this tool has no way to detect, and paid for with false
+// positives on every project on a current one.
 //
-// A dedicated test pins this slice against the exact six-entry list
-// above by deep equality — every position, not only the legacy pair.
-// Before that test existed, only the legacy pair was ever asserted by
-// anything in this suite, so a swap among the four CURRENT extensions —
-// the four positions that actually are facts about a running Astro,
-// corrected twice and re-derived against two live installs — passed the
-// whole suite silently.
+// A project still on 5.x with only a .cjs or .cts config now gets "no
+// astro.config file was found" — an admission, and this check's cheapest
+// possible outcome, since every finding it can produce is advisory.
+// Trading a wrong claim for an admission is the trade this task makes
+// everywhere else, and there is no reason for these two names to be the
+// exception.
+//
+// A dedicated test pins this slice against the exact four-entry list
+// above by deep equality — every position, not just one. Before that
+// test existed, only the legacy pair was ever asserted by anything in
+// this suite, so a swap among the CURRENT extensions — the positions
+// that actually are facts about a running Astro — passed the whole suite
+// silently.
 var configCandidates = []string{
 	"astro.config.mjs",
 	"astro.config.js",
 	"astro.config.ts",
 	"astro.config.mts",
-	"astro.config.cjs",
-	"astro.config.cts",
 }
 
 // FS is the narrow filesystem surface this check needs. Production code
@@ -122,7 +124,11 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 // CheckAstroConfig is the pages-directory pre-flight check, config-aware.
 // It runs two independent concerns off of at most one file read:
 //
-//   - pages-dir only runs when <root>/src/pages does not exist. It tries
+//   - pages-dir runs only when <root>/src/pages is established to be
+//     absent — a successful stat saying so, not merely a stat that
+//     failed; the third state ("couldn't look") gets its own message and
+//     stops there, because resolving a custom srcDir would be answering
+//     a question nobody has shown needs asking. It tries
 //     to resolve a custom srcDir out of astro.config and warns when the
 //     resolved directory has no pages/ subdirectory either. It never
 //     hard-stops, on any outcome: a real Astro build with no pages
@@ -142,86 +148,156 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 //   - build-format runs on every project, because it controls whether a
 //     built page lands at .../index.html or as a flat .html file, and
 //     only one of those shapes is reachable once published. It can only
-//     warn, never hard stop, and it stays silent whenever it cannot
-//     positively resolve the value — the opposite default from
-//     pages-dir, because here "cannot tell" overwhelmingly means the
-//     default applies, and warning on every config this check cannot
-//     fully parse would be noise on projects that are otherwise fine.
+//     warn, never hard stop, and its default is SILENCE where pages-dir's
+//     is a warning: here "cannot tell" overwhelmingly means the default
+//     applies, and warning on every config this check cannot fully parse
+//     would be noise on projects that are otherwise fine. Two states
+//     break that silence — see buildFormatFinding — and both are cases
+//     where the scan knows it could not finish looking rather than cases
+//     where it looked and found nothing.
 //
 // Both concerns are read from the same parse of the same file, so a
 // project whose pages directory is exactly where Astro expects it never
 // has its config opened more than once, and a project with no config at
 // all never has one opened.
 //
-// A THIRD, independent note is attached whenever more than one candidate
-// config file exists on disk, regardless of which of the two concerns
-// above produced anything: which file Astro's own resolution order picks
-// is exactly the kind of thing that surprises people, and now that
-// build-format opens the config on every project, this is no longer
-// something only the pages-dir path can observe.
+// TWO further notes are attached independently of either concern, both
+// about WHICH file Astro would load rather than about what is in one:
+// that more than one candidate config exists on disk (Astro's resolution
+// order picks the first, which is exactly the kind of thing that
+// surprises people), and that a candidate could not be checked for at all
+// (in which case the file this check read may not be the file Astro
+// loads). Both attach to a pages-dir finding if one exists and stand
+// alone if none does — the ambiguity note used to be decided inside the
+// pages-dir path, and was therefore silently dropped on every project
+// whose pages directory was already where Astro expects it.
 func CheckAstroConfig(fsys FS, root string) []Finding {
-	pagesPresent := isDir(fsys, filepath.Join(root, "src", "pages"))
+	pagesDir := isDir(fsys, filepath.Join(root, "src", "pages"))
 
-	configPath, extraCandidates, found := findConfig(fsys, root)
+	configPath, extraCandidates, uncheckedCandidates, found := findConfig(fsys, root)
 	if !found {
-		if pagesPresent {
-			return nil
+		if pagesDir == present {
+			return finish(nil, "", uncheckedCandidates)
 		}
-		return []Finding{{
+		return finish([]Finding{{
 			CheckID:  CheckIDPagesDir,
 			Severity: SeverityWarning,
-			Message: "Couldn't find src/pages, and no astro.config file was found to check " +
-				"for a custom srcDir. If your pages live somewhere else, this is fine and the " +
-				"build will work. If they don't, the build will still succeed — and publish a " +
-				"site with nothing in it.",
-		}}
-	}
-
-	content, readErr := readConfigCapped(fsys, configPath)
-	if readErr != nil {
-		if pagesPresent {
-			return nil
-		}
-		return []Finding{{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
-			Message: fmt.Sprintf(
-				"Couldn't find src/pages, and %s couldn't be read (%v), so a custom srcDir "+
-					"couldn't be checked either. If your pages live somewhere else, this is "+
-					"fine and the build will work. If they don't, the build will still succeed "+
-					"— and publish a site with nothing in it.",
-				filepath.Base(configPath), readErr),
-		}}
+			Message:  openingClause(pagesDir) + noConfigClause(uncheckedCandidates) + advisoryTail,
+		}}, "", uncheckedCandidates)
 	}
 
 	configName := filepath.Base(configPath)
+
+	content, readErr := readConfigCapped(fsys, configPath)
+	if readErr != nil {
+		if pagesDir == present {
+			return finish(nil, configName, uncheckedCandidates)
+		}
+		return finish([]Finding{{
+			CheckID:  CheckIDPagesDir,
+			Severity: SeverityWarning,
+			Message: fmt.Sprintf(
+				"%s%s couldn't be read (%v), so a custom srcDir couldn't be checked either.%s",
+				openingClause(pagesDir), configName, readErr, advisoryTail),
+		}}, configName, uncheckedCandidates)
+	}
+
 	parsed := parseAstroConfig(content)
 
 	var findings []Finding
-	if !pagesPresent {
+	switch pagesDir {
+	case absent:
 		findings = append(findings, resolvePagesDirFindings(fsys, root, configName, parsed)...)
+	case undetermined:
+		// The premise of the whole pages-dir concern — that src/pages is
+		// not there — could not be established, so nothing downstream of
+		// it is attempted: resolving a custom srcDir would be answering
+		// a question nobody has shown needs asking, and the answer would
+		// be printed under a sentence claiming src/pages is missing.
+		findings = append(findings, Finding{
+			CheckID:  CheckIDPagesDir,
+			Severity: SeverityWarning,
+			Message: "Couldn't check whether src/pages exists (the directory couldn't be " +
+				"read), so this check can't tell whether your pages are where Astro looks " +
+				"for them." + advisoryTail,
+		})
+	case present:
 	}
+
 	if bf := buildFormatFinding(configName, parsed); bf != nil {
 		findings = append(findings, *bf)
 	}
 
 	if len(extraCandidates) > 0 {
-		findings = attachAmbiguityNote(findings, configName, extraCandidates)
+		findings = attachPagesDirNote(findings, ambiguousConfigNote(configName, extraCandidates))
 	}
 
-	return findings
+	return finish(findings, configName, uncheckedCandidates)
 }
 
-// attachAmbiguityNote folds the ambiguous-candidate note into findings:
-// onto the first existing pages-dir finding, if resolvePagesDirFindings
-// already produced one — preserving the single-message shape earlier
-// callers of this check assert on — or as its own standalone pages-dir
-// finding otherwise. The "otherwise" branch is now the common one: with
-// build-format read on every project, a pages-dir finding often does not
-// exist at all (pages already present, or srcDir resolved cleanly), and
-// the note used to be silently dropped on exactly that path.
-func attachAmbiguityNote(findings []Finding, configName string, extra []string) []Finding {
-	note := ambiguousConfigNote(configName, extra)
+// advisoryTail is the sentence every pages-dir warning ends with, held in
+// one place so it cannot drift between the seven message shapes that use
+// it. It names the consequence a reviewer established by running real
+// builds — a missing pages directory does not fail an Astro build, it
+// exits 0 and publishes an empty output directory — and deliberately
+// does not name the one an earlier draft asserted.
+const advisoryTail = " If your pages live somewhere else, this is fine and the build will work. " +
+	"If they don't, the build will still succeed — and publish a site with nothing in it."
+
+// openingClause opens a pages-dir message with a claim this check can
+// actually support: that src/pages is missing, or only that it could not
+// be looked at. It is a function rather than a literal because the same
+// seven messages are reached from both states, and the difference between
+// them is exactly the difference this round exists to stop collapsing.
+func openingClause(pagesDir presence) string {
+	if pagesDir == undetermined {
+		return "Couldn't check whether src/pages exists, and "
+	}
+	return "Couldn't find src/pages, and "
+}
+
+// noConfigClause says no config file was found — or, when a candidate's
+// type could not be established, says only that none was found among the
+// ones this check could look at, naming the ones it could not.
+func noConfigClause(unchecked []string) string {
+	if len(unchecked) == 0 {
+		return "no astro.config file was found to check for a custom srcDir."
+	}
+	return "no astro.config file could be read to check for a custom srcDir (" +
+		joinWithAnd(unchecked) + " couldn't be checked)."
+}
+
+// finish attaches the unchecked-candidate note, if one is warranted, to
+// whatever findings the run produced. It is the last thing every return
+// path in CheckAstroConfig goes through, so the note cannot be dropped by
+// an early return — which is how the ambiguity note it sits beside was
+// silently lost on the pages-present path once build.format started
+// opening the config on every project.
+//
+// The note is only warranted when a config WAS found, and then it matters
+// beyond tidiness: an unchecked candidate earlier in Astro's own
+// resolution order would be the file Astro actually loads, so the one
+// this check read may not be the one that counts. With no winner there is
+// nothing to qualify — noConfigClause has already said, in the finding
+// itself, which candidates could not be checked.
+func finish(findings []Finding, winner string, unchecked []string) []Finding {
+	if len(unchecked) == 0 || winner == "" {
+		return findings
+	}
+	return attachPagesDirNote(findings, fmt.Sprintf(
+		"%s couldn't be checked for, so %s may not be the config Astro actually loads.",
+		joinWithAnd(unchecked), winner))
+}
+
+// attachPagesDirNote folds a standalone note into findings: onto the
+// first existing pages-dir finding, if there is one — preserving the
+// single-message shape earlier callers of this check assert on — or as
+// its own standalone pages-dir finding otherwise. The "otherwise" branch
+// is the common one: with build-format read on every project, a pages-dir
+// finding often does not exist at all (pages already present, or srcDir
+// resolved cleanly), and the ambiguity note used to be silently dropped
+// on exactly that path.
+func attachPagesDirNote(findings []Finding, note string) []Finding {
 	for i := range findings {
 		if findings[i].CheckID == CheckIDPagesDir {
 			findings[i].Message = findings[i].Message + " " + note
@@ -233,21 +309,29 @@ func attachAmbiguityNote(findings []Finding, configName string, extra []string) 
 
 // findConfig searches configCandidates, in order, for the first that
 // exists. Every other existing candidate is returned as extra — an
-// ambiguity worth a warning of its own, per the note on configCandidates
-// above — without ever being opened.
-func findConfig(fsys FS, root string) (winner string, extra []string, found bool) {
+// ambiguity worth a warning of its own — without ever being opened.
+//
+// unchecked is the third bucket, and it is why this returns three slices
+// instead of a name and a bool: a candidate whose type could not be
+// established (an unreadable project directory, a symlink loop) is
+// neither present nor absent, and folding it into "absent" is how "no
+// astro.config file was found" gets printed about a project that has
+// one. Nothing is opened on any path here.
+func findConfig(fsys FS, root string) (winner string, extra, unchecked []string, found bool) {
 	for _, name := range configCandidates {
-		candidate := filepath.Join(root, name)
-		if !isFile(fsys, candidate) {
-			continue
+		switch isFile(fsys, filepath.Join(root, name)) {
+		case present:
+			if !found {
+				winner, found = filepath.Join(root, name), true
+			} else {
+				extra = append(extra, name)
+			}
+		case undetermined:
+			unchecked = append(unchecked, name)
+		case absent:
 		}
-		if !found {
-			winner, found = candidate, true
-			continue
-		}
-		extra = append(extra, name)
 	}
-	return winner, extra, found
+	return winner, extra, unchecked, found
 }
 
 // readConfigCapped reads at most maxConfigBytes from name, opening it
@@ -256,14 +340,30 @@ func findConfig(fsys FS, root string) (winner string, extra []string, found bool
 // read — but that is the SPECIAL case, not the worst one: an ordinary
 // config under the cap costs a stat, an open, one or more bounded reads
 // (never more than maxConfigBytes+1 bytes, never a slurp into memory)
-// and a close. What this function does not do, on any path, is block
-// waiting for something that never arrives — isFile has already
-// restricted every candidate reaching this function to one whose
-// ultimate target (following a symlink, if there is one) is a regular
-// file, so this never opens a FIFO with no writer, a socket, or a device
-// node, reached directly or through a link. That guarantee lives in
-// isFile, not here: this function has no timeout of its own and would
-// hang exactly as before if that guarantee were ever weakened.
+// and a close.
+//
+// This function has no timeout of its own, so it relies entirely on
+// never being handed a path whose Open can block: isFile has already
+// restricted every candidate reaching here to one whose ultimate target
+// (following a symlink, if there is one) is a regular file, which rules
+// out a FIFO with no writer, a socket and a device node, reached
+// directly or through a link.
+//
+// That reliance is a CHECK-THEN-USE with a real window in it, and saying
+// otherwise was the lie in this comment's first draft. isFile stats a
+// path and this function opens it a moment later; between the two, the
+// name can be replaced. A user who swaps their own astro.config.mjs for
+// a FIFO in that window gets exactly the hang isFile exists to prevent.
+// It is not fixed here, and the reasoning is that the window is only
+// reachable by a writer inside the very directory this tool was asked to
+// read, who can equally well hang the build itself — while closing it
+// would mean opening first and stat-ing the descriptor, which this
+// package's FS interface cannot express and which does not portably
+// avoid blocking on the open in the first place. Both adversarial
+// readings that found it judged it not worth fixing. What was worth
+// fixing is that this comment claimed a guarantee the code does not
+// have: "never opens a FIFO" is true of every ordinary run and is not a
+// property, and a comment that states a property is read as one.
 func readConfigCapped(fsys FS, name string) ([]byte, error) {
 	info, err := fsys.Stat(name)
 	if err != nil {
@@ -301,17 +401,24 @@ func readConfigCapped(fsys FS, name string) ([]byte, error) {
 // how a partial scan produces a false positive, so the zero value of
 // every field below means "unresolved", never "resolved to the default".
 //
-// unresolved is a FIFTH state, and it outranks every field below it: it
-// means tokenize itself refused to produce a trustworthy token stream —
-// a bare "/" or "?" outside the enumerated subset, see tokenize's own
-// doc comment — so nothing past that point in the file was ever
-// inspected. When unresolved is true, every other field is meaningless
-// for BOTH keys, not only the one nearest whatever tripped the gate:
-// the scanner cannot bound how far a desynchronisation would have
-// reached had it kept going, so it makes no claim about anything past
-// the point where its own model stopped applying.
+// unresolved is a FIFTH state, and it outranks every field below it. It
+// means the scan hit something whose extent it cannot bound: a construct
+// outside tokenize's enumerated subset (see that function's SUBSET GATE
+// doc comment), a spread in the exported config object, or an export
+// wrapped in a call this check cannot assume is the identity function.
+// When unresolved is true, every other field is meaningless for BOTH
+// keys, not only the one nearest whatever tripped the gate — the scanner
+// cannot bound how far the unknown reaches, so it makes no claim about
+// anything past it.
+//
+// The line between this state and the LOCAL ones below it is one rule,
+// stated in full in tokenize's LOCAL VERSUS GLOBAL UNKNOWNS section: an
+// unknown is local when its extent is bounded by its own token, global
+// when it is not. A malformed escape inside a terminated string and a
+// duplicate key are both bounded, and are reported as an unreadable
+// value or an ambiguity rather than as a whole-file refusal.
 type astroConfig struct {
-	unresolved       bool   // tokenize hit a construct outside its enumerated subset; every field below is meaningless for BOTH keys
+	unresolved       bool   // the scan hit an unknown it cannot bound; every field below is meaningless for BOTH keys
 	unresolvedReason string // names the construct, for the messages below; meaningful only when unresolved
 
 	srcDirFound     bool   // a live, top-level srcDir key exists at all
@@ -336,6 +443,14 @@ type astroConfig struct {
 // any more — see CheckAstroConfig, which attaches it whenever it
 // applies, independent of whether this function ran at all.
 func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfig) []Finding {
+	warn := func(format string, args ...any) *Finding {
+		return &Finding{
+			CheckID:  CheckIDPagesDir,
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf(format, args...) + advisoryTail,
+		}
+	}
+
 	var base *Finding
 	switch {
 	case parsed.unresolved:
@@ -345,77 +460,55 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 		// didn't see one; here, the scan does not trust anything it
 		// would have produced past the point it gave up, so it says so
 		// explicitly rather than folding into the generic case.
-		base = &Finding{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
-			Message: fmt.Sprintf(
-				"Couldn't find src/pages, and %s couldn't be fully read: it contains %s, which "+
-					"this check doesn't parse, so it can't confirm a custom srcDir either. If your "+
-					"pages live somewhere else, this is fine and the build will work. If they "+
-					"don't, the build will still succeed — and publish a site with nothing in it.",
-				configName, parsed.unresolvedReason),
-		}
+		base = warn("Couldn't find src/pages, and %s couldn't be fully read: it contains %s, "+
+			"so it can't confirm a custom srcDir either.",
+			configName, parsed.unresolvedReason)
 	case parsed.srcDirAmbiguous:
-		base = &Finding{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
-			Message: fmt.Sprintf(
-				"Couldn't find src/pages, and %s sets srcDir more than once, so which value "+
-					"applies is ambiguous. If your pages live somewhere else, this is fine and "+
-					"the build will work. If they don't, the build will still succeed — and "+
-					"publish a site with nothing in it.", configName),
-		}
+		base = warn("Couldn't find src/pages, and %s sets srcDir more than once, so which "+
+			"value applies is ambiguous.", configName)
 	case !parsed.srcDirFound:
 		// No live key at all: this scan cannot tell a plain "src" project
 		// from a project whose srcDir key is written in a shape this
 		// scan doesn't parse. Astro's default is stated, never asserted
 		// to be in force — see the astroConfig doc comment above.
-		base = &Finding{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
-			Message: fmt.Sprintf(
-				"Couldn't find src/pages, and %s doesn't set srcDir in a way this check can "+
-					"read, so it can't confirm where your pages live. Astro's own default is "+
-					"src, but a missing key here doesn't prove that default is actually in "+
-					"force. If your pages live somewhere else, this is fine and the build will "+
-					"work. If they don't, the build will still succeed — and publish a site with "+
-					"nothing in it.",
-				configName),
-		}
+		base = warn("Couldn't find src/pages, and %s doesn't set srcDir in a way this check "+
+			"can read, so it can't confirm where your pages live. Astro's own default is src, "+
+			"but a missing key here doesn't prove that default is actually in force.",
+			configName)
 	case !parsed.srcDirResolved:
-		base = &Finding{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
-			Message: fmt.Sprintf(
-				"Couldn't find src/pages, and couldn't read srcDir out of %s (the value isn't "+
-					"a plain string). If your pages live somewhere else, this is fine and the "+
-					"build will work. If they don't, the build will still succeed — and publish "+
-					"a site with nothing in it.", configName),
-		}
+		base = warn("Couldn't find src/pages, and couldn't read srcDir out of %s (the value "+
+			"isn't a plain string).", configName)
 	default:
 		resolvedDir, rejectReason := resolveSrcDirPath(parsed.srcDirValue)
 		switch {
 		case rejectReason != "":
-			base = &Finding{
-				CheckID:  CheckIDPagesDir,
-				Severity: SeverityWarning,
-				Message: fmt.Sprintf(
-					"Couldn't find src/pages, and %s sets srcDir to %q, which %s. If your pages "+
-						"live somewhere else, this is fine and the build will work. If they "+
-						"don't, the build will still succeed — and publish a site with nothing "+
-						"in it.",
-					configName, parsed.srcDirValue, rejectReason),
-			}
+			base = warn("Couldn't find src/pages, and %s sets srcDir to %q, which %s.",
+				configName, parsed.srcDirValue, rejectReason)
 		default:
 			pagesDir := resolvedDir + "/pages"
-			if isDir(fsys, filepath.Join(root, filepath.FromSlash(pagesDir))) {
+			switch isDir(fsys, filepath.Join(root, filepath.FromSlash(pagesDir))) {
+			case present:
 				base = nil
-			} else {
+			case undetermined:
+				// The one message in this function that used to assert
+				// absence off a failed stat, and the one a reviewer
+				// named: with srcDir resolved to "source" and "source"
+				// itself unreadable, the bool form printed "source/pages
+				// doesn't exist" about a directory that may well be
+				// sitting right there. This says what actually happened.
+				base = warn("%s sets srcDir to %q, and %s couldn't be checked (the directory "+
+					"couldn't be read), so this check can't tell whether your pages are there.",
+					configName, resolvedDir, pagesDir)
+			case absent:
 				// Warning, never a hard stop: a real Astro build with no
 				// pages directory does not fail — Astro warns and
 				// completes with zero routes — so refusing the deploy
 				// here would be wrong on the one case this message
-				// describes with confidence.
+				// describes with confidence. This message does NOT carry
+				// advisoryTail: it is the one shape that has already
+				// established where the pages should be and found
+				// nothing there, so it names the fix instead of
+				// restating the general advice.
 				base = &Finding{
 					CheckID:  CheckIDPagesDir,
 					Severity: SeverityWarning,
@@ -569,9 +662,9 @@ func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 			CheckID:  CheckIDBuildFormat,
 			Severity: SeverityWarning,
 			Message: fmt.Sprintf(
-				"Couldn't fully read %s: it contains %s, which this check doesn't parse, so it "+
-					"can't confirm build.format either. If you haven't changed build.format away "+
-					"from Astro's default, this is fine; otherwise, check it by hand.",
+				"Couldn't fully read %s: it contains %s, so it can't confirm build.format "+
+					"either. If you haven't changed build.format away from Astro's default, "+
+					"this is fine; otherwise, check it by hand.",
 				configName, parsed.unresolvedReason),
 		}
 	}
@@ -608,8 +701,31 @@ func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 	}
 }
 
+// presence is this check's three-valued answer to every question it asks
+// the filesystem. It exists because a bool cannot tell "I looked and it
+// is not there" apart from "I could not look", and this check publishes
+// sentences that assert the first — "Couldn't find src/pages", "no
+// astro.config file was found", "source/pages doesn't exist". Every one
+// of those was, with a bool, also what an EACCES on an unreadable parent
+// directory produced: a confident claim of absence built out of a
+// permission error. AN ABSENCE CLAIM REQUIRES A SUCCESSFUL STAT SAYING
+// SO; anything else is undetermined and gets a different sentence.
+//
+// undetermined is the ZERO VALUE deliberately. A new code path that
+// forgets to set one of these reports "couldn't tell", which costs an
+// advisory note; the alternative zero value would have it report
+// "absent", which is the wrong claim this type exists to prevent.
+type presence int
+
+const (
+	undetermined presence = iota
+	absent
+	present
+)
+
 // isFile reports whether name is safe for readConfigCapped to Open: a
-// regular file, or a symlink whose TARGET is a regular file. Lstat runs
+// regular file, or a symlink whose TARGET is a regular file — and, as a
+// third answer, whether that could not be established at all. Lstat runs
 // first and never follows anything — a FIFO, socket or device node named
 // directly is rejected right there, before this function ever resolves
 // a link. Only when Lstat itself reports a symlink does isFile go on to
@@ -639,22 +755,54 @@ func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 // "regular", regardless of how it was reached; a symlink to an ordinary
 // file resolves and reads exactly as if the file had been named
 // directly.
-func isFile(fsys FS, name string) bool {
+func isFile(fsys FS, name string) presence {
 	info, err := fsys.Lstat(name)
-	if err != nil {
-		return false
+	switch {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist):
+		return absent
+	default:
+		return undetermined
 	}
+
 	if info.Mode()&os.ModeSymlink != 0 {
 		target, err := fsys.Stat(name)
-		if err != nil {
-			return false
+		switch {
+		case err == nil:
+			if target.Mode().IsRegular() {
+				return present
+			}
+			return absent
+		case errors.Is(err, fs.ErrNotExist):
+			// A dangling symlink. The stat succeeded in the only sense
+			// that matters here: it established that nothing is at the
+			// far end, which is a determination rather than a failure to
+			// make one.
+			return absent
+		default:
+			return undetermined
 		}
-		return target.Mode().IsRegular()
 	}
-	return info.Mode().IsRegular()
+	if info.Mode().IsRegular() {
+		return present
+	}
+	return absent
 }
 
-func isDir(fsys FS, name string) bool {
+// isDir is the directory half of the same three-valued answer. A path
+// that exists and is not a directory is ABSENT rather than undetermined:
+// the stat succeeded and settled the question this function asks, which
+// is not "does something exist here" but "is there a directory here".
+func isDir(fsys FS, name string) presence {
 	info, err := fsys.Stat(name)
-	return err == nil && info.IsDir()
+	switch {
+	case err == nil && info.IsDir():
+		return present
+	case err == nil:
+		return absent
+	case errors.Is(err, fs.ErrNotExist):
+		return absent
+	default:
+		return undetermined
+	}
 }

@@ -153,12 +153,29 @@ var astroConfigTable = []struct {
 		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
 	}},
 	{"srcdir-backtick", nil},
+	// PINNED TO A MECHANISM, not to a severity. This row and the three
+	// below used to assert only "a pages-dir warning, of some kind",
+	// which stopped distinguishing anything the moment the subset gate
+	// gave every unreadable construct the same severity: a regression
+	// that made "+" or "path.join" trip the WHOLE-FILE gate would have
+	// passed all four unchanged. Each now names the sentence its own
+	// mechanism produces, and — where the mechanism is a local unknown —
+	// asserts the whole-file admission is ABSENT.
+	//
+	// A template interpolation is a global gate trip: this scanner can
+	// see where "${" starts and cannot find where the substitution ends,
+	// so both keys go unresolved and build-format breaks its usual
+	// silence too.
 	{"srcdir-template-interp", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, nil, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"couldn't be fully read", "substitution"}, []string{"source"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"substitution"}, nil},
 	}},
 	{"srcdir-fileurltopath", nil},
+	// A call this check doesn't recognise: a LOCAL unknown. The key was
+	// found and its value can't be read — the file itself scanned fine,
+	// which is what the "couldn't be fully read" exclusion pins.
 	{"srcdir-pathjoin", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, nil, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}},
 	{"srcdir-commented-out", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
@@ -167,8 +184,11 @@ var astroConfigTable = []struct {
 		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
 	}},
 	{"srcdir-url-before-key", nil},
+	// A duplicate key is a LOCAL unknown too — bounded by the object it
+	// was counted in — so it reports ambiguity, not a whole-file
+	// refusal.
 	{"srcdir-two-keys", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, nil, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"more than once"}, []string{"couldn't be fully read"}},
 	}},
 	{"srcdir-absolute", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"absolute"}, nil},
@@ -202,29 +222,24 @@ var astroConfigTable = []struct {
 	// no real disagreement — but it did turn up a coverage gap, merged
 	// here with origin notes on the rows that close it.
 
-	// .cjs and .cts had NEVER been exercised, alone or together, before
-	// this row. Their ORDER here is NOT a fact about current Astro —
-	// current Astro doesn't search for either extension at all, both
-	// having been dropped upstream after the 5.x line (see the comment
-	// on configCandidates for what was actually verified and against
-	// what). This row asserts this tool's OWN documented preference
-	// among the two legacy candidates, kept for the projects still on an
-	// older release that searches for both. .cts's srcDir deliberately
-	// points at a directory with no pages/ subdirectory, so a regression
-	// in that documented order would flip which file wins and change
-	// what this row's warning names.
-	{"srcdir-cjs-precedes-cts", []wantFinding{
-		// Naming both files alone isn't order-sensitive: both appear in
-		// the ambiguity note regardless of which one wins. "picks
-		// astro.config.cjs" is the part that only holds if cjs actually
-		// precedes cts in configCandidates — the fixture's .cjs resolves
-		// cleanly (cjssrc/pages exists) while its .cts does not
-		// (ctssrc/pages doesn't), so a regression to cts-first would
-		// flip both the picked file AND the message shape (a warning
-		// about a missing ctssrc/pages, not a clean pass-plus-note).
+	// REPURPOSED. This fixture was written to pin the ORDER of the two
+	// legacy candidates against each other, back when this check still
+	// searched for them. It now pins the opposite fact: that neither is
+	// a candidate at all. Both files are present, the .cjs one resolves
+	// to a directory (cjssrc/pages) that really exists, and the correct
+	// outcome is still "no astro.config file was found" — because a
+	// current Astro would not load either of them, and a claim drawn
+	// from a file the build never reads is a false positive whichever
+	// way it points.
+	//
+	// Keeping the fixture rather than deleting it is the point: the
+	// files that used to make this check speak are still sitting there,
+	// so a regression that put .cjs or .cts back into configCandidates
+	// reds this row immediately with a message naming cjssrc.
+	{"legacy-extensions-not-candidates", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning,
-			[]string{"astro.config.cjs", "astro.config.cts", "picks astro.config.cjs"},
-			[]string{"picks astro.config.cts", "ctssrc"}},
+			[]string{"no astro.config file was found"},
+			[]string{"astro.config.cjs", "astro.config.cts", "cjssrc"}},
 	}},
 
 	// The existing "// inside a string" row proves the comment stripper
@@ -249,7 +264,7 @@ var astroConfigTable = []struct {
 		{CheckIDBuildFormat, SeverityWarning, []string{"file"}, nil},
 	}},
 	{"srcdir-pathjoin-plus-buildformat-warning", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, nil, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, nil},
 		{CheckIDBuildFormat, SeverityWarning, []string{"preserve"}, nil},
 	}},
 
@@ -265,10 +280,15 @@ var astroConfigTable = []struct {
 	{"srcdir-shorthand-property", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"./source", "sets srcDir to"}},
 	}},
-	// A spread from an imported base config: no live srcDir key is
-	// visible, and none should be invented.
+	// A spread from an imported base config. This used to reach the
+	// "no live srcDir key" message, which happened to be the right
+	// outcome for the wrong reason: the scan reported what it did not
+	// see, when the fact worth reporting is that a construct in this
+	// object can set the key from a file the scan never opens. It is now
+	// a gate trip, and it says so.
 	{"srcdir-spread-base-config", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
+		{CheckIDPagesDir, SeverityWarning, []string{"spread"}, []string{"sets srcDir to"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"spread"}, nil},
 	}},
 	// The shape a documentation-site integration ships: routes injected
 	// by the integration, no srcDir key, and no pages directory
@@ -325,7 +345,7 @@ var astroConfigTable = []struct {
 	// scanner must warn instead, because "./source" + "/nested" is not
 	// provably "./source".
 	{"srcdir-string-concat", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, nil, nil},
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}},
 
 	// Windows path forms are invisible to path.IsAbs/path.Clean (POSIX,
@@ -396,6 +416,18 @@ var astroConfigTable = []struct {
 	// SO on build-format — a silent empty parse and a declared
 	// unresolved are different outcomes, and only the warning is
 	// honest.
+	//
+	// WHAT THIS ROW DOES AND DOES NOT PIN, said plainly because the
+	// comment above narrates a mechanism the row no longer reaches. The
+	// subset gate trips on this fixture at the regex's OPENING "/", four
+	// tokens before the trailing "\/" that named the finding, so any
+	// regex at all would produce the same outcome here and this row
+	// cannot tell the two apart. That is the gate working — the
+	// mechanism is unreachable by construction rather than handled — and
+	// it is why the row is kept as a regression fixture rather than
+	// rewritten: the historical defect's own input must stay in the
+	// suite, and its byte-identical control below is what proves the
+	// gate, not the surrounding shape, is what changed the answer.
 	{"srcdir-regex-trailing-escaped-slash", []wantFinding{
 		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, nil},
 		{CheckIDBuildFormat, SeverityWarning, nil, []string{"build.format is set to"}},
@@ -472,6 +504,100 @@ var astroConfigTable = []struct {
 	// in the suite would notice if that branch were deleted. Must
 	// resolve exactly like a bare identifier does.
 	{"srcdir-quoted-key", nil},
+
+	// ---------------------------------------------------------------
+	// Rows added by the FIFTH round. Two independent readings refuted
+	// the subset gate's completeness claim by different routes, and the
+	// four fixtures below are their probe configs, taken verbatim. Every
+	// one of them produced a CONFIDENT WRONG claim on the code that had
+	// just been written to make confident wrong claims impossible.
+	// ---------------------------------------------------------------
+
+	// A backtick INSIDE a "${...}" substitution ends the outer template
+	// early, so "srcDir: './wrong'" — template text, nested one level
+	// down inside a markdown block — became live code at the top level.
+	// The old code reported "sets srcDir to wrong"; a real Astro build of
+	// this exact project emits from real/pages, which is why that
+	// directory is the one on disk here. The mechanism is the durable
+	// part: the scanner RECOGNISED the interpolation (a per-token flag
+	// said so) and could not locate its end. Both keys must go
+	// unresolved, and "wrong" must never appear.
+	{"srcdir-template-nested-backtick", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"substitution"}, []string{"wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"substitution"}, []string{"wrong"}},
+	}},
+
+	// Annex B HTML-like comment markers, in an "astro.config.js" — which
+	// is a candidate a CURRENT Astro really does load, and loads as
+	// CommonJS when the package is not a module, so Annex B applies to
+	// it. "<", "!" and "-" are each in the inert bucket; the SEQUENCES
+	// are comment openers, which is the direct counterexample to the
+	// per-byte argument this gate used to carry.
+	//
+	// Both fixtures set srcDir twice, with the first occurrence on the
+	// commented line — so a JavaScript engine sees exactly one live key
+	// and resolves "./real", which is the directory on disk. Verified by
+	// running both files through node: each yields {"srcDir":"./real"}.
+	// The old scanner skipped the markers a byte at a time, saw two live
+	// keys and warned "sets srcDir more than once" — a false positive on
+	// a project that is unambiguous and working. The ruled outcome is
+	// neither that warning nor a silent pass: both keys unresolved, and
+	// the message names the construct.
+	{"srcdir-html-comment-open", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"HTML-style comment"}, []string{"more than once", "wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"HTML-style comment"}, nil},
+	}},
+	{"srcdir-html-comment-close", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"HTML-style comment"}, []string{"more than once", "wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"HTML-style comment"}, nil},
+	}},
+
+	// A spread AFTER the key. JavaScript gives the spread the last word,
+	// so base.srcDir wins and the literal two tokens earlier does not —
+	// yet the old code read it with full confidence. The existing
+	// spread-base-config fixture only ever covered spread-BEFORE-key,
+	// where the old code happened to stay silent, so the suite recorded
+	// a pass on the half that was accidentally right.
+	{"srcdir-spread-after-key", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"spread"}, []string{"wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"spread"}, nil},
+	}},
+
+	// A wrapper that is not defineConfig. The old code accepted ANY
+	// single-object-argument call as returning its argument, which is a
+	// guess about a function whose body is in another file. Only
+	// defineConfig is known to be the identity; withDefaults may return
+	// anything at all.
+	{"srcdir-unknown-wrapper", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"withDefaults"}, []string{"wrong"}},
+		{CheckIDBuildFormat, SeverityWarning, []string{"withDefaults"}, nil},
+	}},
+
+	// A legacy octal escape: "'./\163ource'" is "./source" to a
+	// JavaScript engine, and was "./163ource" to this scanner — a
+	// confident path that exists nowhere. The fixture's source/pages
+	// really is on disk, so a scanner that decoded the escape correctly
+	// would pass this row silently and a scanner that dropped the
+	// backslash would warn about the wrong directory; the ruled outcome
+	// is neither, because this check does not decode legacy octal. It is
+	// a LOCAL unknown — the string still terminates where it appears
+	// to — so it must NOT claim the whole file was unreadable.
+	{"srcdir-octal-escape", []wantFinding{
+		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read", "163ource", "source/pages"}},
+	}},
+
+	// THE INERT BUCKET'S POSITIVE CONTROL, and it did not exist before
+	// this round. tokenize's doc comment lists the bytes it drops
+	// silently — numbers, "=", ";", "+", "-", "<", ">", "!", "&", "|",
+	// "^", "~", "@", "#" — and called them provably inert. Nothing
+	// asserted it: no fixture expecting a clean result contained a
+	// number, an arrow function, a comparison or a bitwise operator, so
+	// "provably inert" was a claim in prose sitting next to a gate that
+	// had just been shown to over- and under-reach. This config uses
+	// every one of them and still resolves srcDir cleanly. A regression
+	// that moved any of those bytes into the gate reds this row with a
+	// whole-file admission where a silent pass belongs.
+	{"srcdir-inert-bytes-control", nil},
 
 	// The build-format string-scanning control: the existing
 	// build-format-in-string fixture is a valid control against a naive
@@ -555,54 +681,40 @@ func TestCheckAstroConfig_Table(t *testing.T) {
 	}
 }
 
-// TestConfigCandidates_PinnedExactly is the review's third finding:
-// mutating any of the four CURRENT extension positions in configCandidates
-// — .mjs, .js, .ts, .mts — left the whole suite green, because only the
-// legacy .cjs/.cts pair (this tool's own documented preference, not a
-// fact about Astro) was ever pinned by anything. One deep-equality
-// assertion against the whole six-entry slice covers every position at
-// once and cannot rot into covering only one, the way six separate
-// per-position checks could.
+// TestConfigCandidates_PinnedExactly pins the candidate list by deep
+// equality: every position, plus the LENGTH, in one assertion that cannot
+// rot into covering only part of the slice the way per-position checks
+// could. It was added when mutating any of the four current extensions
+// left the whole suite green; it now also pins the round that removed
+// .cjs and .cts, since re-adding either is a change to a fact about which
+// files a current Astro loads and should not be possible to make quietly.
 //
 // REQUIRED MUTATION: swap any two adjacent entries in configCandidates
-// (astroconfig.go) — e.g. ".mjs" and ".js" — and this test reds
-// immediately. Run and observed to fail before this comment was
-// committed; see the report for the red and the checksum-verified
-// revert.
+// (astroconfig.go) — e.g. ".mjs" and ".js" — or append "astro.config.cjs"
+// back onto it, and this test reds immediately. Run and observed to fail
+// before this comment was committed; see the report for the red and the
+// checksum-verified revert.
 func TestConfigCandidates_PinnedExactly(t *testing.T) {
 	want := []string{
 		"astro.config.mjs",
 		"astro.config.js",
 		"astro.config.ts",
 		"astro.config.mts",
-		"astro.config.cjs",
-		"astro.config.cts",
 	}
 	if !reflect.DeepEqual(configCandidates, want) {
 		t.Fatalf("configCandidates = %#v, want %#v", configCandidates, want)
 	}
 }
 
-// TestCheckAstroConfig_EachExtensionAloneResolves merges the sixth row an
+// TestCheckAstroConfig_EachExtensionAloneResolves merges a row an
 // independent reconstruction of this suite found missing: every fixture
 // elsewhere in this file uses .mjs, with a single .ts appearing only as
-// the losing candidate in an ambiguity row, never alone. The other four
-// of Astro's six recognised extensions — .js, .mts, .cjs and .cts — had
-// never been exercised in any form. Built with t.TempDir() rather than a
-// testdata fixture per extension, since the six cases differ only in
-// file name and this loop is the whole of what would otherwise be six
-// near-identical directories.
+// the losing candidate in an ambiguity row, never alone. Built with
+// t.TempDir() rather than a testdata fixture per extension, since the
+// cases differ only in file name and this loop is the whole of what would
+// otherwise be four near-identical directories.
 func TestCheckAstroConfig_EachExtensionAloneResolves(t *testing.T) {
-	extensions := []string{
-		"astro.config.mjs",
-		"astro.config.js",
-		"astro.config.ts",
-		"astro.config.mts",
-		"astro.config.cjs",
-		"astro.config.cts",
-	}
-
-	for _, ext := range extensions {
+	for _, ext := range configCandidates {
 		t.Run(ext, func(t *testing.T) {
 			dir := t.TempDir()
 			if err := os.MkdirAll(filepath.Join(dir, "candsrc", "pages"), 0o755); err != nil {
@@ -617,6 +729,35 @@ func TestCheckAstroConfig_EachExtensionAloneResolves(t *testing.T) {
 			if len(findings) != 0 {
 				t.Fatalf("a lone %s candidate should resolve srcDir cleanly, got %+v", ext, findings)
 			}
+		})
+	}
+
+	// The negative half, and the reason this loop reads configCandidates
+	// rather than repeating it: a name that is NOT a candidate must not
+	// resolve, and the only way that stays true as the list changes is to
+	// derive both halves from the same source. Deleting a name from
+	// configCandidates moves it from the loop above into the check below
+	// automatically.
+	for _, ext := range []string{"astro.config.cjs", "astro.config.cts"} {
+		t.Run(ext+" (not a candidate)", func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "candsrc", "pages"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "export default {\n  srcDir: './candsrc',\n};\n"
+			if err := os.WriteFile(filepath.Join(dir, ext), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfs := &countingFS{}
+			findings := CheckAstroConfig(cfs, dir)
+			if len(cfs.opens) != 0 {
+				t.Errorf("opens = %v, want none — %s is not a file a current Astro loads", cfs.opens, ext)
+			}
+			if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir {
+				t.Fatalf("findings = %+v, want the one no-config warning", findings)
+			}
+			mustContainAll(t, findings[0].Message, []string{"no astro.config file was found"})
 		})
 	}
 }
@@ -702,6 +843,12 @@ func TestCheckAstroConfig_NoHardStopWhenPagesPresent(t *testing.T) {
 		"srcdir-windows-backslash-relative",
 		"srcdir-windows-drive-absolute",
 		"srcdir-windows-unc",
+		"srcdir-template-nested-backtick",
+		"srcdir-html-comment-open",
+		"srcdir-html-comment-close",
+		"srcdir-spread-after-key",
+		"srcdir-unknown-wrapper",
+		"srcdir-octal-escape",
 	}
 
 	for _, name := range parserFailureFixtures {
@@ -779,6 +926,199 @@ func TestCheckAstroConfig_UnreadableConfigWarnsNotCrashes(t *testing.T) {
 	findings := CheckAstroConfig(&countingFS{}, dir)
 	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
 		t.Fatalf("findings = %+v, want exactly one pages-dir warning, not a crash", findings)
+	}
+}
+
+// ---------------------------------------------------------------------
+// "Couldn't check" is not "isn't there": the three-valued filesystem
+// answer. Built at test time rather than committed, because a mode-0000
+// directory does not survive a git checkout (Windows has no equivalent
+// bit and git does not track one).
+// ---------------------------------------------------------------------
+
+// unreadableDir makes name under root, puts child inside it, and then
+// removes every permission bit from name — so a Stat of anything BENEATH
+// it fails with a permission error rather than with "not found". It
+// skips, rather than fails, wherever that cannot be constructed: Windows
+// has no equivalent, and a process running as root ignores the bits.
+func unreadableDir(t *testing.T, root, name, child string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits don't gate stat the same way on Windows")
+	}
+	full := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Join(full, child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(full, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(full, 0o755) })
+	if _, err := os.Stat(filepath.Join(full, child)); err == nil {
+		t.Skip("this process ignores directory permission bits (running as root?)")
+	}
+}
+
+// TestCheckAstroConfig_UnreadableSrcDirTargetSaysCouldntCheck is the
+// strongest form of the "errors collapsed into absence" finding, and the
+// one that reaches the single message in this file that asserts absence
+// rather than inability. srcDir resolves to "source"; source/pages really
+// is on disk; source itself cannot be read. With a bool, the stat error
+// became "not a directory" became "source/pages doesn't exist" — a
+// confident claim of absence assembled out of a permission error, printed
+// about a directory that is right there.
+//
+// REQUIRED MUTATION: in isDir (astroconfig.go), replace the switch with
+// "return err == nil && info.IsDir()" coerced to present/absent — i.e.
+// drop the undetermined branch — and this test reds on the "must not
+// contain" half, with the message claiming the directory doesn't exist.
+// Run and observed to fail before this comment was committed; see the
+// report for the red and the checksum-verified revert.
+func TestCheckAstroConfig_UnreadableSrcDirTargetSaysCouldntCheck(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "astro.config.mjs"),
+		[]byte("export default {\n  srcDir: './source',\n};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unreadableDir(t, dir, "source", "pages")
+
+	findings := CheckAstroConfig(&countingFS{}, dir)
+	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
+	}
+	mustContainAll(t, findings[0].Message, []string{"couldn't be checked", "source/pages"})
+	mustContainNone(t, findings[0].Message, []string{"doesn't exist"})
+}
+
+// TestCheckAstroConfig_UnreadableSrcPagesSaysCouldntCheck is the same
+// defect one level up: every pages-dir message in this file opens by
+// asserting src/pages is missing, and with a bool that sentence was also
+// what an unreadable src/ produced. The premise of the whole concern
+// could not be established, so nothing downstream of it runs — in
+// particular this must NOT go on to resolve a custom srcDir and print the
+// answer under a claim that src/pages is missing.
+func TestCheckAstroConfig_UnreadableSrcPagesSaysCouldntCheck(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "astro.config.mjs"),
+		[]byte("export default {\n  srcDir: './elsewhere',\n};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unreadableDir(t, dir, "src", "pages")
+
+	findings := CheckAstroConfig(&countingFS{}, dir)
+	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
+	}
+	mustContainAll(t, findings[0].Message,
+		[]string{"Couldn't check whether src/pages exists", "the build will still succeed"})
+	mustContainNone(t, findings[0].Message, []string{"Couldn't find src/pages", "elsewhere"})
+}
+
+// TestCheckAstroConfig_UncheckableCandidatesAreNotAbsence covers the
+// third absence claim this check publishes: "no astro.config file was
+// found". A project directory this process cannot read makes every
+// candidate's Lstat fail with a permission error, which a bool turned
+// into "none of them are there" — said about a directory whose contents
+// are unknown.
+func TestCheckAstroConfig_UncheckableCandidatesAreNotAbsence(t *testing.T) {
+	parent := t.TempDir()
+	unreadableDir(t, parent, "project", "src")
+	root := filepath.Join(parent, "project")
+
+	findings := CheckAstroConfig(&countingFS{}, root)
+	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
+	}
+	mustContainAll(t, findings[0].Message, []string{"couldn't be checked", "astro.config.mjs"})
+	mustContainNone(t, findings[0].Message, []string{"no astro.config file was found"})
+}
+
+// TestCheckAstroConfig_UncheckedCandidateQualifiesTheWinner is the state
+// where a config IS found and an EARLIER candidate could not be checked
+// for. Which file Astro loads is then not something this check knows, so
+// the finding says so rather than reporting on the file it happened to
+// reach. Constructed with a directory named astro.config.mjs whose own
+// contents cannot be read — Lstat succeeds and reports a directory, which
+// is "absent" — so the uncheckable case is built instead from a symlink
+// loop, whose Stat fails with ELOOP on every platform that has symlinks.
+func TestCheckAstroConfig_UncheckedCandidateQualifiesTheWinner(t *testing.T) {
+	dir := t.TempDir()
+	loop := filepath.Join(dir, "astro.config.mjs")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("cannot create a symlink on this platform/permission set: %v", err)
+	}
+	if _, err := os.Stat(loop); err == nil {
+		t.Skip("this platform resolves a self-referential symlink without an error")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "astro.config.ts"),
+		[]byte("export default {\n  srcDir: './source',\n};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "source", "pages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	findings := CheckAstroConfig(&countingFS{}, dir)
+	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir {
+		t.Fatalf("findings = %+v, want exactly one pages-dir note", findings)
+	}
+	mustContainAll(t, findings[0].Message,
+		[]string{"astro.config.mjs", "couldn't be checked for", "may not be the config Astro actually loads"})
+}
+
+// ---------------------------------------------------------------------
+// A "//" comment ends at any JavaScript LineTerminator, not only LF.
+// ---------------------------------------------------------------------
+
+// TestTokenize_LineCommentEndsAtEveryLineTerminator pins the terminator
+// set a single-line comment stops at: LF, a lone CR, and U+2028/U+2029.
+// The first version of this loop stopped at LF alone, so a config with
+// old-Mac line endings, or one carrying a stray Unicode separator, had
+// its real srcDir key swallowed by a comment that had already ended. It
+// is a false NEGATIVE rather than a false claim — the check goes quiet
+// instead of lying — but a scan that reads less of the file than it
+// believes it does is the same defect one direction over, and it is the
+// direction that hides.
+//
+// Built at test time rather than committed, deliberately: .gitattributes
+// normalises this repository's checkouts to LF, and a fixture whose whole
+// point is a lone CR is exactly the file a line-ending normaliser is
+// entitled to rewrite.
+//
+// REQUIRED MUTATION: in tokenize (astroconfig_lex.go), change the line-
+// comment loop's condition back to "src[i] != '\n'" and the three
+// non-LF subtests red — the srcDir key on the following line is eaten by
+// the comment and the check reports it as never set. Run and observed to
+// fail before this comment was committed; see the report for the red and
+// the checksum-verified revert.
+func TestTokenize_LineCommentEndsAtEveryLineTerminator(t *testing.T) {
+	terminators := map[string]string{
+		"LF":          "\n",
+		"CR":          "\r",
+		"U+2028 (LS)": "\u2028",
+		"U+2029 (PS)": "\u2029",
+	}
+
+	for name, term := range terminators {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "source", "pages"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "export default {" + term +
+				"  // a comment ending in " + name + term +
+				"  srcDir: './source'," + term +
+				"};" + term
+			if err := os.WriteFile(filepath.Join(dir, "astro.config.mjs"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			findings := CheckAstroConfig(&countingFS{}, dir)
+			if len(findings) != 0 {
+				t.Fatalf("findings = %+v, want none — the comment ends at %s and srcDir "+
+					"resolves to ./source, whose pages directory exists", findings, name)
+			}
+		})
 	}
 }
 

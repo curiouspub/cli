@@ -24,14 +24,28 @@ const (
 // (with its escapes already decoded into text and its interpolation
 // flag set), or one punctuation character this check's shapes need.
 type token struct {
-	kind             tokenKind
-	text             string // ident text, decoded string content, or the single punct byte
-	hasInterpolation bool   // set only for a backtick literal containing a literal "${"
-	escapeUnresolved bool   // set when a string contained an escape this scanner could not
-	// decode with confidence (a malformed \x or \u sequence). A value
-	// carrying this flag must never be read as a resolved literal —
-	// this check does not guess at what a broken escape was supposed
-	// to mean, it reports unresolved instead.
+	kind tokenKind
+	text string // ident text, decoded string content, or the single punct byte
+	// hasInterpolation is set for a backtick literal containing a
+	// literal "${". tokenize turns that flag into a WHOLE-FILE refusal
+	// the moment scanString reports it, so no token carrying it ever
+	// reaches the shape matchers below. The guards that still test it
+	// there (isKeyToken, readStringLiteralValue, matchFileURLIdiom) are
+	// therefore unreachable while that gate holds, and are kept
+	// deliberately: each of those functions is correct on its own terms
+	// rather than only in the presence of an upstream promise. That is
+	// stated here rather than left for a reader to discover, because a
+	// check that cannot fail looks like a check that is doing work.
+	hasInterpolation bool
+	escapeUnresolved bool // set when a string contained an escape this scanner could not
+	// decode with confidence: a malformed \x or \u sequence, or a legacy
+	// octal escape, which Annex B keeps legal in a sloppy-mode script and
+	// which this scanner declines to decode. A value carrying this flag
+	// must never be read as a resolved literal — this check does not
+	// guess at what an escape it couldn't read was supposed to mean, it
+	// reports unresolved instead. Unlike hasInterpolation this is a LOCAL
+	// unknown: the string still ends where it appears to, so only this
+	// one value is unreadable.
 }
 
 // tokenPunct is the fixed set of punctuation characters this check ever
@@ -75,71 +89,127 @@ const tokenPunct = "{}(),.:[]"
 //   - every other byte, treated as INERT filler and skipped one at a
 //     time without producing a token — this is where numbers, "=", ";",
 //     "+", "-", "<", ">", "!", "&", "|", "^", "~", "@" and "#" all land.
-//     They are safe to drop silently because none of them can ever be
-//     mistaken, alone or in sequence, for a quote, a comment opener or a
-//     byte in tokenPunct — nothing downstream of this function inspects
-//     them, and dropping one can never shift a bracket count or invent a
-//     key.
+//     Each is safe to drop silently because, ON ITS OWN, none of them
+//     can be mistaken for a quote, a comment opener or a byte in
+//     tokenPunct: nothing downstream of this function inspects them, and
+//     dropping one can never shift a bracket count or invent a key. Note
+//     the qualification — "on its own" is doing real work here, and the
+//     first version of this list said "alone or in sequence", which was
+//     false: "<", "!" and "-" are each individually inert and the
+//     SEQUENCE "<!--" is a comment opener. That is why the carve-outs
+//     below are stated as sequences rather than as bytes.
 //
-// Two bytes are carved OUT of that last inert bucket and treated as
-// UNKNOWN instead, because — unlike every other byte this scanner
-// silently drops — they are not provably inert against this scanner's
-// own structural model:
+// Certain SEQUENCES are carved OUT of that last inert bucket and treated
+// as UNKNOWN instead, because — unlike the bytes this scanner silently
+// drops — each of them can produce structure this scanner's own model
+// would misread. When tokenize meets one it does not try to skip past
+// it, re-synchronise, or guess how far the damage reaches: it stops
+// immediately and reports the whole file UNRESOLVED, for both keys this
+// check reads, not only the one nearest the trip. That is what "for
+// everything, not locally" means in practice — the scanner has no way to
+// bound a desynchronisation it cannot see the shape of, so it makes no
+// claim past the point where its own model stopped applying.
+//
+// The gated sequences, each with the reason it is not inert:
 //
 //   - a bare "/" that does not open "//" or "/*". It is a regex literal
 //     or a division operator — this scanner does not parse either — and
 //     a regex BODY can itself contain quotes, braces, brackets and
-//     colons that are not real JavaScript structure at all. Finding 1
-//     and Finding 2 of the maximum-rigour review are both this: a
-//     regex's escaped closer or embedded quote leaking structural bytes
-//     into the token stream, and a regex ending in "\/" producing the
-//     exact byte pair that opens a line comment. There is no way to scan
-//     a regex body correctly without a real regex grammar, and building
-//     one just to throw the result away is effort spent making the
-//     unsafe case LOOK safe.
-//   - a bare "?". Its ternary partner ":" is lexically identical to
-//     this scanner's own property-colon token, so past a "?" this
-//     scanner can no longer tell "key: value" from "condition ? a : b"
-//     — the exact mechanism behind the ternary finding.
-//
-// When tokenize meets either one, it does not try to skip past it,
-// re-synchronise, or guess how far the damage reaches — it stops
-// immediately and reports the whole file UNRESOLVED, for both keys this
-// check reads, not only the one nearest the unknown byte. That is what
-// "for everything, not locally" means in practice: the scanner has no
-// way to bound a desynchronisation it cannot see the shape of, so it
-// makes no claim past the point where its own model stopped applying.
-//
-// This is deliberately NOT four special cases bolted onto four findings.
-// It is one rule — enumerate what is provably safe to drop, and treat
-// everything else as unknown — that happens to close all four regex/
-// quote/ternary findings through the same two lines, and will close the
-// next one nobody has found yet the same way, provided it also shows up
-// as a "/" or a "?" this scanner wasn't expecting. A construct that
-// introduces some OTHER byte capable of forging a quote, a bracket, a
-// comment opener or a colon would need its own carve-out reasoned about
-// on the same terms — the gate is a method, not a closed list.
-//
-// THE ARGUMENT FOR EXACTLY TWO BYTES, verbatim, because a reader who
-// cannot find it will assume "/" and "?" are two special cases and add a
-// third the same way this scanner acquired its blind spots in the first
-// place: this scanner's structural vocabulary is brackets, a colon, the
-// three quote styles and the two comment openers; the only bytes able to
-// FORGE one of those without being one are "/" — a regex body may
-// contain any of them as its own literal syntax — and "?", whose partner
-// ":" is byte-identical to a property colon. Every other byte the
-// tokenizer drops is incapable of shifting a bracket count or inventing
-// a key, alone or in sequence.
+//     colons that are not real JavaScript structure at all. There is no
+//     way to scan a regex body correctly without a real regex grammar,
+//     and building one just to throw the result away is effort spent
+//     making the unsafe case LOOK safe.
+//   - a bare "?". Its ternary partner ":" is lexically identical to this
+//     scanner's own property-colon token, so past a "?" this scanner can
+//     no longer tell "key: value" from "condition ? a : b".
+//   - "${" inside a backtick literal. This one is NOT a forged quote or
+//     bracket — it is a construct this scanner genuinely recognises, and
+//     recognising it is precisely the problem: a substitution's body is
+//     an arbitrary expression that may contain another backtick, so the
+//     scanner can see where the interpolation STARTS and cannot locate
+//     where it ENDS without parsing that expression. A nested backtick
+//     therefore closes the outer literal early and hands live-code
+//     status to bytes that were only ever template text.
+//   - "<!--" anywhere, and "-->" anywhere. Annex B of the ECMAScript
+//     standard makes both of these single-line comment openers in a
+//     sloppy-mode SCRIPT — which is what a ".js" config in a package
+//     without "type": "module" is, loaded as CommonJS by Astro's own
+//     config loader. Every byte in either sequence is individually
+//     inert; the sequence is not. "-->" is gated unconditionally rather
+//     than only when it leads a line (Annex B's actual rule), because a
+//     conservative trip on the rare "a-->b" costs one advisory note and
+//     the precise rule costs a line-position model this scanner does not
+//     otherwise need.
 //
 // THE GATE IS BROADER THAN THE FINDINGS THAT PROMPTED IT, AND THAT IS
 // ACCEPTED RATHER THAN TOLERATED. TypeScript's optional-property syntax
 // uses the same byte as a conditional, so a .ts config with an optional
-// property inside the exported object is now globally unresolved.
-// Nobody named that case; it falls out of the construction, which is the
+// property inside the exported object is globally unresolved. Nobody
+// named that case; it falls out of the construction, which is the
 // construction working. A gate whose breadth surprises its author is
 // behaving as designed — the alternative is a gate that only covers the
-// shapes somebody already thought of, which is what the last three
-// rounds kept producing.
+// shapes somebody already thought of.
+//
+// WHAT THIS GATE HAS BEEN SHOWN TO COVER, AND THE TWO GAPS IT IS KNOWN
+// TO HAVE. This paragraph replaces an earlier one that argued the list
+// above was COMPLETE — that exactly two bytes could forge structure
+// without being structure, and therefore that nothing else needed a
+// carve-out. Two independent readings refuted that argument within one
+// round of its being written, and the way each one refuted it is more
+// useful than the claim was:
+//
+//   - The argument reasoned in BYTES. Forgery also arrives in
+//     SEQUENCES, whose members are each individually inert — "<!--" is
+//     the counterexample, and it reaches a config file current Astro
+//     really does load. A per-byte enumeration cannot express that
+//     class at all, so it could not have found this by being applied
+//     more carefully.
+//   - The argument covered bytes that forge structure WITHOUT BEING
+//     STRUCTURE. A backtick IS structure, so it fell outside the
+//     argument's subject entirely — yet "${" made the scanner claim a
+//     value it had no way to locate the end of. NOTICING IS NOT
+//     UNDERSTANDING: a construct the scanner half-recognises is as
+//     dangerous as one it misreads, and the enumeration had no vocabulary
+//     for that category.
+//
+// So this gate makes no completeness claim. What it states instead is
+// what five adversarial readings have SHOWN it to cover: the regex,
+// division, ternary, optional-chaining, nullish-coalescing, TypeScript
+// optional-property, template-interpolation and HTML-like-comment
+// constructs above, each of which is pinned by a fixture. And it names
+// its two known gap categories, so the next reader starts where the last
+// one stopped rather than re-deriving a refuted argument: a MULTI-BYTE
+// SEQUENCE nobody has enumerated yet, and a construct this scanner
+// HALF-UNDERSTANDS — notices, flags, and cannot bound.
+//
+// The rule for extending it is a method, not a list: a construct earns a
+// carve-out if this scanner can either misread it as structure or
+// recognise it without being able to find its end. A new one is not a
+// special case bolted onto a finding; it is that method applied again.
+//
+// # LOCAL VERSUS GLOBAL UNKNOWNS
+//
+// Not every thing this scanner cannot read trips the gate above, and the
+// dividing line is one principle rather than a case list:
+//
+//	AN UNKNOWN IS LOCAL WHEN ITS EXTENT IS BOUNDED BY ITS OWN TOKEN,
+//	AND GLOBAL WHEN IT IS NOT.
+//
+// A malformed escape inside a string literal that still terminates is
+// LOCAL: the scanner knows exactly where the string ends, so only that
+// one value is unreadable and everything around it still scans. Two
+// occurrences of the same key are LOCAL for the same reason — the
+// ambiguity is bounded by the object it was counted in. Both are
+// reported as "found a key, can't read its value" or "ambiguous", never
+// as a whole-file refusal.
+//
+// Everything in the gated list above is GLOBAL, because none of them is
+// bounded by anything the scanner can see: a regex body, a ternary's
+// reach and a substitution's end are all things it would have to parse
+// to bound. The same principle decides the two structural gates in
+// parseAstroConfig (a spread in the exported object, and a call wrapper
+// this check cannot assume is the identity function) — neither is
+// bounded by its own token, so both are global.
 func tokenize(src []byte) (toks []token, unresolved bool, reason string) {
 	i, n := 0, len(src)
 
@@ -151,11 +221,21 @@ func tokenize(src []byte) (toks []token, unresolved bool, reason string) {
 			i++
 
 		case c == '/' && i+1 < n && src[i+1] == '/':
-			// Line comment: to end of line. A commented-out key must
-			// never be found, so its bytes never reach the scanners
-			// below.
+			// Line comment: to the end of the line. A commented-out key
+			// must never be found, so its bytes never reach the scanners
+			// below — and, symmetrically, code on the line AFTER the
+			// comment must not be swallowed, which is what makes the
+			// terminator set matter. JavaScript ends a single-line
+			// comment at any LineTerminator: LF, a lone CR, and the two
+			// Unicode separators U+2028 and U+2029, which are three
+			// bytes each in UTF-8. Stopping at LF alone (the first
+			// version of this loop) silently ate a real key on a config
+			// written with old-Mac line endings or carrying a stray
+			// separator — a false negative rather than a false claim,
+			// but a scan that reads less of the file than it thinks it
+			// does is the same defect one direction over.
 			i += 2
-			for i < n && src[i] != '\n' {
+			for i < n && !isLineTerminator(src, i) {
 				i++
 			}
 
@@ -176,11 +256,11 @@ func tokenize(src []byte) (toks []token, unresolved bool, reason string) {
 		case c == '/':
 			// A bare "/", not part of "//" or "/*": a regex literal or a
 			// division operator. See the SUBSET GATE doc comment above —
-			// this is one of the two bytes this scanner refuses to guess
+			// this is one of the sequences this scanner refuses to guess
 			// past, because a regex body can contain this scanner's own
 			// structural bytes without them meaning what this scanner
 			// would think they mean.
-			return nil, true, "a `/` outside a comment (a regex literal or division — this check can't tell the two apart and doesn't parse either one)"
+			return nil, true, "a `/` outside a comment (a regex literal or division — this check can't tell the two apart and parses neither)"
 
 		case c == '?':
 			// A bare "?": a ternary, optional chaining or nullish
@@ -189,8 +269,34 @@ func tokenize(src []byte) (toks []token, unresolved bool, reason string) {
 			// comment above.
 			return nil, true, "a `?` (a conditional expression, whose `:` this check can't tell apart from a property colon)"
 
+		case c == '<' && i+3 < n && src[i+1] == '!' && src[i+2] == '-' && src[i+3] == '-',
+			c == '-' && i+2 < n && src[i+1] == '-' && src[i+2] == '>':
+			// An HTML-like comment opener. Annex B of the ECMAScript
+			// standard keeps both of these alive in a sloppy-mode
+			// script, which is exactly what an "astro.config.js" in a
+			// package without "type": "module" is — Astro's own loader
+			// reads it as CommonJS. Each byte in either sequence sits in
+			// the inert bucket on its own; the sequence is a comment
+			// opener, so a scan that skipped the bytes individually
+			// would go on reading commented-out text as live code.
+			return nil, true, "an HTML-style comment marker (`<!--` or `-->`, which a plain script may treat as opening a comment)"
+
 		case c == '\'' || c == '"' || c == '`':
 			tok, next := scanString(src, i)
+			if tok.hasInterpolation {
+				// A "${" substitution inside a template literal. Unlike
+				// every other gated sequence, this is a construct
+				// scanString genuinely RECOGNISES — and recognising the
+				// start of something whose end you cannot find is worse
+				// than not recognising it at all, because it produces a
+				// confident answer. The substitution's body is an
+				// arbitrary expression; a backtick inside it closes the
+				// outer literal early, and everything after that point
+				// is being read at the wrong nesting level. See the
+				// SUBSET GATE doc comment for why this one is the reason
+				// that gate no longer claims to be complete.
+				return nil, true, "a `${...}` substitution in a template literal (this check can't find where the template ends without parsing the substitution)"
+			}
 			toks = append(toks, tok)
 			i = next
 
@@ -249,10 +355,20 @@ func tokenize(src []byte) (toks []token, unresolved bool, reason string) {
 // a plausible-looking wrong path is worse than admitting the scan
 // couldn't read this one.
 //
+// A LEGACY OCTAL escape ("\163", and "\0" followed by another octal
+// digit) also sets escapeUnresolved. Annex B keeps those legal in a
+// sloppy-mode script, and the identity fallback below would otherwise
+// read "'./\163ource'" as "./163ource" — a confident answer naming a
+// directory that exists nowhere.
+//
 // For a backtick literal specifically, a literal "${" anywhere in its
-// body sets hasInterpolation, which is what makes a template WITH
-// interpolation unresolved while a plain backtick string is accepted
-// like any other string literal.
+// body sets hasInterpolation — and tokenize turns that into a whole-file
+// refusal on the spot, because this function can see where a
+// substitution begins and has no way to find where it ends. A plain
+// backtick string with no substitution in it is accepted like any other
+// string literal; that distinction is the entire difference between the
+// two, and it is why scanString still scans a template rather than
+// refusing on the opening backtick.
 func scanString(src []byte, start int) (token, int) {
 	quote := src[start]
 	n := len(src)
@@ -284,7 +400,31 @@ func scanString(src []byte, start int) (token, int) {
 				content.WriteByte('\v')
 				i += 2
 			case '0':
+				// "\0" is NUL only when no octal digit follows it.
+				// "\012" is a LEGACY OCTAL escape, and Annex B keeps
+				// those legal in a sloppy-mode script — which is what a
+				// ".js" config in a non-module package is. Decoding one
+				// is not attempted; it is reported unresolved, for the
+				// same reason a malformed \x is.
+				if i+2 < n && src[i+2] >= '0' && src[i+2] <= '7' {
+					escapeUnresolved = true
+					i += 2
+					break
+				}
 				content.WriteByte(0)
+				i += 2
+			case '1', '2', '3', '4', '5', '6', '7':
+				// A legacy octal escape: "'./\163ource'" is "./source"
+				// to a JavaScript engine. The default branch below would
+				// drop the backslash and read the literal digits, giving
+				// "./163ource" — a path that exists nowhere, reported
+				// with full confidence. This is a LOCAL unknown (the
+				// string literal still terminates exactly where it
+				// appears to, so nothing around it is desynchronised),
+				// so it marks the value unreadable rather than tripping
+				// the whole-file gate — see the LOCAL VERSUS GLOBAL
+				// UNKNOWNS section of tokenize's doc comment.
+				escapeUnresolved = true
 				i += 2
 			case '\n':
 				// Line continuation: the backslash and the newline it
@@ -456,6 +596,23 @@ func parseHexRune(digits []byte) (rune, bool) {
 		return 0, false
 	}
 	return rune(v), true
+}
+
+// isLineTerminator reports whether a JavaScript LineTerminator starts at
+// src[i]: LF, a lone CR, or the UTF-8 encoding of U+2028 (LINE SEPARATOR)
+// or U+2029 (PARAGRAPH SEPARATOR). It is used only to end a "//"
+// comment; every one of these bytes is ordinary whitespace to the main
+// loop, which skips ASCII whitespace directly and lets the two separators
+// fall into the inert bucket a byte at a time.
+func isLineTerminator(src []byte, i int) bool {
+	switch src[i] {
+	case '\n', '\r':
+		return true
+	case 0xE2:
+		return i+2 < len(src) && src[i+1] == 0x80 && (src[i+2] == 0xA8 || src[i+2] == 0xA9)
+	default:
+		return false
+	}
 }
 
 func isIdentStart(b byte) bool {
@@ -692,43 +849,77 @@ func decodeURLPathname(raw string) (string, bool) {
 // between them.
 //
 // Returning ok=false — no export/module.exports found, the exported
-// value isn't a literal object or a single-object-argument call, an
-// import re-exported wholesale, a spread from another module — is
-// deliberate and is what scope anchoring rests on: every key search
-// below only ever looks INSIDE this object, so code that never resolves
-// to it (a local object that happens to declare "srcDir" and is never
-// exported, an integration's own options nested inside a real config)
-// cannot be read as the config no matter what it contains.
-func findExportedConfigObject(toks []token) (open, close int, ok bool) {
+// value isn't a literal object or a defineConfig call, an import
+// re-exported wholesale, a spread from another module — is deliberate
+// and is what scope anchoring rests on: every key search below only ever
+// looks INSIDE this object, so code that never resolves to it (a local
+// object that happens to declare "srcDir" and is never exported, an
+// integration's own options nested inside a real config) cannot be read
+// as the config no matter what it contains.
+//
+// unknownWrapper is the third outcome, and it is not the same as either
+// of the other two: the export IS a call taking one object literal, but
+// the function being called is not one this check knows returns its
+// argument. See matchConfigValue for why that is a gate rather than a
+// silent skip.
+func findExportedConfigObject(toks []token) (open, close int, ok bool, unknownWrapper string) {
 	for i := 0; i < len(toks); i++ {
 		switch {
 		case tokenEquals(toks, i, token{kind: tokIdent, text: "export"}) &&
 			tokenEquals(toks, i+1, token{kind: tokIdent, text: "default"}):
-			if s, e, matched := matchConfigValue(toks, i+2); matched {
-				return s, e, true
+			if s, e, matched, wrapper := matchConfigValue(toks, i+2); matched || wrapper != "" {
+				return s, e, matched, wrapper
 			}
 		case tokenEquals(toks, i, token{kind: tokIdent, text: "module"}) &&
 			tokenEquals(toks, i+1, token{kind: tokPunct, text: "."}) &&
 			tokenEquals(toks, i+2, token{kind: tokIdent, text: "exports"}):
-			if s, e, matched := matchConfigValue(toks, i+3); matched {
-				return s, e, true
+			if s, e, matched, wrapper := matchConfigValue(toks, i+3); matched || wrapper != "" {
+				return s, e, matched, wrapper
 			}
 		}
 	}
-	return 0, 0, false
+	return 0, 0, false, ""
 }
 
+// identityConfigWrapper is the ONE function this check assumes returns
+// its own argument object unchanged: Astro's own defineConfig, which is
+// the identity function plus a type annotation and is how nearly every
+// real Astro project writes its config.
+//
+// The list has exactly one member on purpose. An earlier version of
+// matchConfigValue accepted ANY single-object-argument call, which is a
+// guess: withDefaults({...}), mergeConfig({...}) and every project's own
+// local helper are all the same shape and none of them is obliged to
+// return what it was handed. That guess is the excluded-list pattern
+// this file's subset gate exists to replace, surviving one level up from
+// the tokenizer — enumerate what is understood, treat the rest as
+// unknown — so it is inverted here to match: known-identity is a list of
+// one, and everything else is a gate.
+var identityConfigWrappers = map[string]bool{"defineConfig": true}
+
 // matchConfigValue recognises, starting at toks[p], either a bare object
-// literal or a call whose sole argument is one: IDENT ( { ... } ). It
-// returns the open/close indices of the object literal itself either
-// way, so the caller never has to know which shape it saw.
-func matchConfigValue(toks []token, p int) (open, close int, ok bool) {
+// literal or a call to a known-identity wrapper whose sole argument is
+// one: defineConfig ( { ... } ). It returns the open/close indices of the
+// object literal itself either way, so the caller never has to know which
+// shape it saw.
+//
+// A call of the same SHAPE with any other callee returns
+// unknownWrapper = that callee's name and ok = false. The caller turns
+// that into a whole-file unresolved rather than a silent skip, because
+// the two are different facts: a silent skip says "this check found no
+// exported config object", which here would be false — one is plainly
+// there, and what cannot be established is whether the function around
+// it hands that object back. Its extent is not bounded by anything this
+// scanner can see (the wrapper's body is usually in another file
+// entirely), so by the LOCAL VERSUS GLOBAL rule in tokenize's doc
+// comment it is global.
+func matchConfigValue(toks []token, p int) (open, close int, ok bool, unknownWrapper string) {
 	if p < len(toks) && toks[p].kind == tokPunct && toks[p].text == "{" {
 		end := matchingClose(toks, p)
 		if end < 0 {
-			return 0, 0, false
+			return 0, 0, false, ""
 		}
-		return p, end, true
+		return p, end, true, ""
 	}
 	if p+2 < len(toks) &&
 		toks[p].kind == tokIdent &&
@@ -737,13 +928,54 @@ func matchConfigValue(toks []token, p int) (open, close int, ok bool) {
 		objOpen := p + 2
 		objClose := matchingClose(toks, objOpen)
 		if objClose < 0 {
-			return 0, 0, false
+			return 0, 0, false, ""
 		}
 		if objClose+1 < len(toks) && toks[objClose+1].kind == tokPunct && toks[objClose+1].text == ")" {
-			return objOpen, objClose, true
+			if !identityConfigWrappers[toks[p].text] {
+				return 0, 0, false, toks[p].text
+			}
+			return objOpen, objClose, true, ""
 		}
 	}
-	return 0, 0, false
+	return 0, 0, false, ""
+}
+
+// hasTopLevelSpread reports whether the object literal spanning
+// (open, close) contains a spread — three consecutive "." tokens — as a
+// DIRECT element, at depth 0 relative to that object. The depth walk is
+// the same one findTopLevelKeyOccurrences uses, and rests on the same
+// precondition: that the token stream's bracket structure reflects the
+// source, which tokenize's gate is what guarantees.
+//
+// A spread is gated regardless of WHERE it sits relative to a key, and
+// that is a deliberate refusal to reason about position. JavaScript's
+// own rule is last-writer-wins, so a spread AFTER a key can silently
+// replace it while a spread before it cannot — but acting on that
+// distinction means trusting this scanner's own ordering model over a
+// construct whose contents come from another module, and "the scanner
+// noticed the construct and reasoned about it anyway" is precisely the
+// failure the template-literal finding was. What the object contains is
+// unknown either way; only the odds change, and this check does not
+// trade in odds.
+func hasTopLevelSpread(toks []token, open, close int) bool {
+	depth := 0
+	for idx := open + 1; idx < close; idx++ {
+		tk := toks[idx]
+		if depth == 0 && tk.kind == tokPunct && tk.text == "." &&
+			tokenEquals(toks, idx+1, token{kind: tokPunct, text: "."}) &&
+			tokenEquals(toks, idx+2, token{kind: tokPunct, text: "."}) {
+			return true
+		}
+		if tk.kind == tokPunct {
+			switch tk.text {
+			case "{", "(", "[":
+				depth++
+			case "}", ")", "]":
+				depth--
+			}
+		}
+	}
+	return false
 }
 
 // parseAstroConfig extracts both keys this check reads from one file's
@@ -765,7 +997,19 @@ func parseAstroConfig(content []byte) astroConfig {
 
 	var cfg astroConfig
 
-	objOpen, objClose, ok := findExportedConfigObject(toks)
+	objOpen, objClose, ok, unknownWrapper := findExportedConfigObject(toks)
+	if unknownWrapper != "" {
+		// The export is a call taking one object literal, and the
+		// function being called is not the one wrapper this check knows
+		// to be the identity. Whether that object reaches Astro
+		// unchanged is a fact about code this scanner is not reading, so
+		// both keys are unresolved — see matchConfigValue.
+		return astroConfig{
+			unresolved: true,
+			unresolvedReason: "an export wrapped in `" + unknownWrapper +
+				"(...)` (only Astro's own defineConfig is known to hand back the object it was given)",
+		}
+	}
 	if !ok {
 		// No literal exported config object: an identifier re-export, a
 		// spread-only default export, a call this check doesn't
@@ -777,6 +1021,18 @@ func parseAstroConfig(content []byte) astroConfig {
 		// stream itself is trustworthy here, there simply isn't an
 		// exported object shape this check recognises inside it.
 		return cfg
+	}
+
+	if hasTopLevelSpread(toks, objOpen, objClose) {
+		// A spread in the exported config object: its keys come from
+		// somewhere this scan never sees, and could set or replace
+		// either of the two this check reads. Both are unresolved, and
+		// the position of the spread relative to a key is deliberately
+		// not considered — see hasTopLevelSpread.
+		return astroConfig{
+			unresolved:       true,
+			unresolvedReason: "a spread (`...`) in the exported config object (its keys come from somewhere this check can't see)",
+		}
 	}
 
 	srcDirKeys := findTopLevelKeyOccurrences(toks, objOpen, objClose, "srcDir")
@@ -854,6 +1110,17 @@ func findBuildFormatValue(toks []token, objOpen, objClose int) (value string, fo
 	end := matchingClose(toks, p)
 	if end < 0 || end > objClose {
 		return "", false, false, false
+	}
+
+	if hasTopLevelSpread(toks, p, end) {
+		// A spread inside the build object. Its extent IS bounded — by
+		// the build object itself — so this is a LOCAL unknown and does
+		// not trip the whole-file gate; it reports "a key may be here
+		// and its value can't be read", which is build.format's own
+		// silent state. Without this, "build: { format: 'file',
+		// ...overrides }" warned with full confidence about a value
+		// overrides may well replace.
+		return "", true, false, false
 	}
 
 	formatKeys := findTopLevelKeyOccurrences(toks, p, end, "format")
