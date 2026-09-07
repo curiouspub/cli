@@ -174,7 +174,7 @@ what passes locally and what passes in CI cannot diverge.
   rows that skip on a missing program, a filesystem feature an account
   cannot use, or a permission the runner does not hold, each of which is
   honest on one platform and a broken environment on another. `make test`
-  therefore runs through `internal/skipcheck`, which prints every skip
+  therefore runs through `tools/skipcheck`, which prints every skip
   with the reason its author wrote, checks it against
   `scripts/expected-skips.txt`, and **fails the run on a skip nobody
   declared**. It passes its arguments through and returns the same exit
