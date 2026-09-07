@@ -104,10 +104,51 @@ func RenderPreflight(p Prompter, findings []check.Finding, manifest check.Manife
 
 // blockedFailure turns the hard stops into the copy a person reads.
 //
+// A LONE FINDING CARRYING ITS OWN COPY RENDERS THAT COPY, and the
+// synthesis below is for everything else. This is the commonest case by
+// some distance — most projects that cannot deploy have exactly one
+// reason — and it is the one the synthesis was worst at: a check author
+// who worked out what happened, why, and what to do about it had their
+// three paragraphs wrapped in a summary saying there is 1 thing to fix.
+//
+// TWO OR MORE ALWAYS SYNTHESISE, whether or not either carries copy.
+// Preferring the first finding's own words would show one problem to
+// somebody who has two, and the second would be discovered only after
+// the first was fixed — the round-trip the engine exists to prevent.
+func blockedFailure(hardStops []check.Finding) *ui.Failure {
+	if len(hardStops) == 1 && hardStops[0].HasCopy() {
+		return ownCopy(hardStops[0])
+	}
+	return synthesised(hardStops)
+}
+
+// ownCopy renders a finding's three parts as written.
+//
+// VERBATIM, and the paths are deliberately not appended. An author who
+// wrote three paragraphs about a file had the path in hand and chose
+// what to say about it; a renderer stapling a list underneath would be
+// editing somebody's prose. A finding with no copy of its own gets its
+// paths listed, because there nothing else would name them.
+//
+// The headline falls back to the required one-line summary when the
+// check supplied only a reason or only an action. Copy is optional part
+// by part, and a check that wrote one part has worked its copy out as
+// far as it needed to — dropping back to the synthesis there would
+// throw that part away.
+func ownCopy(f check.Finding) *ui.Failure {
+	what := f.What
+	if what == "" {
+		what = f.Message
+	}
+	return ui.NewFailure(what, f.Why, f.Next)
+}
+
+// synthesised builds one failure out of several summaries.
+//
 // EVERY ONE OF THEM IS REPORTED, in one run. Someone whose project is
 // missing astro and a lockfile should learn both facts now rather than
 // discover the second only after fixing the first and running again.
-func blockedFailure(hardStops []check.Finding) *ui.Failure {
+func synthesised(hardStops []check.Finding) *ui.Failure {
 	things := "1 thing"
 	if len(hardStops) != 1 {
 		things = fmt.Sprintf("%d things", len(hardStops))

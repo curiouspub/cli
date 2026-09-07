@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -106,13 +107,13 @@ func fullManifest(ids ...string) check.Manifest {
 func TestPreflightRenderReportsEveryHardStopAndNeverPrompts(t *testing.T) {
 	r := &recorder{answer: true}
 	findings := []check.Finding{
-		hardStop(check.CheckIDAstroDep, "This doesn't look like an Astro project."),
-		hardStop(check.CheckIDLockfile, "No lockfile found."),
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
+		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
+		hardStop(check.IDLockfile, "No lockfile found."),
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
 	}
 
-	packed, err := gatedDeploy(r, findings, fullManifest(check.CheckIDAstroDep,
-		check.CheckIDLockfile, check.CheckIDLocalhost), 0)
+	packed, err := gatedDeploy(r, findings, fullManifest(check.IDAstroDep,
+		check.IDLockfile, check.IDLocalhost), 0)
 
 	if packed {
 		t.Error("the packer ran after a hard stop")
@@ -148,10 +149,10 @@ func TestPreflightRenderSaysHowManyProblems(t *testing.T) {
 		findings []check.Finding
 		want     string
 	}{
-		{"one", []check.Finding{hardStop(check.CheckIDAstroDep, "a")}, "1 thing"},
+		{"one", []check.Finding{hardStop(check.IDAstroDep, "a")}, "1 thing"},
 		{"two", []check.Finding{
-			hardStop(check.CheckIDAstroDep, "a"),
-			hardStop(check.CheckIDLockfile, "b"),
+			hardStop(check.IDAstroDep, "a"),
+			hardStop(check.IDLockfile, "b"),
 		}, "2 things"},
 	}
 
@@ -185,13 +186,13 @@ func TestPreflightRenderSaysHowManyProblems(t *testing.T) {
 func TestPreflightRenderAsksOnceForEveryWarning(t *testing.T) {
 	r := &recorder{answer: true}
 	findings := []check.Finding{
-		warning(check.CheckIDLocalhost, "src/pages/index.astro has a development URL."),
-		warning(check.CheckIDLocalhost, "src/lib/api.ts has a development URL."),
-		warning(check.CheckIDBuildFormat, "build.format will not produce routable URLs."),
+		warning(check.IDLocalhost, "src/pages/index.astro has a development URL."),
+		warning(check.IDLocalhost, "src/lib/api.ts has a development URL."),
+		warning(check.IDBuildFormat, "build.format will not produce routable URLs."),
 	}
 
-	packed, err := gatedDeploy(r, findings, fullManifest(check.CheckIDLocalhost,
-		check.CheckIDBuildFormat), 0)
+	packed, err := gatedDeploy(r, findings, fullManifest(check.IDLocalhost,
+		check.IDBuildFormat), 0)
 
 	if err != nil {
 		t.Fatalf("error = %v, want nil after the user agreed to continue", err)
@@ -225,8 +226,8 @@ func TestPreflightRenderDeclinedExitsZero(t *testing.T) {
 	r := &recorder{answer: false}
 
 	packed, err := gatedDeploy(r, []check.Finding{
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
-	}, fullManifest(check.CheckIDLocalhost), 0)
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+	}, fullManifest(check.IDLocalhost), 0)
 
 	if packed {
 		t.Error("the packer ran after the user declined")
@@ -250,8 +251,8 @@ func TestPreflightRenderNonInteractiveNeitherContinuesNorAborts(t *testing.T) {
 	r := &recorder{answerTo: ui.ErrNotInteractive}
 
 	packed, err := gatedDeploy(r, []check.Finding{
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
-	}, fullManifest(check.CheckIDLocalhost), 0)
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+	}, fullManifest(check.IDLocalhost), 0)
 
 	if packed {
 		t.Error("the packer ran with warnings nobody could be asked about")
@@ -270,9 +271,9 @@ func TestPreflightRenderNonInteractiveNeitherContinuesNorAborts(t *testing.T) {
 func TestPreflightRenderCleanProjectAsksNothing(t *testing.T) {
 	r := &recorder{}
 
-	packed, err := gatedDeploy(r, nil, fullManifest(check.CheckIDAstroDep,
-		check.CheckIDLockfile, check.CheckIDPagesDir, check.CheckIDBuildFormat,
-		check.CheckIDLocalhost), 0)
+	packed, err := gatedDeploy(r, nil, fullManifest(check.IDAstroDep,
+		check.IDLockfile, check.IDPagesDir, check.IDBuildFormat,
+		check.IDLocalhost), 0)
 
 	if err != nil || !packed {
 		t.Fatalf("packed = %v, err = %v, want the deploy to carry on", packed, err)
@@ -303,25 +304,25 @@ func TestPreflightRenderCleanProjectAsksNothing(t *testing.T) {
 func TestPreflightRenderNamesChecksThatDidNotRun(t *testing.T) {
 	r := &recorder{answer: true}
 	manifest := check.Manifest{
-		{CheckID: check.CheckIDAstroDep, Ran: true},
-		{CheckID: check.CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: check.CheckIDPagesDir, Ran: true},
+		{CheckID: check.IDAstroDep, Ran: true},
+		{CheckID: check.IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: check.IDPagesDir, Ran: true},
 	}
 
 	err := RenderPreflight(r, []check.Finding{
-		warning(check.CheckIDPagesDir, "Couldn't find src/pages."),
+		warning(check.IDPagesDir, "Couldn't find src/pages."),
 	}, manifest, 0)
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
 
 	out := r.out.String()
-	for _, want := range []string{check.CheckIDLockfile, "couldn't read package.json"} {
+	for _, want := range []string{check.IDLockfile, "couldn't read package.json"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not mention %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, check.CheckIDAstroDep) {
+	if strings.Contains(out, check.IDAstroDep) {
 		t.Errorf("output names a check that DID run, which turns the skipped list into "+
 			"noise nobody reads:\n%s", out)
 	}
@@ -337,10 +338,10 @@ func TestPreflightRenderKeepsNotesOutOfSight(t *testing.T) {
 	r := &recorder{answer: true}
 
 	err := RenderPreflight(r, []check.Finding{{
-		CheckID:  check.CheckIDBuildFormat,
+		CheckID:  check.IDBuildFormat,
 		Severity: check.SeverityNote,
 		Message:  "couldn't confirm build.format from this config",
-	}}, fullManifest(check.CheckIDBuildFormat), 0)
+	}}, fullManifest(check.IDBuildFormat), 0)
 
 	if err != nil {
 		t.Fatalf("error = %v, want nil — a note is not a warning", err)
@@ -362,11 +363,11 @@ func TestPreflightRenderNamesTheFilesAFindingIsAbout(t *testing.T) {
 	r := &recorder{answer: true}
 
 	err := RenderPreflight(r, []check.Finding{{
-		CheckID:  check.CheckIDLocalhost,
+		CheckID:  check.IDLocalhost,
 		Severity: check.SeverityWarning,
 		Message:  "A development URL is hard-coded.",
 		Paths:    []string{"src/pages/index.astro", "src/lib/api.ts"},
-	}}, fullManifest(check.CheckIDLocalhost), 0)
+	}}, fullManifest(check.IDLocalhost), 0)
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -405,7 +406,7 @@ func TestPreflightRenderReportsDurationOnlyWhenSlow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &recorder{}
-			if err := RenderPreflight(r, nil, fullManifest(check.CheckIDAstroDep), tc.elapsed); err != nil {
+			if err := RenderPreflight(r, nil, fullManifest(check.IDAstroDep), tc.elapsed); err != nil {
 				t.Fatalf("error = %v", err)
 			}
 			mentioned := strings.Contains(r.out.String(), "Pre-flight took")
@@ -422,15 +423,15 @@ func TestPreflightRenderReportsDurationOnlyWhenSlow(t *testing.T) {
 // something a person can diff and a test can pin.
 func TestPreflightRenderIsByteIdenticalAcrossRuns(t *testing.T) {
 	findings := []check.Finding{
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
-		warning(check.CheckIDBuildFormat, "build.format will not produce routable URLs."),
-		{CheckID: check.CheckIDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+		warning(check.IDBuildFormat, "build.format will not produce routable URLs."),
+		{CheckID: check.IDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
 	}
 	manifest := check.Manifest{
-		{CheckID: check.CheckIDAstroDep, Ran: true},
-		{CheckID: check.CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: check.CheckIDPagesDir, Ran: false, Reason: "couldn't read astro.config"},
-		{CheckID: check.CheckIDLocalhost, Ran: true},
+		{CheckID: check.IDAstroDep, Ran: true},
+		{CheckID: check.IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: check.IDPagesDir, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: check.IDLocalhost, Ran: true},
 	}
 
 	run := func() string {
@@ -465,20 +466,251 @@ func TestPreflightRenderExitCodes(t *testing.T) {
 		want     int
 	}{
 		{"clean", nil, true, nil, 0},
-		{"warning accepted", []check.Finding{warning(check.CheckIDLocalhost, "w")}, true, nil, 0},
-		{"warning declined", []check.Finding{warning(check.CheckIDLocalhost, "w")}, false, nil, 0},
-		{"hard stop", []check.Finding{hardStop(check.CheckIDAstroDep, "h")}, true, nil, 1},
-		{"no terminal", []check.Finding{warning(check.CheckIDLocalhost, "w")}, false,
+		{"warning accepted", []check.Finding{warning(check.IDLocalhost, "w")}, true, nil, 0},
+		{"warning declined", []check.Finding{warning(check.IDLocalhost, "w")}, false, nil, 0},
+		{"hard stop", []check.Finding{hardStop(check.IDAstroDep, "h")}, true, nil, 1},
+		{"no terminal", []check.Finding{warning(check.IDLocalhost, "w")}, false,
 			ui.ErrNotInteractive, 1},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &recorder{answer: tc.answer, answerTo: tc.answerTo}
-			err := RenderPreflight(r, tc.findings, fullManifest(check.CheckIDLocalhost), 0)
+			err := RenderPreflight(r, tc.findings, fullManifest(check.IDLocalhost), 0)
 			if code := exitCodeFor(t, err); code != tc.want {
 				t.Errorf("exit code = %d, want %d (error %#v)", code, tc.want, err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------
+// A lone hard finding renders its own copy
+// ---------------------------------------------------------------------
+
+// readGolden reads a golden file and refuses an empty one, because a
+// golden test against nothing passes against nothing.
+func readGolden(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("reading the golden file: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("%s is empty", name)
+	}
+	return string(data)
+}
+
+// renderedBytes puts an error through the program's REAL rendering and
+// returns exactly what a person would see, plus the exit code.
+//
+// Through the real one, deliberately. A helper here that reassembled the
+// three parts itself would agree with itself by construction and would
+// go on agreeing after the terminal package changed how a failure is
+// laid out. Stderr is redirected to a file rather than captured, because
+// that type writes to the streams it was built with and this is the only
+// portable way to hand it one a test can read back.
+func renderedBytes(t *testing.T, err error) (string, int) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stderr")
+	sink, openErr := os.Create(path)
+	if openErr != nil {
+		t.Fatalf("creating the capture file: %v", openErr)
+	}
+
+	realErr, realOut := os.Stderr, os.Stdout
+	os.Stderr, os.Stdout = sink, sink
+	code := ui.New().ExitCode(err)
+	os.Stderr, os.Stdout = realErr, realOut
+
+	if closeErr := sink.Close(); closeErr != nil {
+		t.Fatalf("closing the capture file: %v", closeErr)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("reading the capture file: %v", readErr)
+	}
+	return string(data), code
+}
+
+// The lockfile copy, as a check that owns the condition would carry it.
+// The words are the ones the terminal package already holds as a worked
+// example — the point of this round is that a finding can now DELIVER
+// them, which nothing could before.
+func lockfileFinding() check.Finding {
+	return check.Finding{
+		CheckID:  check.IDLockfile,
+		Severity: check.SeverityHardStop,
+		Message:  "no lockfile found",
+		What:     "No lockfile found.",
+		Why: "curious installs your dependencies from a lockfile, so it builds the\n" +
+			"exact versions you tested. Your project has package.json but no\n" +
+			"package-lock.json, npm-shrinkwrap.json or pnpm-lock.yaml.",
+		Next: "Run `npm install` (or `pnpm install`), commit the lockfile it\n" +
+			"creates, and try again.",
+	}
+}
+
+// TestPreflightRenderLoneHardFindingRendersItsOwnCopy is the case the
+// synthesis was getting wrong, and it is the commonest one. A person
+// with exactly one problem should read the sentence the check's author
+// wrote about that problem — not that sentence wrapped in a summary
+// explaining that there is 1 thing to fix.
+//
+// GOLDEN, and the golden was TYPED from the copy rather than captured
+// from this code. One captured from the output asserts only that the
+// output is unchanged; one written from the copy as authored asserts
+// that the code says what the copy says.
+//
+// REQUIRED MUTATION: make the lone-finding path synthesise anyway. This
+// row reds; the multiples row does not move.
+func TestPreflightRenderLoneHardFindingRendersItsOwnCopy(t *testing.T) {
+	r := &recorder{}
+
+	err := RenderPreflight(r, []check.Finding{lockfileFinding()},
+		fullManifest(check.IDLockfile), 0)
+
+	got, code := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-with-copy.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if len(r.prompts) != 0 {
+		t.Errorf("prompts = %v, want none", r.prompts)
+	}
+}
+
+// TestPreflightRenderLoneHardFindingWithoutCopyIsSynthesised. Most
+// checks will not have worked three paragraphs out, and the summary has
+// to carry them — so the synthesis stays for exactly that case rather
+// than being replaced by it.
+func TestPreflightRenderLoneHardFindingWithoutCopyIsSynthesised(t *testing.T) {
+	r := &recorder{}
+
+	err := RenderPreflight(r, []check.Finding{
+		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
+	}, fullManifest(check.IDAstroDep), 0)
+
+	got, code := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-without-copy.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+}
+
+// TestPreflightRenderTwoHardFindingsAlwaysSynthesise, whether or not
+// either carries copy. A renderer that quietly preferred a carried copy
+// would show one problem to somebody who has two, and the second would
+// be discovered only after the first was fixed — the round-trip the
+// whole engine exists to prevent.
+//
+// BOTH ORDERS ARE RUN, and the second case is here because a mutation
+// went green without it. The row originally put the copy-carrying
+// finding second, so "prefer the first finding's copy" changed nothing
+// and passed — the row could not catch the thing it was written to
+// catch, and its own comment said otherwise. Position is exactly what
+// such a preference keys on, so position is what the table varies.
+//
+// Each case asserts the joined summaries as bytes, so a preference reds
+// rather than merely looking different.
+func TestPreflightRenderTwoHardFindingsAlwaysSynthesise(t *testing.T) {
+	withCopy := lockfileFinding()
+	withCopy.Message = "No lockfile found."
+	bare := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
+
+	cases := []struct {
+		name     string
+		findings []check.Finding
+		golden   string
+	}{
+		{"copy second", []check.Finding{bare, withCopy}, "two-hard-findings.golden"},
+		{"copy first", []check.Finding{withCopy, bare}, "two-hard-findings-copy-first.golden"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{}
+			err := RenderPreflight(r, tc.findings,
+				fullManifest(check.IDAstroDep, check.IDLockfile), 0)
+
+			got, code := renderedBytes(t, err)
+			if want := readGolden(t, tc.golden); got != want {
+				t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+			}
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			for _, summary := range []string{
+				"This doesn't look like an Astro project.", "No lockfile found.",
+			} {
+				if !strings.Contains(got, summary) {
+					t.Errorf("rendering does not carry the summary %q:\n%s", summary, got)
+				}
+			}
+			if strings.Contains(got, "curious installs your dependencies") {
+				t.Errorf("a finding's own copy was preferred over the summary of both:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestPreflightRenderFillsAMissingHeadlineFromTheSummary. Copy is
+// optional part by part, and a check that wrote only a reason has still
+// worked its copy out — so the headline falls back to the required
+// one-line summary rather than the whole message falling back to
+// synthesis and throwing that reason away.
+//
+// MUTATION: leave What empty rather than filling it. The golden reds on
+// the missing headline.
+func TestPreflightRenderFillsAMissingHeadlineFromTheSummary(t *testing.T) {
+	r := &recorder{}
+
+	err := RenderPreflight(r, []check.Finding{{
+		CheckID:  check.IDLockfile,
+		Severity: check.SeverityHardStop,
+		Message:  "No lockfile found.",
+		Why: "curious installs your dependencies from a lockfile, so it builds the\n" +
+			"exact versions you tested.",
+	}}, fullManifest(check.IDLockfile), 0)
+
+	got, _ := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-partial-copy.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths pins a real
+// asymmetry rather than papering over it. A finding WITHOUT copy has its
+// paths listed under the summary, because nothing else would name them.
+// A finding WITH copy is rendered exactly as its author wrote it — the
+// author had the paths and chose what to say about them, and a renderer
+// appending a list underneath would be editing somebody's prose.
+func TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths(t *testing.T) {
+	withCopy := lockfileFinding()
+	withCopy.Paths = []string{"package.json"}
+
+	err := RenderPreflight(&recorder{}, []check.Finding{withCopy},
+		fullManifest(check.IDLockfile), 0)
+
+	got, _ := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-with-copy.golden"); got != want {
+		t.Errorf("copy was not rendered verbatim:\n%s\nwant:\n%s", got, want)
+	}
+
+	bare := check.Finding{
+		CheckID:  check.IDLockfile,
+		Severity: check.SeverityHardStop,
+		Message:  "No lockfile found.",
+		Paths:    []string{"package.json"},
+	}
+	synthesised, _ := renderedBytes(t, RenderPreflight(&recorder{},
+		[]check.Finding{bare}, fullManifest(check.IDLockfile), 0))
+	if !strings.Contains(synthesised, "package.json") {
+		t.Errorf("a finding with no copy of its own lost the file it is about:\n%s", synthesised)
 	}
 }

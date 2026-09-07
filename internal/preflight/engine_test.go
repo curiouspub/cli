@@ -62,7 +62,7 @@ func newStub(journal *[]string, result Result, ids ...string) *stub {
 // written before the engine was.
 func astroConfigCheck() Check {
 	return Check{
-		IDs: []string{check.CheckIDPagesDir, check.CheckIDBuildFormat},
+		IDs: []string{check.IDPagesDir, check.IDBuildFormat},
 		Run: func(fsys FS, root string) Result {
 			return Result{Findings: CheckAstroConfig(fsys, root)}
 		},
@@ -128,20 +128,20 @@ func TestEngineRunsEveryCheckDespiteAHardStop(t *testing.T) {
 	var journal []string
 	checks := []Check{
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID:  check.CheckIDAstroDep,
+			CheckID:  check.IDAstroDep,
 			Severity: check.SeverityHardStop,
 			Message:  "not an Astro project",
-		}}}, check.CheckIDAstroDep).check(),
+		}}}, check.IDAstroDep).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID:  check.CheckIDLockfile,
+			CheckID:  check.IDLockfile,
 			Severity: check.SeverityHardStop,
 			Message:  "no lockfile found",
-		}}}, check.CheckIDLockfile).check(),
+		}}}, check.IDLockfile).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID:  check.CheckIDLocalhost,
+			CheckID:  check.IDLocalhost,
 			Severity: check.SeverityWarning,
 			Message:  "a development URL is hard-coded",
-		}}}, check.CheckIDLocalhost).check(),
+		}}}, check.IDLocalhost).check(),
 	}
 
 	findings, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
@@ -149,7 +149,7 @@ func TestEngineRunsEveryCheckDespiteAHardStop(t *testing.T) {
 	if len(journal) != 3 {
 		t.Fatalf("checks that ran = %v, want all three", journal)
 	}
-	want := []string{check.CheckIDAstroDep, check.CheckIDLockfile, check.CheckIDLocalhost}
+	want := []string{check.IDAstroDep, check.IDLockfile, check.IDLocalhost}
 	if got := findingIDs(findings); !equalStrings(got, want) {
 		t.Errorf("findings = %v, want %v — every check's finding, hard stops first", got, want)
 	}
@@ -170,29 +170,29 @@ func TestEngineReportsHardStopsBeforeWarnings(t *testing.T) {
 	var journal []string
 	checks := []Check{
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDAstroDep, Severity: check.SeverityHardStop, Message: "a",
-		}}}, check.CheckIDAstroDep).check(),
+			CheckID: check.IDAstroDep, Severity: check.SeverityHardStop, Message: "a",
+		}}}, check.IDAstroDep).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDLockfile, Severity: check.SeverityWarning, Message: "b",
-		}}}, check.CheckIDLockfile).check(),
+			CheckID: check.IDLockfile, Severity: check.SeverityWarning, Message: "b",
+		}}}, check.IDLockfile).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDPagesDir, Severity: check.SeverityHardStop, Message: "c",
+			CheckID: check.IDPagesDir, Severity: check.SeverityHardStop, Message: "c",
 		}, {
-			CheckID: check.CheckIDBuildFormat, Severity: check.SeverityNote, Message: "d",
-		}}}, check.CheckIDPagesDir, check.CheckIDBuildFormat).check(),
+			CheckID: check.IDBuildFormat, Severity: check.SeverityNote, Message: "d",
+		}}}, check.IDPagesDir, check.IDBuildFormat).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDLocalhost, Severity: check.SeverityWarning, Message: "e",
-		}}}, check.CheckIDLocalhost).check(),
+			CheckID: check.IDLocalhost, Severity: check.SeverityWarning, Message: "e",
+		}}}, check.IDLocalhost).check(),
 	}
 
 	findings, _ := Run(checks, OSFileSystem{}, "irrelevant")
 
 	want := []string{
-		check.CheckIDAstroDep,    // hard stop, rank 0
-		check.CheckIDPagesDir,    // hard stop, rank 2
-		check.CheckIDLockfile,    // warning,   rank 1
-		check.CheckIDLocalhost,   // warning,   rank 4
-		check.CheckIDBuildFormat, // note,      rank 3
+		check.IDAstroDep,    // hard stop, rank 0
+		check.IDPagesDir,    // hard stop, rank 2
+		check.IDLockfile,    // warning,   rank 1
+		check.IDLocalhost,   // warning,   rank 4
+		check.IDBuildFormat, // note,      rank 3
 	}
 	if got := findingIDs(findings); !equalStrings(got, want) {
 		t.Errorf("report order = %v, want %v", got, want)
@@ -211,19 +211,19 @@ func TestEngineOrderIsFixedRegardlessOfRegistrationOrder(t *testing.T) {
 	var journal []string
 	backwards := []Check{
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDLocalhost, Severity: check.SeverityWarning, Message: "e",
-		}}}, check.CheckIDLocalhost).check(),
+			CheckID: check.IDLocalhost, Severity: check.SeverityWarning, Message: "e",
+		}}}, check.IDLocalhost).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDLockfile, Severity: check.SeverityWarning, Message: "b",
-		}}}, check.CheckIDLockfile).check(),
+			CheckID: check.IDLockfile, Severity: check.SeverityWarning, Message: "b",
+		}}}, check.IDLockfile).check(),
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID: check.CheckIDAstroDep, Severity: check.SeverityWarning, Message: "a",
-		}}}, check.CheckIDAstroDep).check(),
+			CheckID: check.IDAstroDep, Severity: check.SeverityWarning, Message: "a",
+		}}}, check.IDAstroDep).check(),
 	}
 
 	findings, manifest := Run(backwards, OSFileSystem{}, "irrelevant")
 
-	want := []string{check.CheckIDAstroDep, check.CheckIDLockfile, check.CheckIDLocalhost}
+	want := []string{check.IDAstroDep, check.IDLockfile, check.IDLocalhost}
 	if got := findingIDs(findings); !equalStrings(got, want) {
 		t.Errorf("report order = %v, want the declared order %v", got, want)
 	}
@@ -255,10 +255,10 @@ func TestEngineOrderIsFixedRegardlessOfRegistrationOrder(t *testing.T) {
 func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 	var journal []string
 	checks := []Check{
-		newStub(&journal, Result{}, check.CheckIDAstroDep).check(),
-		newStub(&journal, Result{}, check.CheckIDLockfile).check(),
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
+		newStub(&journal, Result{}, check.IDLockfile).check(),
 		astroConfigCheck(),
-		newStub(&journal, Result{}, check.CheckIDLocalhost).check(),
+		newStub(&journal, Result{}, check.IDLocalhost).check(),
 	}
 
 	findings, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
@@ -268,11 +268,11 @@ func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 	}
 
 	wantIDs := []string{
-		check.CheckIDAstroDep,
-		check.CheckIDLockfile,
-		check.CheckIDPagesDir,
-		check.CheckIDBuildFormat,
-		check.CheckIDLocalhost,
+		check.IDAstroDep,
+		check.IDLockfile,
+		check.IDPagesDir,
+		check.IDBuildFormat,
+		check.IDLocalhost,
 	}
 	if got := manifestIDs(manifest); !equalStrings(got, wantIDs) {
 		t.Fatalf("manifest = %v, want one row per requested check id in the declared order %v",
@@ -307,18 +307,18 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 	var journal []string
 	checks := []Check{
 		newStub(&journal, Result{Findings: []check.Finding{{
-			CheckID:  check.CheckIDAstroDep,
+			CheckID:  check.IDAstroDep,
 			Severity: check.SeverityHardStop,
 			Message:  "couldn't read package.json in this directory",
 			Paths:    []string{"package.json"},
-		}}}, check.CheckIDAstroDep).check(),
-		newStub(&journal, Result{NotRun: "couldn't read package.json"}, check.CheckIDLockfile).check(),
+		}}}, check.IDAstroDep).check(),
+		newStub(&journal, Result{NotRun: "couldn't read package.json"}, check.IDLockfile).check(),
 	}
 
 	findings, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
 
-	if len(findings) != 1 || findings[0].CheckID != check.CheckIDAstroDep {
-		t.Fatalf("findings = %+v, want one from %s", findings, check.CheckIDAstroDep)
+	if len(findings) != 1 || findings[0].CheckID != check.IDAstroDep {
+		t.Fatalf("findings = %+v, want one from %s", findings, check.IDAstroDep)
 	}
 	if !strings.Contains(findings[0].Message, "package.json") {
 		t.Errorf("message = %q, want it to name package.json", findings[0].Message)
@@ -330,18 +330,18 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 	var lockfile check.Ran
 	var found bool
 	for _, row := range manifest {
-		if row.CheckID == check.CheckIDLockfile {
+		if row.CheckID == check.IDLockfile {
 			lockfile, found = row, true
 		}
 	}
 	if !found {
-		t.Fatalf("manifest = %v, want a row for %s", manifestIDs(manifest), check.CheckIDLockfile)
+		t.Fatalf("manifest = %v, want a row for %s", manifestIDs(manifest), check.IDLockfile)
 	}
 	if lockfile.Ran {
-		t.Errorf("%s: Ran = true, want false — it could not look", check.CheckIDLockfile)
+		t.Errorf("%s: Ran = true, want false — it could not look", check.IDLockfile)
 	}
 	if !strings.Contains(lockfile.Reason, "package.json") {
-		t.Errorf("%s: Reason = %q, want it to name package.json", check.CheckIDLockfile, lockfile.Reason)
+		t.Errorf("%s: Reason = %q, want it to name package.json", check.IDLockfile, lockfile.Reason)
 	}
 }
 
@@ -353,11 +353,11 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 // MUTATION: emit one row per check rather than per id. Reds on length.
 func TestEngineManifestRowPerDeclaredID(t *testing.T) {
 	var journal []string
-	checks := []Check{astroConfigCheck(), newStub(&journal, Result{}, check.CheckIDLocalhost).check()}
+	checks := []Check{astroConfigCheck(), newStub(&journal, Result{}, check.IDLocalhost).check()}
 
 	_, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
 
-	want := []string{check.CheckIDPagesDir, check.CheckIDBuildFormat, check.CheckIDLocalhost}
+	want := []string{check.IDPagesDir, check.IDBuildFormat, check.IDLocalhost}
 	if got := manifestIDs(manifest); !equalStrings(got, want) {
 		t.Errorf("manifest = %v, want %v", got, want)
 	}
@@ -376,24 +376,24 @@ func TestEngineKeepsWhatItWasNotExpecting(t *testing.T) {
 		// Declares one id, reports on another.
 		newStub(&journal, Result{Findings: []check.Finding{{
 			CheckID: "some-check-nobody-declared", Severity: check.SeverityWarning, Message: "x",
-		}}}, check.CheckIDAstroDep).check(),
+		}}}, check.IDAstroDep).check(),
 		// Says it could not run AND has something to say anyway.
 		newStub(&journal, Result{
 			NotRun: "couldn't read package.json",
 			Findings: []check.Finding{{
-				CheckID: check.CheckIDLockfile, Severity: check.SeverityWarning, Message: "y",
+				CheckID: check.IDLockfile, Severity: check.SeverityWarning, Message: "y",
 			}},
-		}, check.CheckIDLockfile).check(),
+		}, check.IDLockfile).check(),
 	}
 
 	findings, manifest := Run(checks, OSFileSystem{}, "irrelevant")
 
-	want := []string{check.CheckIDLockfile, "some-check-nobody-declared"}
+	want := []string{check.IDLockfile, "some-check-nobody-declared"}
 	if got := findingIDs(findings); !equalStrings(got, want) {
 		t.Errorf("findings = %v, want %v — an undeclared id sorts last but is never dropped",
 			got, want)
 	}
-	if rows := manifest.NotRun(); len(rows) != 1 || rows[0].CheckID != check.CheckIDLockfile {
+	if rows := manifest.NotRun(); len(rows) != 1 || rows[0].CheckID != check.IDLockfile {
 		t.Errorf("NotRun() = %+v, want the lockfile row — a finding does not make a check ran",
 			rows)
 	}
@@ -417,13 +417,13 @@ func TestEngineOutputIsByteIdenticalAcrossRuns(t *testing.T) {
 		var journal []string
 		return []Check{
 			newStub(&journal, Result{Findings: []check.Finding{
-				{CheckID: check.CheckIDAstroDep, Severity: check.SeverityWarning, Message: "first"},
-				{CheckID: check.CheckIDAstroDep, Severity: check.SeverityWarning, Message: "second"},
-				{CheckID: check.CheckIDAstroDep, Severity: check.SeverityWarning, Message: "third"},
-			}}, check.CheckIDAstroDep).check(),
-			newStub(&journal, Result{NotRun: "nothing to read"}, check.CheckIDLockfile).check(),
+				{CheckID: check.IDAstroDep, Severity: check.SeverityWarning, Message: "first"},
+				{CheckID: check.IDAstroDep, Severity: check.SeverityWarning, Message: "second"},
+				{CheckID: check.IDAstroDep, Severity: check.SeverityWarning, Message: "third"},
+			}}, check.IDAstroDep).check(),
+			newStub(&journal, Result{NotRun: "nothing to read"}, check.IDLockfile).check(),
 			astroConfigCheck(),
-			newStub(&journal, Result{}, check.CheckIDLocalhost).check(),
+			newStub(&journal, Result{}, check.IDLocalhost).check(),
 		}
 	}
 	root := filepath.Join("testdata", "engine", "no-pages-dir")
@@ -445,7 +445,7 @@ func TestEngineOutputIsByteIdenticalAcrossRuns(t *testing.T) {
 func TestEngineHandsEachCheckTheRootAndFilesystem(t *testing.T) {
 	var journal []string
 	fsys := &countingFS{}
-	s := newStub(&journal, Result{}, check.CheckIDAstroDep)
+	s := newStub(&journal, Result{}, check.IDAstroDep)
 
 	Run([]Check{s.check()}, fsys, filepath.Join("some", "project"))
 
@@ -495,9 +495,9 @@ func dialsDuring(t *testing.T, checks []Check, root string) int {
 func TestEngineMakesNoNetworkCalls(t *testing.T) {
 	var journal []string
 	real := []Check{
-		newStub(&journal, Result{}, check.CheckIDAstroDep).check(),
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
 		astroConfigCheck(),
-		newStub(&journal, Result{}, check.CheckIDLocalhost).check(),
+		newStub(&journal, Result{}, check.IDLocalhost).check(),
 	}
 	root := filepath.Join("testdata", "engine", "no-pages-dir")
 
@@ -507,7 +507,7 @@ func TestEngineMakesNoNetworkCalls(t *testing.T) {
 
 	t.Run("positive control: the instrument sees a dial", func(t *testing.T) {
 		dialing := Check{
-			IDs: []string{check.CheckIDLocalhost},
+			IDs: []string{check.IDLocalhost},
 			Run: func(FS, string) Result {
 				resp, err := http.Get("http://a-host-that-does-not-resolve.invalid/")
 				if err == nil {
@@ -561,7 +561,7 @@ func TestEngineWritesNothing(t *testing.T) {
 
 	var journal []string
 	Run([]Check{
-		newStub(&journal, Result{}, check.CheckIDAstroDep).check(),
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
 		astroConfigCheck(),
 	}, OSFileSystem{}, root)
 
@@ -599,15 +599,79 @@ func TestEngineWritesNothing(t *testing.T) {
 func TestEngineManifestOrderSurvivesACheckDeclaringItsIDsBackwards(t *testing.T) {
 	var journal []string
 	backwards := &stub{
-		ids:     []string{check.CheckIDBuildFormat, check.CheckIDPagesDir},
+		ids:     []string{check.IDBuildFormat, check.IDPagesDir},
 		journal: &journal,
 	}
 
 	_, manifest := Run([]Check{backwards.check()}, OSFileSystem{}, "irrelevant")
 
-	want := []string{check.CheckIDPagesDir, check.CheckIDBuildFormat}
+	want := []string{check.IDPagesDir, check.IDBuildFormat}
 	if got := manifestIDs(manifest); !equalStrings(got, want) {
 		t.Errorf("manifest = %v, want the declared order %v regardless of how the check "+
 			"listed its own ids", got, want)
+	}
+}
+
+// TestCombinedCoverageEqualsTheDeclaredUniverse is the row that makes
+// several producers safe, and it is the reason the declared list had to
+// leave this package.
+//
+// Each producer can only see its own coverage. Only the UNION can be
+// compared against what was supposed to be covered — so a check that
+// nobody was wired up to run is invisible to every producer separately
+// and obvious here. Both directions are asserted: a declared check with
+// no row is a silent hole in the report, and a row for an id nobody
+// declared is a producer answering a question that is not on the list,
+// which reaches the user as the name of a check they have never heard of.
+//
+// TODAY THERE IS ONE PRODUCER — the engine — and the walk is not written
+// yet. This row is deliberately shaped for two: it combines rather than
+// inspecting the engine's manifest directly, so the walk arrives as an
+// extra argument and an extra entry in the declared list, and nothing
+// here has to be rewritten to notice it.
+//
+// MUTATION: leave one check out of the registered set. The missing half
+// reds. MUTATION: give one stand-in an id nobody declared. The
+// unexpected half reds.
+func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
+	var journal []string
+	engineChecks := []Check{
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
+		newStub(&journal, Result{}, check.IDLockfile).check(),
+		astroConfigCheck(),
+		newStub(&journal, Result{}, check.IDLocalhost).check(),
+	}
+
+	findings, manifest := Run(engineChecks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+
+	combined, err := check.Combine(check.Results{Findings: findings, Manifest: manifest})
+	if err != nil {
+		t.Fatalf("combining the producers: %v", err)
+	}
+
+	missing, unexpected := check.CoverageGaps(combined.Manifest)
+	if len(missing) != 0 {
+		t.Errorf("declared checks nobody covered: %v", missing)
+	}
+	if len(unexpected) != 0 {
+		t.Errorf("covered ids nobody declared: %v", unexpected)
+	}
+}
+
+// TestCombineRefusesASecondProducerClaimingAnEngineCheck is the other
+// half of the same seam, from this side of it. The engine has no way to
+// know what another producer claimed, so the refusal has to happen where
+// the two meet — and this row is what says the engine's output really
+// does flow through that gate rather than around it.
+func TestCombineRefusesASecondProducerClaimingAnEngineCheck(t *testing.T) {
+	var journal []string
+	findings, manifest := Run([]Check{
+		newStub(&journal, Result{}, check.IDAstroDep).check(),
+	}, OSFileSystem{}, "irrelevant")
+
+	imposter := check.Results{Manifest: check.Manifest{{CheckID: check.IDAstroDep, Ran: true}}}
+
+	if _, err := check.Combine(check.Results{Findings: findings, Manifest: manifest}, imposter); err == nil {
+		t.Fatal("a second producer claimed a check the engine had already run, and it was accepted")
 	}
 }

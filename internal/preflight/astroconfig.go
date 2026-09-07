@@ -180,7 +180,7 @@ func CheckAstroConfig(fsys FS, root string) []check.Finding {
 			return finish(nil, "", uncheckedCandidates)
 		}
 		return finish([]check.Finding{{
-			CheckID:  check.CheckIDPagesDir,
+			CheckID:  check.IDPagesDir,
 			Severity: check.SeverityWarning,
 			Message:  openingClause(pagesDir) + noConfigClause(uncheckedCandidates) + advisoryTail,
 		}}, "", uncheckedCandidates)
@@ -194,7 +194,7 @@ func CheckAstroConfig(fsys FS, root string) []check.Finding {
 			return finish(nil, configName, uncheckedCandidates)
 		}
 		return finish([]check.Finding{{
-			CheckID:  check.CheckIDPagesDir,
+			CheckID:  check.IDPagesDir,
 			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"%s%s couldn't be read (%v), so a custom srcDir couldn't be checked either.%s",
@@ -215,7 +215,7 @@ func CheckAstroConfig(fsys FS, root string) []check.Finding {
 		// a question nobody has shown needs asking, and the answer would
 		// be printed under a sentence claiming src/pages is missing.
 		findings = append(findings, check.Finding{
-			CheckID:  check.CheckIDPagesDir,
+			CheckID:  check.IDPagesDir,
 			Severity: check.SeverityWarning,
 			Message: "Couldn't check whether src/pages exists (the directory couldn't be " +
 				"read), so this check can't tell whether your pages are where Astro looks " +
@@ -299,12 +299,12 @@ func finish(findings []check.Finding, winner string, unchecked []string) []check
 // on exactly that path.
 func attachPagesDirNote(findings []check.Finding, note string) []check.Finding {
 	for i := range findings {
-		if findings[i].CheckID == check.CheckIDPagesDir {
+		if findings[i].CheckID == check.IDPagesDir {
 			findings[i].Message = findings[i].Message + " " + note
 			return findings
 		}
 	}
-	return append(findings, check.Finding{CheckID: check.CheckIDPagesDir, Severity: check.SeverityWarning, Message: note})
+	return append(findings, check.Finding{CheckID: check.IDPagesDir, Severity: check.SeverityWarning, Message: note})
 }
 
 // findConfig searches configCandidates, in order, for the first that
@@ -445,7 +445,7 @@ type astroConfig struct {
 func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfig) []check.Finding {
 	warn := func(format string, args ...any) *check.Finding {
 		return &check.Finding{
-			CheckID:  check.CheckIDPagesDir,
+			CheckID:  check.IDPagesDir,
 			Severity: check.SeverityWarning,
 			Message:  fmt.Sprintf(format, args...) + advisoryTail,
 		}
@@ -510,7 +510,7 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 				// nothing there, so it names the fix instead of
 				// restating the general advice.
 				base = &check.Finding{
-					CheckID:  check.CheckIDPagesDir,
+					CheckID:  check.IDPagesDir,
 					Severity: check.SeverityWarning,
 					Message: fmt.Sprintf(
 						"%s sets srcDir to %q, but %s doesn't exist. Astro looks for pages in "+
@@ -689,7 +689,7 @@ func buildFormatFinding(configName string, parsed astroConfig) *check.Finding {
 		// them apart — a future --verbose, a support transcript — has
 		// nowhere else to learn it.
 		return &check.Finding{
-			CheckID:  check.CheckIDBuildFormat,
+			CheckID:  check.IDBuildFormat,
 			Severity: check.SeverityNote,
 			Message: fmt.Sprintf(
 				"%s couldn't be fully read: it contains %s, so build.format couldn't be "+
@@ -699,7 +699,7 @@ func buildFormatFinding(configName string, parsed astroConfig) *check.Finding {
 	}
 	if parsed.buildFormatAmbiguous {
 		return &check.Finding{
-			CheckID:  check.CheckIDBuildFormat,
+			CheckID:  check.IDBuildFormat,
 			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"%s sets build, or format inside it, more than once, so which value actually "+
@@ -717,7 +717,7 @@ func buildFormatFinding(configName string, parsed astroConfig) *check.Finding {
 	switch parsed.buildFormatValue {
 	case "file", "preserve":
 		return &check.Finding{
-			CheckID:  check.CheckIDBuildFormat,
+			CheckID:  check.IDBuildFormat,
 			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"build.format is set to %q. This platform's routing expects Astro's default "+
