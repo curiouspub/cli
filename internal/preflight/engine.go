@@ -1,7 +1,11 @@
 package preflight
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"sort"
+	"strings"
 
 	"github.com/curiouspub/cli/internal/check"
 )
@@ -69,8 +73,19 @@ type Check struct {
 // inside a check would make the second surface a rewrite rather than a
 // renderer.
 //
+// THE ROOT IS STATTED FIRST, and every check is reported as not run when
+// it is unusable. Handed a directory that is not there, this used to run
+// every check against it and let each draw its own conclusion — which
+// for the config check is a confident advisory that the pages directory
+// is missing, under a manifest saying everything ran. That is the worst
+// available answer: nothing was wrong with the project, the caller was
+// pointed at the wrong place, and the report described a project that
+// does not exist as though it had been read.
+//
 // Nothing here reaches the network, writes a file, or executes any of
-// the user's code.
+// the user's code. That is a promise about THIS function; a check
+// registered by a caller is the caller's code and the engine cannot
+// sandbox it.
 func Run(checks []Check, fsys FS, root string) check.Results {
 	ordered := make([]Check, len(checks))
 	copy(ordered, checks)
@@ -78,12 +93,27 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 		return firstRank(ordered[i]) < firstRank(ordered[j])
 	})
 
+	unusableRoot := rootProblem(fsys, root)
+
 	var findings []check.Finding
 	var manifest check.Manifest
 
 	for _, c := range ordered {
-		var result Result
-		if c.Run != nil {
+		result := Result{NotRun: unusableRoot}
+		switch {
+		case unusableRoot != "":
+			// Nothing is read and nothing is asked. Every row below
+			// carries the same reason, which is the honest one.
+		case c.Run == nil:
+			// A CHECK REGISTERED WITH NO FUNCTION. The manifest exists
+			// to tell "found nothing" from "never looked", and this is
+			// the purest case of never looked there is — so it was the
+			// one the manifest got wrong, computing Ran from a zero
+			// result whose reason is empty and reporting a tick. The
+			// distinction must not fail on the wiring mistake it should
+			// be loudest about.
+			result = Result{NotRun: "nothing is wired up to run " + strings.Join(c.IDs, " and ")}
+		default:
 			result = c.Run(fsys, root)
 		}
 
@@ -112,6 +142,27 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 	// — and a second producer added later cannot arrive in a shape the
 	// combiner has to learn.
 	return check.Results{Findings: findings, Manifest: manifest}
+}
+
+// rootProblem reports why the project directory cannot be read, or "" if
+// it can. The reason is written for a person, because it goes into every
+// manifest row verbatim and is the only thing the reader will see.
+//
+// It goes through the filesystem the caller supplied rather than to the
+// operating system directly. A stat that bypassed the seam would be the
+// one read this package does that a caller cannot substitute, in the
+// function whose whole argument is that it reads nothing else.
+func rootProblem(fsys FS, root string) string {
+	info, err := fsys.Stat(root)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "there is no directory at " + root
+	case err != nil:
+		return fmt.Sprintf("couldn't read the project directory: %v", err)
+	case !info.IsDir():
+		return root + " is a file, not a directory"
+	}
+	return ""
 }
 
 // firstRank is a check's place in the running order: the earliest
