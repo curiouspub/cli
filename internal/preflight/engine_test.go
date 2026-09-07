@@ -74,12 +74,12 @@ func astroConfigCheck() Check {
 // manifest that reordered between runs would be just as broken as
 // findings that did, and only one of the two is visible in a findings
 // slice.
-func render(findings []check.Finding, manifest check.Manifest) string {
+func render(r check.Results) string {
 	var b strings.Builder
-	for _, f := range findings {
+	for _, f := range r.Findings {
 		fmt.Fprintf(&b, "finding %s %s %q %v\n", f.CheckID, f.Severity, f.Message, f.Paths)
 	}
-	for _, row := range manifest {
+	for _, row := range r.Manifest {
 		fmt.Fprintf(&b, "manifest %s ran=%v reason=%q\n", row.CheckID, row.Ran, row.Reason)
 	}
 	return b.String()
@@ -144,7 +144,8 @@ func TestEngineRunsEveryCheckDespiteAHardStop(t *testing.T) {
 		}}}, check.IDLocalhost).check(),
 	}
 
-	findings, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	res := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	findings, manifest := res.Findings, res.Manifest
 
 	if len(journal) != 3 {
 		t.Fatalf("checks that ran = %v, want all three", journal)
@@ -185,7 +186,7 @@ func TestEngineReportsHardStopsBeforeWarnings(t *testing.T) {
 		}}}, check.IDLocalhost).check(),
 	}
 
-	findings, _ := Run(checks, OSFileSystem{}, "irrelevant")
+	findings := Run(checks, OSFileSystem{}, "irrelevant").Findings
 
 	want := []string{
 		check.IDAstroDep,    // hard stop, rank 0
@@ -221,7 +222,8 @@ func TestEngineOrderIsFixedRegardlessOfRegistrationOrder(t *testing.T) {
 		}}}, check.IDAstroDep).check(),
 	}
 
-	findings, manifest := Run(backwards, OSFileSystem{}, "irrelevant")
+	res := Run(backwards, OSFileSystem{}, "irrelevant")
+	findings, manifest := res.Findings, res.Manifest
 
 	want := []string{check.IDAstroDep, check.IDLockfile, check.IDLocalhost}
 	if got := findingIDs(findings); !equalStrings(got, want) {
@@ -261,7 +263,8 @@ func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 		newStub(&journal, Result{}, check.IDLocalhost).check(),
 	}
 
-	findings, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	res := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	findings, manifest := res.Findings, res.Manifest
 
 	if len(findings) != 0 {
 		t.Errorf("findings on a clean project = %+v, want none", findings)
@@ -315,7 +318,8 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 		newStub(&journal, Result{NotRun: "couldn't read package.json"}, check.IDLockfile).check(),
 	}
 
-	findings, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	res := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	findings, manifest := res.Findings, res.Manifest
 
 	if len(findings) != 1 || findings[0].CheckID != check.IDAstroDep {
 		t.Fatalf("findings = %+v, want one from %s", findings, check.IDAstroDep)
@@ -355,7 +359,7 @@ func TestEngineManifestRowPerDeclaredID(t *testing.T) {
 	var journal []string
 	checks := []Check{astroConfigCheck(), newStub(&journal, Result{}, check.IDLocalhost).check()}
 
-	_, manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
+	manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean")).Manifest
 
 	want := []string{check.IDPagesDir, check.IDBuildFormat, check.IDLocalhost}
 	if got := manifestIDs(manifest); !equalStrings(got, want) {
@@ -386,7 +390,8 @@ func TestEngineKeepsWhatItWasNotExpecting(t *testing.T) {
 		}, check.IDLockfile).check(),
 	}
 
-	findings, manifest := Run(checks, OSFileSystem{}, "irrelevant")
+	res := Run(checks, OSFileSystem{}, "irrelevant")
+	findings, manifest := res.Findings, res.Manifest
 
 	want := []string{check.IDLockfile, "some-check-nobody-declared"}
 	if got := findingIDs(findings); !equalStrings(got, want) {
@@ -603,7 +608,7 @@ func TestEngineManifestOrderSurvivesACheckDeclaringItsIDsBackwards(t *testing.T)
 		journal: &journal,
 	}
 
-	_, manifest := Run([]Check{backwards.check()}, OSFileSystem{}, "irrelevant")
+	manifest := Run([]Check{backwards.check()}, OSFileSystem{}, "irrelevant").Manifest
 
 	want := []string{check.IDPagesDir, check.IDBuildFormat}
 	if got := manifestIDs(manifest); !equalStrings(got, want) {
@@ -642,9 +647,7 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 		newStub(&journal, Result{}, check.IDLocalhost).check(),
 	}
 
-	findings, manifest := Run(engineChecks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean"))
-
-	combined, err := check.Combine(check.Results{Findings: findings, Manifest: manifest})
+	combined, err := check.Combine(Run(engineChecks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean")))
 	if err != nil {
 		t.Fatalf("combining the producers: %v", err)
 	}
@@ -665,13 +668,13 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 // does flow through that gate rather than around it.
 func TestCombineRefusesASecondProducerClaimingAnEngineCheck(t *testing.T) {
 	var journal []string
-	findings, manifest := Run([]Check{
+	engineOutput := Run([]Check{
 		newStub(&journal, Result{}, check.IDAstroDep).check(),
 	}, OSFileSystem{}, "irrelevant")
 
 	imposter := check.Results{Manifest: check.Manifest{{CheckID: check.IDAstroDep, Ran: true}}}
 
-	if _, err := check.Combine(check.Results{Findings: findings, Manifest: manifest}, imposter); err == nil {
+	if _, err := check.Combine(engineOutput, imposter); err == nil {
 		t.Fatal("a second producer claimed a check the engine had already run, and it was accepted")
 	}
 }
