@@ -15,13 +15,14 @@
 # use, a permission the runner does not hold. A skip that is not listed
 # below fails the run.
 #
-# WHAT DOES NOT BELONG HERE is as important as what does. The differential
-# row that compares this project's ignore-rule matcher against the real
-# program skips when that program is not installed, and that skip is
-# deliberately absent from this file: the machine running these tests
-# obtained the source with it, so the skip can only mean something is
-# wrong. Its own brief asked that the skip never hide, and leaving it
-# undeclared is what delivers that.
+# WHAT DOES NOT BELONG HERE is as important as what does, and the test is
+# whether the skip could ever be LEGITIMATE — not whether it happens to
+# occur on the machine in front of you. The differential row that compares
+# this project's ignore-rule matcher against the real program skips when
+# that program is not installed; the machine running these tests obtained
+# the source with it, so that skip can only mean something is wrong. It is
+# deliberately absent from this file, and that absence is what makes the
+# skip impossible to hide.
 #
 # A line here is a claim that the skip is legitimate on the platforms it
 # names. Say why in a comment above it; the next reader is deciding
@@ -39,13 +40,23 @@
 # coverage.
 windows github.com/curiouspub/cli/internal/pack TestWalkSkipsARealNamedPipe
 windows github.com/curiouspub/cli/internal/pack TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile
+
+# The rows needing a real symbolic link. MEASURED: the machine this suite
+# runs on can create them, so these do not skip there today — and they
+# are declared anyway, because an account without the privilege is an
+# environment this project supports and the skip would be honest in it.
 #
-# THE SYMBOLIC-LINK ROWS ARE DELIBERATELY NOT LISTED, and their absence
-# is a measurement. They were expected to skip on Windows, where an
-# unprivileged account cannot create a link — and on the machine this
-# suite runs on they do not skip, because it can. Listing them would have
-# been a guess that happened to cost nothing; leaving them out means the
-# day that changes, somebody is told rather than left with a green tick.
+# THAT IS THE LINE THIS FILE DRAWS, and the first draft drew it in the
+# wrong place: it left these out on the grounds that they do not skip
+# here, so that anybody would be "told" if that changed. Being told would
+# mean a red build on a correctly-configured machine, which is how a gate
+# earns its reputation for crying wolf and then gets switched off. The
+# question is not whether a skip HAPPENS here — the report at the end of
+# every run answers that, and answers it better. The question is whether
+# the skip would be LEGITIMATE, and only a skip that could never be
+# legitimate belongs outside this file.
+windows github.com/curiouspub/cli/internal/pack TestWalkListsARealSymlink
+windows github.com/curiouspub/cli/internal/pack TestWalkEmitsItsFindingsFromOneTree
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_FIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkToFIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkedConfigResolves
