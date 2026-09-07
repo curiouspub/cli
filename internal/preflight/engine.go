@@ -71,7 +71,7 @@ type Check struct {
 //
 // Nothing here reaches the network, writes a file, or executes any of
 // the user's code.
-func Run(checks []Check, fsys FS, root string) ([]check.Finding, check.Manifest) {
+func Run(checks []Check, fsys FS, root string) check.Results {
 	ordered := make([]Check, len(checks))
 	copy(ordered, checks)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -105,7 +105,13 @@ func Run(checks []Check, fsys FS, root string) ([]check.Finding, check.Manifest)
 	// time one of them was changed.
 	check.SortManifest(manifest)
 	check.SortFindings(findings)
-	return findings, manifest
+
+	// One pair-shaped concept, one spelling. Every producer in this
+	// program returns check.Results, so the place where two of them meet
+	// takes them as they come rather than re-wrapping at each call site
+	// — and a second producer added later cannot arrive in a shape the
+	// combiner has to learn.
+	return check.Results{Findings: findings, Manifest: manifest}
 }
 
 // firstRank is a check's place in the running order: the earliest

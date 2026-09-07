@@ -122,13 +122,20 @@ func blockedFailure(hardStops []check.Finding) *ui.Failure {
 	return synthesised(hardStops)
 }
 
-// ownCopy renders a finding's three parts as written.
+// ownCopy renders a finding's three parts as written, and then names the
+// files it is about.
 //
-// VERBATIM, and the paths are deliberately not appended. An author who
-// wrote three paragraphs about a file had the path in hand and chose
-// what to say about it; a renderer stapling a list underneath would be
-// editing somebody's prose. A finding with no copy of its own gets its
-// paths listed, because there nothing else would name them.
+// VERBATIM IS A PROMISE NOT TO EDIT AN AUTHOR'S WORDS. It is not a
+// promise to withhold what the finding is carrying. The three parts go
+// out exactly as the check wrote them and the path list follows the
+// reason, so a check that works out good copy and forgets to name its
+// file does not lose it silently in the terminal.
+//
+// The alternative — copy suppresses the paths — was tried and ruled
+// against, because it put an obligation on every check author who has
+// not been hired yet, and its failure mode was silence. A renderer that
+// drops data on the author's behalf is making an editorial decision it
+// cannot see the consequences of.
 //
 // The headline falls back to the required one-line summary when the
 // check supplied only a reason or only an action. Copy is optional part
@@ -140,7 +147,21 @@ func ownCopy(f check.Finding) *ui.Failure {
 	if what == "" {
 		what = f.Message
 	}
-	return ui.NewFailure(what, f.Why, f.Next)
+
+	why := f.Why
+	if len(f.Paths) > 0 {
+		var b strings.Builder
+		b.WriteString(why)
+		if why != "" {
+			b.WriteString("\n")
+		}
+		for _, path := range f.Paths {
+			fmt.Fprintf(&b, "\n  %s", path)
+		}
+		why = strings.TrimPrefix(b.String(), "\n")
+	}
+
+	return ui.NewFailure(what, why, f.Next)
 }
 
 // synthesised builds one failure out of several summaries.
