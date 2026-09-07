@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -56,6 +57,47 @@ func TestWalkEmitsItsFindingsFromOneTree(t *testing.T) {
 	res := mustWalk(t, OSFileSystem{}, root).Results
 	if got := idsOf(res); !reflect.DeepEqual(got, want) {
 		t.Errorf("findings = %v, want %v — hard stop first, then the declared order", got, want)
+	}
+	if len(res.Manifest) != len(walkIDs) {
+		t.Errorf("manifest = %v, want a row for each of %v", res.Manifest, walkIDs)
+	}
+}
+
+// TestWalkEmitsEveryFindingFromOneListing is the row above WITHOUT a
+// filesystem, and it runs everywhere.
+//
+// IT EXISTS BECAUSE THE ROW ABOVE SKIPS. That one needs a real symbolic
+// link, and a Windows account without the privilege to create one skips
+// it — which would leave the property that all four findings arrive
+// together, in report order, from a single walk untested on exactly the
+// platform whose file names are least like everybody else's. A synthetic
+// directory listing holds every state at once: a link, two names
+// colliding when lowercased, and one carrying a combining mark. No
+// filesystem has an opinion about any of them.
+//
+// MUTATION: sort the findings by the order the detectors run rather than
+// by severity and rank. Reds here — the hard stop leaves the front.
+func TestWalkEmitsEveryFindingFromOneListing(t *testing.T) {
+	fsys := fakeFS{dirs: map[string][]fakeEntry{
+		"": {
+			{name: "index.html", size: 6},
+			{name: "content", mode: fs.ModeSymlink},
+			{name: "README.md", size: 1},
+			{name: "readme.md", size: 1},
+			{name: "public", mode: fs.ModeDir},
+		},
+		"public": {{name: "cafe\u0301.png", size: 1}},
+	}}
+
+	res := mustWalk(t, fsys, "root").Results
+	want := []string{
+		check.IDPathCharset,
+		check.IDSymlinks,
+		check.IDCaseCollision,
+		check.IDUnicodeMarks,
+	}
+	if got := idsOf(res); !reflect.DeepEqual(got, want) {
+		t.Errorf("findings = %v, want %v — the hard stop first, then the declared order", got, want)
 	}
 	if len(res.Manifest) != len(walkIDs) {
 		t.Errorf("manifest = %v, want a row for each of %v", res.Manifest, walkIDs)
