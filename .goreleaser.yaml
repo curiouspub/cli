@@ -1,0 +1,160 @@
+# How this repository turns a tag into something people install.
+#
+# Everything else here decides what the binary does. This decides what
+# people RECEIVE, which is the one part of the product where the person
+# to design against is not a user with an odd project but somebody who
+# would like their code on other people's machines.
+#
+# Three properties are worth stating before the settings that produce
+# them:
+#
+#   1. THE BUILD IS ONE COMMAND, named explicitly. This module also
+#      carries a program the build invokes and ships to nobody. A target
+#      written as a wildcard would publish it as a release artefact.
+#   2. THE SAME TAG REBUILDS TO THE SAME BYTES. Trimmed paths, a fixed
+#      module timestamp and stamps derived from the commit rather than
+#      from the clock. Reproducibility is what lets anyone check that the
+#      published binary is the published source; without it that claim is
+#      unfalsifiable and therefore worth nothing.
+#   3. THE CHECKSUMS ARE SIGNED, keylessly, by the workflow's own
+#      identity. A checksum says the file did not change in transit. It
+#      cannot say who built it, and that is the question somebody
+#      installing a binary is actually asking.
+#
+# Nothing here is fired by a script. A tag push is what starts a release,
+# and the brake in front of it is the deployment environment the
+# publishing job runs in — server-side, and not bypassable by declining
+# to use a wrapper.
+version: 2
+
+project_name: curious
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: curious
+    # NAMED, not inferred. See property 1 above: the module root builds
+    # more than the product.
+    main: ./cmd/curious
+    binary: curious
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    # No ignore list. Every pair the two lists produce is a machine
+    # somebody is sitting at.
+    flags:
+      - -trimpath
+    # -s -w drop the symbol and debug tables: smaller download, and
+    # nothing a user of a CLI loses. The three stamps are what make an
+    # installed binary able to say what it is; a plain `go build` leaves
+    # them at their honest defaults instead of guessing.
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.CommitDate}}
+    # The commit's own timestamp rather than the moment of building, so
+    # two builds of one tag are byte-identical.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: curious
+    ids: [curious]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    # The one platform whose users cannot be assumed to have a tar.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Keyless signing over the checksum file. Signing the checksums covers
+# every artefact through one signature, and the identity in the
+# certificate is the workflow that produced them rather than a key
+# somebody holds — so there is no private key to leak, rotate or lose,
+# and the answer to "was this built by that repository's release
+# workflow" is checkable by anyone.
+#
+# A SNAPSHOT BUILD DOES NOT SKIP THIS, which was worth finding out by
+# running rather than by reading. The tool's own summary of a snapshot
+# says it skips announcing, publishing and validation — signing is not on
+# that list, and a snapshot with no signing tool installed fails at the
+# last step (v2.18.1, measured 2026-09-07). The pull-request check
+# therefore asks for the signing stage to be skipped explicitly, in the
+# Makefile target it runs, where the reason is written down.
+#
+# THE RESIDUE, named rather than left to be found: nothing exercises this
+# block until the first real release. A keyless signature needs an
+# identity, and the only place an identity exists is inside an approved
+# run of the publishing job. The command that checks the result is
+# printed by scripts/cut-release.sh, so whoever cuts that first release
+# meets it.
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: ${artifact}.sig
+    certificate: ${artifact}.pem
+    output: true
+    args:
+      - sign-blob
+      - --yes
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - ${artifact}
+
+# The tap lives in its own repository, so the job's own token cannot
+# write to it: a release either names a credential scoped to that one
+# repository or fails outright. Failing outright is the right direction —
+# a release that half-happened is worse than one that did not.
+#
+# A CASK RATHER THAN A FORMULA, and it is a measurement rather than a
+# preference. The formula block this was first written as is deprecated:
+# the release tool's own validator refuses the configuration outright
+# (v2.18.1, measured 2026-09-07), so the gate cannot be green while it is
+# spelled that way. The cask is the supported spelling for a project that
+# ships prebuilt binaries rather than source.
+#
+# WHAT THAT COSTS, said plainly rather than discovered: a cask installs
+# on macOS only. Somebody running the package manager on Linux can no
+# longer install from this tap and takes the archive or the wrapper
+# instead. That is a narrowing of who the tap serves, and it is a
+# consequence of the tool's deprecation rather than a choice made here.
+homebrew_casks:
+  - name: curious
+    binaries: [curious]
+    repository:
+      owner: curiouspub
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://curious.pub
+    description: Pack an Astro project, upload it, and stream the build.
+    license: MIT
+    hooks:
+      post:
+        # An unsigned binary downloaded by the package manager is
+        # quarantined by the operating system, and the first run then
+        # fails in a way that reads as a broken download rather than as a
+        # policy. The signature that answers this properly is a
+        # developer-account one; until there is such an account, the
+        # install clears the attribute it set itself.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/curious"]
+          end
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+release:
+  draft: false
+  prerelease: auto

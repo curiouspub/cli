@@ -3,7 +3,7 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test vet fmt lint ci
+.PHONY: build test vet fmt lint snapshot ci
 
 build:
 	go build -trimpath ./...
@@ -62,5 +62,32 @@ lint:
 	else \
 		echo "golangci-lint not installed; skipping lint"; \
 	fi
+
+# snapshot builds the entire release matrix — every platform, every
+# archive, the checksum file — and uploads nothing. It is what makes a
+# broken release pipeline a pull-request failure instead of a discovery
+# made while cutting a release.
+#
+# IT IS NOT A PREREQUISITE OF ci, and that is a decision rather than an
+# omission. It needs a tool this module does not build and cannot
+# require, and it costs minutes rather than seconds. What ci DOES carry
+# is the release tool's own validation of the configuration: the guard
+# suite runs it when the tool is present and records a declared skip when
+# it is not, so the check travels with the suite instead of needing a
+# second place in this file that could disagree with it.
+#
+# The workflow that runs this on every change installs the tool at an
+# exact pinned version and then runs this target, so the command CI types
+# is the command a person types.
+#
+# --skip=sign, and it is measured rather than assumed. A snapshot skips
+# announcing, publishing and validation; it does NOT skip signing, so
+# without this the target fails at its last step on any machine with no
+# signing tool — which is every machine, since a keyless signature needs
+# an identity that exists only inside an approved release run. Asking for
+# a signature here would mean either a check that cannot pass or an
+# identity on a pull request from a stranger, and the second is worse.
+snapshot:
+	goreleaser release --snapshot --clean --skip=sign
 
 ci: fmt vet build test lint

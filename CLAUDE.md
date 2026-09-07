@@ -151,8 +151,25 @@ through.
 
 ## Build and CI
 
-`make ci` is the single entry point, and CI runs it and nothing else, so
-what passes locally and what passes in CI cannot diverge.
+**`make ci` is the whole TEST GATE, and every check that can fail a change
+runs inside it**, so what passes locally and what passes in CI cannot
+diverge. That is the invariant; "CI runs one workflow" was the shape it
+happened to have, and the shape changed the day the release pipeline
+landed.
+
+Three workflows run today, and only the first can fail an ordinary change:
+
+| workflow | trigger | what it does |
+|---|---|---|
+| `ci.yml` | every push and pull request | `make ci`, on the three-OS matrix — **the gate** |
+| `snapshot.yml` | pull requests touching the release surface | `make snapshot`: the full build matrix, archives and checksums, no upload and no tokens |
+| `release.yml` | a version tag only | the real publish, behind an environment with a required reviewer |
+
+The second and third are the release pipeline proving and performing
+itself; both run a `make` target, so neither is a command that exists only
+in a workflow file. **The rule that matters is not the count of workflows
+but that no check lives outside a `make` target** — a step written only in
+YAML is a step nobody can run before pushing.
 
 - `make fmt` `make vet` `make test` `make build` — `ci` runs them in that
   order, formatting first, so a formatting failure is not discovered

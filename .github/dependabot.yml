@@ -1,0 +1,32 @@
+# Keeping the pins current.
+#
+# Every action this repository runs is pinned to a full commit
+# identifier, because a tag moves and whoever can move one runs their
+# code inside a job that may hold the credentials this repository
+# publishes with. That is the right trade and it has one failure mode:
+# a pin done once decays into a pin on something old with a known hole,
+# and nothing about a stale pin looks different from a fresh one.
+#
+# This is the half that keeps the pinning honest. Without it the guard
+# over the workflows would go on asserting that every reference is a full
+# identifier, truthfully, about identifiers nobody had looked at in a
+# year.
+#
+# ACTIONS ONLY, deliberately. The module's own dependencies are governed
+# by a rule that no third-party package arrives without a change naming
+# it and saying why the standard library was not enough, and a service
+# opening that change on its own is the opposite of that rule.
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # One at a time. A batch of pin bumps is a diff nobody reads, and
+    # reading the diff is the entire control here — the identifier being
+    # updated is the thing that decides what code runs in a privileged
+    # job.
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"

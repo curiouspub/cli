@@ -1097,11 +1097,28 @@ func stripModuleHashes(line string) string {
 	return strings.Join(kept, " ")
 }
 
-// generatedManifestNames is the exemption set,// generatedManifestNames is the exemption set, in one place so the scan
+// generatedManifestNames is the exemption set, in one place so the scan
 // and the test above cannot disagree about what it contains. A test that
 // restated the list would pass while the scan used a different one.
 func generatedManifestNames() map[string]bool {
 	return map[string]bool{"go.sum": true}
+}
+
+// ruleFileNames is the set of files whose job is to name what this
+// repository forbids, keyed by their slash-separated path from the
+// module root. Their DATA lines are exempt from the vendor vocabulary
+// check and from nothing else.
+//
+// It is a function for the same reason generatedManifestNames is one:
+// the scan and anything asserting about the scan read the same value, so
+// a row cannot pass against a list the scan does not use.
+func ruleFileNames() map[string]bool {
+	return map[string]bool{
+		"scripts/citation-patterns.txt":     true,
+		"scripts/banned-dependencies.txt":   true,
+		"scripts/vendor-terms.txt":          true,
+		"scripts/provider-auth-actions.txt": true,
+	}
 }
 
 func TestNoPrivateCitations(t *testing.T) {
@@ -1115,16 +1132,23 @@ func TestNoPrivateCitations(t *testing.T) {
 	// name what it forbids without writing it down, but the prose
 	// explaining a rule has no such need and is scanned like any other.
 	//
-	// There are two, and the second one is here because two correct rules
-	// pointed opposite ways at the same string: the dependency denylist
-	// must spell vendor module paths to match them, and the citation
-	// manifest now forbids those vendor names in authored text. Without
-	// this, the repository reds against itself and the fastest way out is
-	// to delete one of the two rules.
-	ruleFiles := map[string]bool{
-		filepath.Join(root, "scripts", "citation-patterns.txt"):   true,
-		filepath.Join(root, "scripts", "banned-dependencies.txt"): true,
-		filepath.Join(root, "scripts", "vendor-terms.txt"):        true,
+	// They exist because two correct rules point opposite ways at the
+	// same string: a denylist must spell vendor module paths and vendor
+	// action paths in order to match them, and the citation manifest
+	// forbids those vendor names in authored text. Without this, the
+	// repository reds against itself and the fastest way out is to delete
+	// one of the two rules.
+	//
+	// ADDING A MEMBER IS WIDENING AN EXEMPTION, so it is worth saying
+	// what this one does and does not buy. The waiver is per-LINE and per-
+	// CHECK: a data line in one of these files is exempt from the VENDOR
+	// vocabulary and from nothing else, so a private identifier written
+	// on one still reds, and every comment line in them is scanned like
+	// any other prose. The set is a function rather than a literal here
+	// so that a row can assert what is in it without restating the list.
+	ruleFiles := map[string]bool{}
+	for name := range ruleFileNames() {
+		ruleFiles[filepath.Join(root, filepath.FromSlash(name))] = true
 	}
 
 	// GENERATED MANIFESTS: files no human wrote, exempt from the VENDOR

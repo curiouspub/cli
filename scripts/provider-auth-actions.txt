@@ -1,0 +1,64 @@
+# Workflow action paths that authenticate to an infrastructure provider.
+# One fragment per line; blank lines and lines starting with "#" are
+# ignored. Matching is case-insensitive and by SUBSTRING against the
+# action path a workflow names, so a fragment is spelled the way an
+# action reference is.
+#
+# internal/guard reads this file on every run and keeps no copy of it, so
+# deleting a line measurably changes what the guard can see — which is
+# how anyone can check the guard is really reading it rather than a
+# hardcoded duplicate. That is the same design the dependency denylist
+# and the citation manifest use, and it is here for the same reason.
+#
+# THIS FILE IS A RULE FILE, and its data lines are exempt from the vendor
+# check for the reason a rule file always is: it cannot name what it
+# forbids without writing it down. Its COMMENT lines are scanned like any
+# other prose, so nothing here names a provider outside the list below.
+#
+# WHY THERE IS ANYTHING TO FORBID AT ALL. There is nothing in this
+# repository to deploy. The binary speaks one protocol — this project's
+# own public HTTP API — and the workflows build it, test it and publish
+# it. An action whose whole purpose is to hand a job an infrastructure
+# credential has no work to do here, and a job that holds one is a job
+# somebody can be made to use.
+#
+# WHY A CLASS RATHER THAN ONE NAME, and this is the load-bearing half.
+# This file is public. A rule asserting the absence of one named
+# provider's action tells every reader which provider the project uses,
+# which is precisely the fact the rule exists to keep out. It is also a
+# real widening: a rule naming one provider passes a workflow that
+# authenticates to any other, and the guard would read as coverage while
+# checking one entry.
+#
+# Most entries are an OWNER prefix rather than one action. A provider's
+# own organisation publishes several actions that all end in the same
+# place, and enumerating them is a list that goes stale the next time one
+# is added. Where the authenticating action lives under a general-purpose
+# owner, the entry names the action.
+aws-actions/
+amazon-ecs-
+amazon-ecr-
+azure/
+microsoft/azure-
+google-github-actions/
+googlecloudplatform/
+alibabacloud-github-actions/
+aliyun/
+tencentcloud/
+huaweicloud/
+oracle-actions/
+ibm/actions-
+digitalocean/
+linode/
+hetznercloud/
+scaleway/
+vultr/
+cloudflare/
+fly-apps/
+superfly/
+railwayapp/
+render-oss/
+heroku/
+pulumi/actions
+hashicorp/vault-action
+hashicorp/setup-terraform

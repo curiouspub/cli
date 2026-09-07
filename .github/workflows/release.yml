@@ -1,0 +1,113 @@
+name: Release
+
+# A VERSION TAG AND NOTHING ELSE. Every additional trigger is another way
+# to reach the publishing job, and this job's whole purpose is to make an
+# irreversible change to what strangers download. A manual dispatch would
+# run against whatever branch the person chose; a branch push would run
+# on work nobody tagged.
+on:
+  push:
+    tags: ["v*"]
+
+# The floor. A job that needs more says so itself, in the job, where the
+# reason sits next to the grant — and every permission a job holds is one
+# that everything running inside it holds too.
+permissions:
+  contents: read
+
+jobs:
+  # THE PRECONDITION, and it is a separate job on purpose: it holds no
+  # write permission and names no credential, so nothing it runs can
+  # publish anything even if the check itself is wrong.
+  #
+  # A tag is a name a person types. It can point at any commit in the
+  # repository, including one no review ever saw and one that was
+  # rewritten out of the branch afterwards. Without this, the tag is the
+  # only thing deciding what gets published.
+  reachable:
+    name: the tag names a commit the default branch already carries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Ancestry cannot be computed against history that was not
+          # fetched. A shallow checkout makes the check below refuse
+          # every tag, which fails closed and diagnoses nothing.
+          fetch-depth: 0
+
+      - name: refuse a tag that is not on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          if ! git merge-base --is-ancestor \
+                 "${GITHUB_SHA}" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
+            echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not on"
+            echo "::error::${DEFAULT_BRANCH}. A release is cut from reviewed work; move"
+            echo "::error::the tag to a commit the default branch carries and push again."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} -> ${GITHUB_SHA}, reachable from ${DEFAULT_BRANCH}."
+
+  # THE PUBLISHING JOB. It runs in a deployment environment with a
+  # required reviewer, and that is the only brake in front of the whole
+  # outward mutation — binaries, checksums, a signature, a release, a tap
+  # write. This repository's standing pattern is that a command which
+  # changes real state prints what it is about to do and stops without an
+  # explicit word; that pattern governs SCRIPTS, and pushing a tag is not
+  # one. A wrapper is a brake anybody gets past by not using it. An
+  # environment is server-side, it cannot be skipped, and it enumerates on
+  # its own, because a pending deployment lists what is waiting.
+  publish:
+    name: build, sign and publish
+    needs: reachable
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      # Only here, and only for the duration of an approved run.
+      contents: write
+      # The identity a keyless signature is made with. It says this
+      # repository's release workflow produced the artefact, which is the
+      # question a checksum cannot answer.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The version stamped into the binary is derived from the tag
+          # and the commit, and both need the history to be there.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # A release must not depend on which day it was built. The
+          # module states the toolchain; nothing else gets a vote.
+          check-latest: false
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # An exact version, for the same reason the release tool has
+          # one. NOTE for whoever maintains this: the scheduled update
+          # policy bumps action REFERENCES and cannot see a version
+          # passed as an input, so this pin is one a person has to move.
+          # It is current as of the change that added it.
+          cosign-release: v3.1.3
+
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          # An exact version, never the newest. A release built from
+          # whatever the tool happened to be that morning is a release
+          # nobody can reproduce.
+          version: v2.18.1
+          args: release --clean
+        env:
+          # Minted for this job by the runner and bounded by the
+          # permissions block above. It is never a repository secret.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Write access to the tap repository and nothing else. The job
+          # token cannot reach another repository at all, and a token
+          # that could reach every repository would hand this job far
+          # more than a tap write.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
