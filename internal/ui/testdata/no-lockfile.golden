@@ -1,0 +1,8 @@
+No lockfile found.
+
+curious installs your dependencies from a lockfile, so it builds the
+exact versions you tested. Your project has package.json but no
+package-lock.json, npm-shrinkwrap.json or pnpm-lock.yaml.
+
+Run `npm install` (or `pnpm install`), commit the lockfile it
+creates, and try again.
