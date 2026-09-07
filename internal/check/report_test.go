@@ -115,20 +115,17 @@ func TestCombineRefusesAnIDNobodyDeclared(t *testing.T) {
 // MUTATION: skip the claimed-id enforcement. Reds here.
 // MUST NOT MOVE: rows whose findings all sit under claimed ids.
 //
-// THE UNCLAIMED ID IS DELIBERATELY NOT A PLAUSIBLE ONE. This row used to
-// invent "symlinks" as a name nothing could claim, and then the file
-// walk arrived and claimed it — so the row silently stopped testing what
-// it was written for and reported that the combiner had accepted an
-// unclaimed finding. A stand-in id has to be one no real check will ever
-// be called, or the test is a bet on what gets built next.
+// THE UNCLAIMED ID IS RESERVED AND GUARDED, in reserved_test.go. This
+// row used to invent one inline, which is how it came to rest on a name
+// the file walk later claimed; the premise is now an assertion that
+// fails when it stops being true, rather than a fact about the day the
+// row was written.
 func TestCombineRefusesAFindingUnderAnIDNobodyClaimed(t *testing.T) {
-	const neverAChoice = "not-a-check-anybody-would-name"
-
 	_, err := Combine(Results{
 		Manifest: everyDeclaredID(),
 		Findings: []Finding{
 			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "claimed, fine"},
-			{CheckID: neverAChoice, Severity: SeverityWarning, Message: "never claimed"},
+			{CheckID: reservedUnclaimedID, Severity: SeverityWarning, Message: "never claimed"},
 		},
 	})
 
@@ -136,8 +133,8 @@ func TestCombineRefusesAFindingUnderAnIDNobodyClaimed(t *testing.T) {
 	if !errors.As(err, &unclaimed) {
 		t.Fatalf("error = %#v, want an unclaimed-finding failure", err)
 	}
-	if !reflect.DeepEqual(unclaimed.CheckIDs, []string{neverAChoice}) {
-		t.Errorf("CheckIDs = %v, want [%s]", unclaimed.CheckIDs, neverAChoice)
+	if !reflect.DeepEqual(unclaimed.CheckIDs, []string{reservedUnclaimedID}) {
+		t.Errorf("CheckIDs = %v, want [%s]", unclaimed.CheckIDs, reservedUnclaimedID)
 	}
 }
 
