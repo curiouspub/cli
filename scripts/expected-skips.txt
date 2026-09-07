@@ -112,3 +112,12 @@ windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSi
 # actual volume anyway, because the tag says what the platform generally
 # does and not what this mount does.
 linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollision
+
+# A directory the walk cannot read has to be built by taking away the
+# read bit, and two environments legitimately refuse to produce it:
+# Windows, where permission bits do not gate a directory read the same
+# way, and any account whose process ignores them — root in a container
+# being the ordinary case. The row checks that the fixture really is
+# unreadable before trusting it, so the skip means the environment said
+# no rather than the row guessing.
+* github.com/curiouspub/cli/internal/pack TestWalkRefusesANestedDirectoryItCannotRead
