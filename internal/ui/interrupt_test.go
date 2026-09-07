@@ -1,11 +1,11 @@
 package ui
 
 import (
+	"bufio"
 	"bytes"
-	"io"
+	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -160,7 +160,44 @@ func TestInterruptsInstallsAndReleasesTheSignal(t *testing.T) {
 	}
 }
 
-// TestTheTerminatorReallyDiesOfTheSignal is the row the seam above
+// interruptHelperEnv selects the helper-process mode. A test binary
+// re-executed with it set runs one of the two terminators for real
+// instead of asserting about a copy of them.
+const interruptHelperEnv = "UI_TEST_INTERRUPT_HELPER"
+
+// TestInterruptHelperProcess is not a test. It is the child half of
+// TestTheTerminatorReallyDiesOfTheSignal, and it exists so that row
+// exercises the SHIPPED terminator rather than an inlined imitation of
+// it.
+//
+// The first version of that row built a small program containing the
+// same three lines terminateInterrupted runs. It asserted the property
+// correctly and proved nothing about this package: deleting the wait
+// from the real function left the row green, because the row was never
+// running the real function. A copy of the code under test is a
+// restatement of the author's intention, which is the thing a test is
+// supposed to be independent of.
+func TestInterruptHelperProcess(t *testing.T) {
+	mode := os.Getenv(interruptHelperEnv)
+	if mode == "" {
+		t.Skip("child half of the terminator row; runs only when re-executed")
+	}
+
+	u := New()
+	if mode == "exit" {
+		// The control: the behaviour this package shipped with, so the
+		// two are produced by the same harness and differ only where
+		// they are meant to.
+		u.endInterrupted = func() { os.Exit(interruptExitCode) }
+	}
+	stop := u.Interrupts()
+	defer stop()
+
+	fmt.Println("ready")
+	time.Sleep(10 * time.Second)
+}
+
+// TestTheTerminatorReallyDiesOfTheSignal is the row the in-process seam
 // cannot cover, run out of process because covering it in process means
 // killing the test binary.
 //
@@ -174,66 +211,25 @@ func TestInterruptsInstallsAndReleasesTheSignal(t *testing.T) {
 // the next directory after the operator interrupted the previous one.
 //
 // A shell is not needed to assert it, and using one made this row slow
-// and flaky before it made it correct. Go's own ProcessState answers the
-// same question the shell asks, so the two behaviours are run side by
-// side here and separated by exactly the bit that distinguishes them —
-// while the control confirms they are INDISTINGUISHABLE by exit status,
-// which is why reasoning from the status is what produced the defect.
+// and flaky before it made it correct. Go's ProcessState answers the
+// same question the shell asks. The control confirms the two outcomes
+// are INDISTINGUISHABLE by exit status, which is why reasoning from the
+// status is what produced the defect in the first place.
 //
-// The probe inlines the three lines terminateInterrupted runs rather
-// than importing them, because they are unexported and because a probe
-// that reached into the package would no longer be running what a
-// shipped binary runs.
-//
-// REQUIRED MUTATION: drop the reset-and-re-raise from the probe's
-// "reraise" mode, leaving the bare exit — the behaviour this file
-// shipped with. Signaled() goes false and this row reds, while the exit
-// code stays 130 throughout, which is the whole point.
+// REQUIRED MUTATION: delete the time.Sleep from terminateInterrupted
+// (interrupt_unix.go). The backstop exit then races the re-raised signal
+// and wins, Signaled() goes false, and this row reds — while the exit
+// code stays 130 throughout.
 func TestTheTerminatorReallyDiesOfTheSignal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("dying of a signal is the property under test; Windows has no " +
 			"equivalent and terminateInterrupted exits 130 there by design")
 	}
 
-	dir := t.TempDir()
-	src := filepath.Join(dir, "main.go")
-	source := `package main
-
-import (
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-)
-
-func main() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
-	fmt.Println("ready")
-	go func() {
-		<-ch
-		if os.Args[1] == "reraise" {
-			signal.Reset(os.Interrupt)
-			_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
-			time.Sleep(250 * time.Millisecond)
-		}
-		os.Exit(130)
-	}()
-	time.Sleep(10 * time.Second)
-}
-`
-	if err := os.WriteFile(src, []byte(source), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	prog := filepath.Join(dir, "victim")
-	if out, err := exec.Command("go", "build", "-o", prog, src).CombinedOutput(); err != nil {
-		t.Fatalf("building the probe: %v\n%s", err, out)
-	}
-
 	run := func(t *testing.T, mode string) (signaled bool, code int) {
 		t.Helper()
-		cmd := exec.Command(prog, mode)
+		cmd := exec.Command(os.Args[0], "-test.run=TestInterruptHelperProcess", "-test.v")
+		cmd.Env = append(os.Environ(), interruptHelperEnv+"="+mode)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -241,13 +237,20 @@ func main() {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		// Wait for "ready" rather than sleeping: the handler must be
-		// installed before the signal arrives, and a timing guess is how
-		// a row like this becomes flaky on a loaded machine.
-		buf := make([]byte, len("ready\n"))
-		if _, err := io.ReadFull(stdout, buf); err != nil {
+		// Wait for the child to say it has installed the handler, rather
+		// than sleeping: a timing guess is how a row like this becomes a
+		// flake on a loaded machine.
+		scanner := bufio.NewScanner(stdout)
+		ready := false
+		for scanner.Scan() {
+			if strings.TrimSpace(scanner.Text()) == "ready" {
+				ready = true
+				break
+			}
+		}
+		if !ready {
 			_ = cmd.Process.Kill()
-			t.Fatalf("probe never became ready: %v", err)
+			t.Fatal("the helper never reported that its handler was installed")
 		}
 		if err := cmd.Process.Signal(os.Interrupt); err != nil {
 			t.Fatal(err)
@@ -256,9 +259,9 @@ func main() {
 		go func() { done <- cmd.Wait() }()
 		select {
 		case <-done:
-		case <-time.After(8 * time.Second):
+		case <-time.After(15 * time.Second):
 			_ = cmd.Process.Kill()
-			t.Fatal("the probe did not exit after being interrupted")
+			t.Fatal("the helper did not exit after being interrupted")
 		}
 		status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
 		if !ok {
@@ -270,8 +273,8 @@ func main() {
 		return false, cmd.ProcessState.ExitCode()
 	}
 
-	t.Run("what this package does now: killed by the signal", func(t *testing.T) {
-		signaled, code := run(t, "reraise")
+	t.Run("the shipped terminator is killed by the signal", func(t *testing.T) {
+		signaled, code := run(t, "real")
 		if !signaled {
 			t.Errorf("the process exited normally instead of dying of the signal — a " +
 				"shell reads that as 'handled, carry on' and the next loop iteration runs")

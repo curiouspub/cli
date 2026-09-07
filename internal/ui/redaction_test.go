@@ -132,34 +132,106 @@ func TestThePlainStringControlDoesLeak(t *testing.T) {
 	}
 }
 
-// TestASecretReachesTheTerminalThroughNothingThisPackageWrites walks
-// every method on UI that can put bytes anywhere and hands each one a
-// Secret. The redaction rule is only useful if it holds at the point
-// where text actually leaves the program, and this package is that
-// point.
-func TestASecretReachesTheTerminalThroughNothingThisPackageWrites(t *testing.T) {
+// TestASecretSurvivesEveryMethodAndEveryVerbThisPackageCanBeGiven walks
+// every method on UI that can put bytes anywhere, CROSSED WITH every
+// formatting verb a caller might reasonably reach for. The name changed
+// with the shape, and the reason is worth more than the rows.
+//
+// The previous version was called
+// "...ThroughNothingThisPackageWrites" and its comment said it walked
+// every method that can put bytes anywhere. Both were true and the claim
+// was still wrong: it walked every METHOD and exactly one VERB. A
+// reviewer handed the same methods a different verb and a token came
+// straight out on stderr. The coverage was per-method; the defeating
+// axis was per-verb; and the name asserted a universal over both.
+//
+// A test's name is a claim about what it establishes, and this one was
+// the only thing standing between a reader and the belief that no format
+// string could leak a token here.
+//
+// THE RESIDUE IS STATED RATHER THAN CLOSED — see the %p row in
+// TestSecretKnownUncoveredPaths. fmt resolves %p before consulting a
+// Formatter, so no method here can intercept it, and this package does
+// not try: it records which verb defeats it and where the limit is
+// written down. A limit named is a limit a reader can work with; a limit
+// left to a test name's optimism is not.
+func TestASecretSurvivesEveryMethodAndEveryVerbThisPackageCanBeGiven(t *testing.T) {
 	const token = "secret-abc123"
 	secret := Secret(token)
 
-	u, out, errOut := testUI("", false, nil)
+	// Every verb fmt routes through a Formatter, each paired with the
+	// marker that proves the rendering HAPPENED — without which "the
+	// token is absent" is also true of a call that produced nothing.
+	//
+	// %T is the one verb here that does not carry the placeholder, and
+	// it is in the table rather than out of it because that is a fact
+	// worth pinning: fmt answers %T from the type itself and never
+	// consults the value, so the type name is what proves the call ran.
+	// A reader who finds it missing from this list would have to work
+	// out for themselves whether it was safe or forgotten.
+	//
+	// %p is deliberately ABSENT, and its absence is recorded rather than
+	// silent: fmt resolves it before consulting a Formatter, so no method
+	// here can intercept it. It is covered as a known limit in
+	// TestSecretKnownUncoveredPaths, which fails if it ever starts
+	// redacting — the honest place for a limit is a row that watches it,
+	// not a table that pretends it away.
+	verbs := []struct{ verb, marker string }{
+		{"%v", redactedPlaceholder},
+		{"%s", redactedPlaceholder},
+		{"%q", redactedPlaceholder},
+		{"%d", redactedPlaceholder},
+		{"%x", redactedPlaceholder},
+		{"%X", redactedPlaceholder},
+		{"%#v", redactedPlaceholder},
+		{"%+v", redactedPlaceholder},
+		{"%08s", redactedPlaceholder},
+		{"%T", "ui.Secret"},
+	}
 
-	u.Step("token is %v", secret)
-	u.Result("token is %v", secret)
-	u.Fail(&Failure{
-		What: fmt.Sprintf("Token %v was refused.", secret),
-		Why:  fmt.Sprintf("The server did not accept %v.", secret),
-		Next: "Run `curious deploy` again to log in.",
-	})
-	u.Internal(fmt.Errorf("token %v was refused", secret))
-	_ = u.ExitCode(fmt.Errorf("token %v was refused", secret))
+	// Each method, as a function of the format string, so the cross
+	// product is written once. Fail and Internal take the token through
+	// a Failure and an error respectively, which is how it would really
+	// arrive at them.
+	// env is non-nil only for Internal: without CURIOUS_DEBUG it prints
+	// no detail at all, so the token never reaches a formatter and the
+	// row would pass while observing nothing. Debug mode is also where
+	// this method actually matters — it is the one path that prints an
+	// error's own text verbatim.
+	methods := map[string]struct {
+		env  map[string]string
+		call func(u *UI, format string)
+	}{
+		"Step":   {nil, func(u *UI, f string) { u.Step("token "+f, secret) }},
+		"Result": {nil, func(u *UI, f string) { u.Result("token "+f, secret) }},
+		"Fail": {nil, func(u *UI, f string) {
+			u.Fail(NewFailure("What.", fmt.Sprintf("token "+f, secret), "Next."))
+		}},
+		"Internal": {map[string]string{debugEnvVar: "1"}, func(u *UI, f string) {
+			u.Internal(fmt.Errorf("token "+f+" was refused", secret))
+		}},
+	}
 
-	for name, stream := range map[string]string{"stdout": out.String(), "stderr": errOut.String()} {
-		if strings.Contains(stream, token) {
-			t.Errorf("a Secret reached %s: %s", name, stream)
-		}
-		if !strings.Contains(stream, redactedPlaceholder) {
-			t.Errorf("%s carries no placeholder, so nothing was actually rendered "+
-				"through these paths: %s", name, stream)
+	for name, m := range methods {
+		for _, v := range verbs {
+			t.Run(name+" "+v.verb, func(t *testing.T) {
+				u, out, errOut := testUI("", false, m.env)
+				m.call(u, v.verb)
+				written := out.String() + errOut.String()
+
+				if strings.Contains(written, token) {
+					t.Errorf("%s with %s put the token on a stream: %q", name, v.verb, written)
+				}
+				// The positive control, per method and per verb: a
+				// rendering that dropped everything would satisfy the
+				// assertion above, and so would one this test failed to
+				// trigger at all.
+				if !strings.Contains(written, v.marker) {
+					t.Errorf("%s with %s produced %q, which carries no %q — nothing was "+
+						"rendered, so the check above observed nothing",
+						name, v.verb, written, v.marker)
+				}
+			})
 		}
 	}
 }

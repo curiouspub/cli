@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"golang.org/x/term"
 )
@@ -96,13 +97,13 @@ func New() *UI {
 // test configures a UI by calling it rather than by arranging a
 // terminal, which is not a thing a test can portably arrange.
 func newUI(in io.Reader, out, errw io.Writer, lookupEnv func(string) (string, bool), interactive bool) *UI {
-	_, debug := lookupEnv(debugEnvVar)
+	debug := debugEnabled(lookupEnv)
 	u := &UI{
 		out:         out,
 		err:         errw,
 		reader:      bufio.NewReader(in),
 		interactive: interactive,
-		colour:      colourEnabled(interactive, lookupEnv),
+		colour:      colourEnabled(interactive, lookupEnv, func() bool { return terminalUnderstandsEscapes(errw) }),
 		debug:       debug,
 		restore:     func() {},
 		exit:        os.Exit,
@@ -115,6 +116,35 @@ func newUI(in io.Reader, out, errw io.Writer, lookupEnv func(string) (string, bo
 // internal failure. It is the only one, and Internal's own copy names it
 // to the user, so the two cannot drift.
 const debugEnvVar = "CURIOUS_DEBUG"
+
+// debugEnabled reads CURIOUS_DEBUG by VALUE, not by presence.
+//
+// The distinction matters here where it does not for NO_COLOR, and the
+// difference is what the variable buys. Colour is decoration: switching
+// it off costs a reader nothing, so treating any presence as "off" is
+// generous in the harmless direction, and NO_COLOR's own convention is
+// widely written that way. Debug is not decoration — it changes the copy
+// a person sees, dropping the line that says there is nothing here for
+// them to fix, and it prints an error's own text verbatim. Turning that
+// on because a shell exported CURIOUS_DEBUG= from an unset variable, or
+// because somebody wrote =0 meaning off, is the program disagreeing with
+// a plain instruction.
+//
+// So the falsey spellings are refused, and the message the program
+// prints — "re-run with CURIOUS_DEBUG=1" — is now true of the code
+// rather than merely near it.
+func debugEnabled(lookupEnv func(string) (string, bool)) bool {
+	value, set := lookupEnv(debugEnvVar)
+	if !set {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
 
 // noColourEnvVar and termEnvVar are the two environment answers that
 // switch styling off. Named constants rather than inline strings because
@@ -218,7 +248,7 @@ func isTerminal(stream any) bool {
 // The switch governs ALL escape styling rather than hue alone, which is
 // how the variable is understood in practice: a reader who asked for no
 // escape sequences did not mean "bold is fine".
-func colourEnabled(interactive bool, lookupEnv func(string) (string, bool)) bool {
+func colourEnabled(interactive bool, lookupEnv func(string) (string, bool), escapesUnderstood func() bool) bool {
 	if !interactive {
 		return false
 	}
@@ -228,7 +258,21 @@ func colourEnabled(interactive bool, lookupEnv func(string) (string, bool)) bool
 	if value, _ := lookupEnv(termEnvVar); value == "dumb" {
 		return false
 	}
-	return true
+	// Last, and only about the stream this program will actually write
+	// escapes to: does the terminal interpret them at all? Everywhere
+	// but Windows that is yes by construction. On Windows it is a
+	// question with a real answer, and asking it is the difference
+	// between a bold headline and a headline reading
+	// "<ESC>[1mNo lockfile found.<ESC>[0m". See
+	// terminalUnderstandsEscapes.
+	//
+	// It arrives as a function rather than as the writer because CI
+	// cannot exercise the Windows half — a test process there has no
+	// console attached, so the real gate would answer "no" on every row
+	// and the table would be measuring the runner rather than this
+	// logic. A seam lets the table state what it means, and lets one
+	// dedicated row assert that the gate is wired at all.
+	return escapesUnderstood()
 }
 
 // boldSequence and resetSequence are the only escape sequences this

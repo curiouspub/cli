@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -163,7 +165,11 @@ func TestColourEnabled(t *testing.T) {
 				v, ok := tc.env[name]
 				return v, ok
 			}
-			if got := colourEnabled(tc.interactive, lookup); got != tc.want {
+			// The escape gate answers yes for these rows: each is about
+			// one of the OTHER reasons colour is off, and a gate that
+			// said no would make every row pass for a reason none of
+			// them is about. The gate itself has its own row below.
+			if got := colourEnabled(tc.interactive, lookup, alwaysUnderstood); got != tc.want {
 				t.Errorf("colourEnabled(%v, %v) = %v, want %v",
 					tc.interactive, tc.env, got, tc.want)
 			}
@@ -407,4 +413,126 @@ func TestNewWithoutTheDebugVariable(t *testing.T) {
 	if u := New(); u.debug {
 		t.Errorf("New reported debug with %s unset", debugEnvVar)
 	}
+}
+
+// alwaysUnderstood and neverUnderstood stand in for the terminal's own
+// answer about escape sequences, so the table above can be about the
+// reasons colour is switched off that have nothing to do with it.
+func alwaysUnderstood() bool { return true }
+func neverUnderstood() bool  { return false }
+
+// TestColourIsOffWhenTheTerminalWouldNotInterpretEscapes is the row for
+// the gate itself, and it exists because CI cannot reach the case it
+// guards.
+//
+// A Windows console prints "\x1b[1m" literally unless virtual-terminal
+// processing is enabled on the handle, and nothing in this program's
+// dependencies enables it: x/term touches the input flag only, inside a
+// function this package never calls. Windows Terminal turns it on for
+// itself; cmd.exe and PowerShell under classic conhost do not. So a
+// person there would have read an escape sequence where the headline
+// should be.
+//
+// The matrix cannot see this. A test process on the Windows runner has
+// no console attached, so the colour path is never reached there at all
+// — the green leg is silent about it rather than evidence for it. That
+// is why the real gate is behind a seam and this row asserts the wiring:
+// with everything else saying colour is fine, a terminal that will not
+// interpret escapes still switches it off.
+//
+// REQUIRED MUTATION: in colourEnabled, return true instead of calling
+// escapesUnderstood. This row reds; every row in the table above stays
+// green, because none of them is about this.
+func TestColourIsOffWhenTheTerminalWouldNotInterpretEscapes(t *testing.T) {
+	noEnv := func(string) (string, bool) { return "", false }
+
+	if colourEnabled(true, noEnv, neverUnderstood) {
+		t.Error("colour is on for a terminal that would print the escape sequences " +
+			"literally — the headline would arrive as visible control characters")
+	}
+	// The control: everything here is identical except the gate, so the
+	// row above cannot be passing because some other condition happened
+	// to be false.
+	if !colourEnabled(true, noEnv, alwaysUnderstood) {
+		t.Error("colour is off even with every condition satisfied, so the assertion " +
+			"above proves nothing about the escape gate specifically")
+	}
+}
+
+// TestDebugIsReadByValueNotByPresence pins the difference between
+// CURIOUS_DEBUG and NO_COLOR, which look like the same kind of switch
+// and are not.
+//
+// Colour is decoration: switching it off costs a reader nothing, so
+// treating any presence as "off" errs harmlessly and matches the
+// widely-published convention. Debug is not decoration. It changes the
+// copy a person sees — dropping the line that tells them there is
+// nothing here for them to fix — and it prints an error's own text
+// verbatim, which is the one path in this package where something a
+// caller constructed reaches the terminal unedited.
+//
+// So "CURIOUS_DEBUG=0" must mean off. A shell that exports an unset
+// variable as empty must not turn it on. And the program's own message
+// says "re-run with CURIOUS_DEBUG=1", which is a statement about values
+// that was not true of the code until this row existed.
+//
+// REQUIRED MUTATION: in debugEnabled, make the switch match nothing so
+// every set value is truthy — the old presence test. The falsey rows red
+// and the truthy rows stay green, which is what makes this a table about
+// values rather than about whether the variable was read at all.
+func TestDebugIsReadByValueNotByPresence(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"1", true},
+		{"true", true},
+		{"yes", true},
+		{"anything at all", true},
+		{"TRUE", true},
+
+		{"", false},
+		{"0", false},
+		{"false", false},
+		{"FALSE", false},
+		{"no", false},
+		{"off", false},
+		{"  0  ", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%q", tc.value), func(t *testing.T) {
+			lookup := func(name string) (string, bool) {
+				if name == debugEnvVar {
+					return tc.value, true
+				}
+				return "", false
+			}
+			if got := debugEnabled(lookup); got != tc.want {
+				t.Errorf("debugEnabled with %s=%q = %v, want %v", debugEnvVar, tc.value, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("unset", func(t *testing.T) {
+		if debugEnabled(func(string) (string, bool) { return "", false }) {
+			t.Error("debug is on with the variable unset")
+		}
+	})
+
+	// The end-to-end control: the value semantics above have to reach
+	// the rendering, not just the predicate. A UI built with
+	// CURIOUS_DEBUG=0 must produce the ordinary internal-failure copy,
+	// detail withheld.
+	t.Run("a falsey value withholds the detail", func(t *testing.T) {
+		u, _, errOut := testUI("", false, map[string]string{debugEnvVar: "0"})
+		u.Internal(errors.New("the-detail-nobody-asked-for"))
+		if strings.Contains(errOut.String(), "the-detail-nobody-asked-for") {
+			t.Errorf("CURIOUS_DEBUG=0 printed the detail anyway: %q", errOut.String())
+		}
+		if !strings.Contains(errOut.String(), internalWhy) {
+			t.Errorf("the ordinary copy is missing, so the check above observed nothing: %q",
+				errOut.String())
+		}
+	})
 }

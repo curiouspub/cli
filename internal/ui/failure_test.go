@@ -429,3 +429,24 @@ func TestEverySentinelIsMapped(t *testing.T) {
 		})
 	}
 }
+
+// The pointer receiver's guarantee is a COMPILE-TIME one, and this is
+// where that is written down, because no mutation can show it.
+//
+// With a value receiver both Failure and *Failure satisfied error, so
+// `return &ui.Failure{...}` compiled and then silently failed to match
+// the errors.As target — a caller's own copy replaced by the
+// internal-fault copy, with nothing reporting the substitution. Making
+// the receiver a pointer means there is one spelling and the compiler
+// rejects the other.
+//
+// A test cannot assert that something does not compile, so the assertion
+// below is the half that can be made — *Failure is an error — and the
+// half that cannot is recorded here rather than left to be rediscovered:
+//
+//	var _ error = Failure{}   // does not compile, and that is the point
+//
+// Reverting the receiver to a value leaves every row in this file green.
+// That is not a gap in the rows; it is the guarantee living somewhere
+// tests do not reach.
+var _ error = (*Failure)(nil)
