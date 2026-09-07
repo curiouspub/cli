@@ -286,15 +286,23 @@ func TestIsTerminalSaysNoToEverythingThatIsNotOne(t *testing.T) {
 //
 // The standard-library way to answer "is this a terminal" without a
 // dependency is os.Stat plus ModeCharDevice. The null device is a
-// character device on every platform this ships to and is a terminal on
-// none of them, so that shortcut answers YES for a stream nobody can
-// type into — and the failure would be a prompt written into a void,
-// waiting forever for an answer that cannot come.
+// character device and is a terminal on none of the platforms this
+// ships to, so that shortcut answers YES for a stream nobody can type
+// into — and the failure would be a prompt written into a void, waiting
+// forever for an answer that cannot come.
 //
-// If the null device is not reported as a character device on some
-// platform, the comparison this row makes does not exist there and it
-// SKIPS rather than passing: a skip says the question was not asked,
-// which is true, where a pass would claim something was measured.
+// THE ASSERTION THAT MATTERS NEEDS NO PREMISE and therefore runs
+// everywhere: the null device is not a terminal, whatever any platform
+// reports about its mode.
+//
+// The character-device fact is what makes this row a COMPARISON with
+// the standard library rather than a bare check, and it is REPORTED
+// rather than made a condition for running. An earlier draft skipped
+// the whole row where the mode was not set, which was wrong for a
+// reason worth writing down: this repository's suite runs without -v,
+// so a skip prints nothing at all. "Measured" and "not asked" would
+// have looked identical in the one output anybody reads, which is the
+// failure a named skip exists to prevent, arriving through the skip.
 func TestACharacterDeviceIsNotATerminal(t *testing.T) {
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
@@ -302,19 +310,21 @@ func TestACharacterDeviceIsNotATerminal(t *testing.T) {
 	}
 	defer devNull.Close()
 
+	// REQUIRED MUTATION: make isTerminal return true for any *os.File
+	// without consulting term.IsTerminal.
+	if isTerminal(devNull) {
+		t.Error("the null device was reported as a terminal — a prompt would be " +
+			"written into a void and wait forever for an answer")
+	}
+
 	info, err := devNull.Stat()
 	if err != nil {
 		t.Fatalf("stat on the null device: %v", err)
 	}
-	if info.Mode()&os.ModeCharDevice == 0 {
-		t.Skipf("the null device is not reported as a character device on %s, so the "+
-			"standard-library comparison this row makes cannot be made here",
-			runtime.GOOS)
-	}
-
-	if isTerminal(devNull) {
-		t.Error("the null device was reported as a terminal")
-	}
+	charDevice := info.Mode()&os.ModeCharDevice != 0
+	t.Logf("on %s the null device reports ModeCharDevice=%v, so the standard-library "+
+		"shortcut would answer %v where the assertion above answers false",
+		runtime.GOOS, charDevice, charDevice)
 }
 
 // TestInteractivityNeedsBothStreams pins the AND. A terminal on stdin
