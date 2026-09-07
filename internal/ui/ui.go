@@ -77,7 +77,8 @@ type UI struct {
 // arguments, and this function is where they are actually obtained.
 func New() *UI {
 	u := newUI(os.Stdin, os.Stdout, os.Stderr, os.LookupEnv,
-		interactiveStreams(os.Stdin, os.Stderr))
+		interactiveStreams(os.Stdin, os.Stderr),
+		func() bool { return terminalUnderstandsEscapes(os.Stderr) })
 
 	// Capture the terminal's state now, while it is certainly untouched,
 	// so the interrupt handler has something to put back. GetState fails
@@ -96,14 +97,14 @@ func New() *UI {
 // this type's behaviour depends on arrives through this signature, so a
 // test configures a UI by calling it rather than by arranging a
 // terminal, which is not a thing a test can portably arrange.
-func newUI(in io.Reader, out, errw io.Writer, lookupEnv func(string) (string, bool), interactive bool) *UI {
+func newUI(in io.Reader, out, errw io.Writer, lookupEnv func(string) (string, bool), interactive bool, escapesUnderstood func() bool) *UI {
 	debug := debugEnabled(lookupEnv)
 	u := &UI{
 		out:         out,
 		err:         errw,
 		reader:      bufio.NewReader(in),
 		interactive: interactive,
-		colour:      colourEnabled(interactive, lookupEnv, func() bool { return terminalUnderstandsEscapes(errw) }),
+		colour:      colourEnabled(interactive, lookupEnv, escapesUnderstood),
 		debug:       debug,
 		restore:     func() {},
 		exit:        os.Exit,

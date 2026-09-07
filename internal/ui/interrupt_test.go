@@ -36,7 +36,7 @@ func interruptUI() (u *UI, out *recorder, events *[]string, exited *[]int) {
 	rec := &recorder{events: &seq}
 
 	u = newUI(strings.NewReader(""), &bytes.Buffer{}, rec,
-		func(string) (string, bool) { return "", false }, true)
+		func(string) (string, bool) { return "", false }, true, alwaysUnderstood)
 	u.restore = func() { seq = append(seq, "restore") }
 	u.exit = func(code int) { codes = append(codes, code) }
 	// The terminator itself is replaced, not just the exit underneath

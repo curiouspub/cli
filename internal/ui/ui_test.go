@@ -22,7 +22,13 @@ func testUI(input string, interactive bool, env map[string]string) (*UI, *bytes.
 		v, ok := env[name]
 		return v, ok
 	}
-	u := newUI(strings.NewReader(input), &out, &errOut, lookup, interactive)
+	// The escape gate is injected here for the same reason lookupEnv is:
+	// the real one asks the console, and a test's stderr is a buffer.
+	// Left to the real gate, EVERY styling assertion on Windows would
+	// answer "no colour" for a reason none of them is about — which is
+	// exactly what happened on the matrix once the gate landed, and it
+	// took two positive controls with it. The gate has its own row.
+	u := newUI(strings.NewReader(input), &out, &errOut, lookup, interactive, alwaysUnderstood)
 	return u, &out, &errOut
 }
 
