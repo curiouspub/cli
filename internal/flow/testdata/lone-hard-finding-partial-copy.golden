@@ -1,0 +1,4 @@
+No lockfile found.
+
+curious installs your dependencies from a lockfile, so it builds the
+exact versions you tested.

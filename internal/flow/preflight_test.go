@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -480,5 +481,216 @@ func TestPreflightRenderExitCodes(t *testing.T) {
 				t.Errorf("exit code = %d, want %d (error %#v)", code, tc.want, err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------
+// A lone hard finding renders its own copy
+// ---------------------------------------------------------------------
+
+// readGolden reads a golden file and refuses an empty one, because a
+// golden test against nothing passes against nothing.
+func readGolden(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("reading the golden file: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("%s is empty", name)
+	}
+	return string(data)
+}
+
+// renderedBytes puts an error through the program's REAL rendering and
+// returns exactly what a person would see, plus the exit code.
+//
+// Through the real one, deliberately. A helper here that reassembled the
+// three parts itself would agree with itself by construction and would
+// go on agreeing after the terminal package changed how a failure is
+// laid out. Stderr is redirected to a file rather than captured, because
+// that type writes to the streams it was built with and this is the only
+// portable way to hand it one a test can read back.
+func renderedBytes(t *testing.T, err error) (string, int) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stderr")
+	sink, openErr := os.Create(path)
+	if openErr != nil {
+		t.Fatalf("creating the capture file: %v", openErr)
+	}
+
+	realErr, realOut := os.Stderr, os.Stdout
+	os.Stderr, os.Stdout = sink, sink
+	code := ui.New().ExitCode(err)
+	os.Stderr, os.Stdout = realErr, realOut
+
+	if closeErr := sink.Close(); closeErr != nil {
+		t.Fatalf("closing the capture file: %v", closeErr)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("reading the capture file: %v", readErr)
+	}
+	return string(data), code
+}
+
+// The lockfile copy, as a check that owns the condition would carry it.
+// The words are the ones the terminal package already holds as a worked
+// example — the point of this round is that a finding can now DELIVER
+// them, which nothing could before.
+func lockfileFinding() check.Finding {
+	return check.Finding{
+		CheckID:  check.IDLockfile,
+		Severity: check.SeverityHardStop,
+		Message:  "no lockfile found",
+		What:     "No lockfile found.",
+		Why: "curious installs your dependencies from a lockfile, so it builds the\n" +
+			"exact versions you tested. Your project has package.json but no\n" +
+			"package-lock.json, npm-shrinkwrap.json or pnpm-lock.yaml.",
+		Next: "Run `npm install` (or `pnpm install`), commit the lockfile it\n" +
+			"creates, and try again.",
+	}
+}
+
+// TestPreflightRenderLoneHardFindingRendersItsOwnCopy is the case the
+// synthesis was getting wrong, and it is the commonest one. A person
+// with exactly one problem should read the sentence the check's author
+// wrote about that problem — not that sentence wrapped in a summary
+// explaining that there is 1 thing to fix.
+//
+// GOLDEN, and the golden was TYPED from the copy rather than captured
+// from this code. One captured from the output asserts only that the
+// output is unchanged; one written from the copy as authored asserts
+// that the code says what the copy says.
+//
+// REQUIRED MUTATION: make the lone-finding path synthesise anyway. This
+// row reds; the multiples row does not move.
+func TestPreflightRenderLoneHardFindingRendersItsOwnCopy(t *testing.T) {
+	r := &recorder{}
+
+	err := RenderPreflight(r, []check.Finding{lockfileFinding()},
+		fullManifest(check.IDLockfile), 0)
+
+	got, code := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-with-copy.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if len(r.prompts) != 0 {
+		t.Errorf("prompts = %v, want none", r.prompts)
+	}
+}
+
+// TestPreflightRenderLoneHardFindingWithoutCopyIsSynthesised. Most
+// checks will not have worked three paragraphs out, and the summary has
+// to carry them — so the synthesis stays for exactly that case rather
+// than being replaced by it.
+func TestPreflightRenderLoneHardFindingWithoutCopyIsSynthesised(t *testing.T) {
+	r := &recorder{}
+
+	err := RenderPreflight(r, []check.Finding{
+		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
+	}, fullManifest(check.IDAstroDep), 0)
+
+	got, code := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-without-copy.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+}
+
+// TestPreflightRenderTwoHardFindingsAlwaysSynthesise, whether or not
+// either carries copy. The FIRST one here carries a full three-part
+// message on purpose: a renderer that quietly preferred it would show
+// one problem to somebody who has two, and the second would be
+// discovered only after the first was fixed — which is the round-trip
+// the whole engine exists to prevent.
+//
+// The assertion names both joined summaries, so that preference reds
+// rather than merely looking different.
+func TestPreflightRenderTwoHardFindingsAlwaysSynthesise(t *testing.T) {
+	r := &recorder{}
+	withCopy := lockfileFinding()
+	withCopy.Message = "No lockfile found."
+
+	err := RenderPreflight(r, []check.Finding{
+		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
+		withCopy,
+	}, fullManifest(check.IDAstroDep, check.IDLockfile), 0)
+
+	got, code := renderedBytes(t, err)
+	if want := readGolden(t, "two-hard-findings.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	for _, summary := range []string{"This doesn't look like an Astro project.", "No lockfile found."} {
+		if !strings.Contains(got, summary) {
+			t.Errorf("rendering does not carry the summary %q:\n%s", summary, got)
+		}
+	}
+	if strings.Contains(got, "curious installs your dependencies") {
+		t.Errorf("the first finding's own copy was preferred over the summary of both:\n%s", got)
+	}
+}
+
+// TestPreflightRenderFillsAMissingHeadlineFromTheSummary. Copy is
+// optional part by part, and a check that wrote only a reason has still
+// worked its copy out — so the headline falls back to the required
+// one-line summary rather than the whole message falling back to
+// synthesis and throwing that reason away.
+//
+// MUTATION: leave What empty rather than filling it. The golden reds on
+// the missing headline.
+func TestPreflightRenderFillsAMissingHeadlineFromTheSummary(t *testing.T) {
+	r := &recorder{}
+
+	err := RenderPreflight(r, []check.Finding{{
+		CheckID:  check.IDLockfile,
+		Severity: check.SeverityHardStop,
+		Message:  "No lockfile found.",
+		Why: "curious installs your dependencies from a lockfile, so it builds the\n" +
+			"exact versions you tested.",
+	}}, fullManifest(check.IDLockfile), 0)
+
+	got, _ := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-partial-copy.golden"); got != want {
+		t.Errorf("rendering:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths pins a real
+// asymmetry rather than papering over it. A finding WITHOUT copy has its
+// paths listed under the summary, because nothing else would name them.
+// A finding WITH copy is rendered exactly as its author wrote it — the
+// author had the paths and chose what to say about them, and a renderer
+// appending a list underneath would be editing somebody's prose.
+func TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths(t *testing.T) {
+	withCopy := lockfileFinding()
+	withCopy.Paths = []string{"package.json"}
+
+	err := RenderPreflight(&recorder{}, []check.Finding{withCopy},
+		fullManifest(check.IDLockfile), 0)
+
+	got, _ := renderedBytes(t, err)
+	if want := readGolden(t, "lone-hard-finding-with-copy.golden"); got != want {
+		t.Errorf("copy was not rendered verbatim:\n%s\nwant:\n%s", got, want)
+	}
+
+	bare := check.Finding{
+		CheckID:  check.IDLockfile,
+		Severity: check.SeverityHardStop,
+		Message:  "No lockfile found.",
+		Paths:    []string{"package.json"},
+	}
+	synthesised, _ := renderedBytes(t, RenderPreflight(&recorder{},
+		[]check.Finding{bare}, fullManifest(check.IDLockfile), 0))
+	if !strings.Contains(synthesised, "package.json") {
+		t.Errorf("a finding with no copy of its own lost the file it is about:\n%s", synthesised)
 	}
 }

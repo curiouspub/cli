@@ -82,6 +82,46 @@ type Finding struct {
 	// changes with the machine that produced it is a difference nobody
 	// asked for in a field meant to be compared.
 	Paths []string
+
+	// What, Why and Next are OPTIONAL product copy: what happened, why
+	// it happened, and what to do about it. A check that has worked its
+	// words out carries them here; one that has not leaves them empty
+	// and Message is the whole message.
+	//
+	// THE THIRD PART IS THE PRODUCT. A hard stop that names no action
+	// leaves the reader to guess, and the reader is usually somebody
+	// deploying their first site who has no model of what this program
+	// does. "No lockfile found" is a fact; "run npm install, commit the
+	// lockfile, try again" is a fix.
+	//
+	// They sit BESIDE Message rather than replacing it, because the two
+	// serve different readers. A machine-readable result wants one line
+	// it can put in a list; a person stopped mid-deploy wants three
+	// paragraphs. Folding them into one field would make every surface
+	// choose the wrong length for one of the two.
+	//
+	// Stored ALREADY WRAPPED and printed exactly as written, matching
+	// how the terminal renders every other failure: re-wrapping to the
+	// terminal's width would mean measuring the terminal, and it would
+	// make a golden file a test of the terminal rather than of the copy.
+	What string
+	Why  string
+	Next string
+}
+
+// HasCopy reports whether this Finding carries product copy of its own.
+//
+// ANY PART COUNTS, not all three. A check that wrote only the action —
+// the part a reader can act on, and the one most often missing — has
+// worked its copy out as far as it needed to, and answering "no" there
+// would throw that sentence away.
+//
+// It is asked here rather than at each surface so that the terminal and
+// the machine-readable result cannot disagree about whether a finding
+// has copy — the sort of divergence nobody notices until the two render
+// the same finding differently.
+func (f Finding) HasCopy() bool {
+	return f.What != "" || f.Why != "" || f.Next != ""
 }
 
 // Advisory reports whether this Finding is one a surface shows by

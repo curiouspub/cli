@@ -350,3 +350,73 @@ func TestSortManifestFollowsTheDeclaredOrder(t *testing.T) {
 		t.Errorf("order = %v, want %v", got, want)
 	}
 }
+
+// ---------------------------------------------------------------------
+// The optional three-part copy
+// ---------------------------------------------------------------------
+
+// TestFindingCarriesOptionalCopy. Message stays the required one-line
+// summary; What/Why/Next are what a check that has worked its copy out
+// puts beside it. The three parts exist because a hard stop that names
+// no action leaves the reader guessing, and the reader is usually
+// somebody deploying their first site.
+func TestFindingCarriesOptionalCopy(t *testing.T) {
+	f := Finding{
+		CheckID:  IDLockfile,
+		Severity: SeverityHardStop,
+		Message:  "no lockfile found",
+		What:     "No lockfile found.",
+		Why:      "curious installs your dependencies from a lockfile.",
+		Next:     "Run `npm install`, commit the lockfile, and try again.",
+	}
+	if f.Message != "no lockfile found" {
+		t.Errorf("Message = %q, want the summary to survive alongside the copy", f.Message)
+	}
+	for _, part := range []struct{ name, got, want string }{
+		{"What", f.What, "No lockfile found."},
+		{"Why", f.Why, "curious installs your dependencies from a lockfile."},
+		{"Next", f.Next, "Run `npm install`, commit the lockfile, and try again."},
+	} {
+		if part.got != part.want {
+			t.Errorf("%s = %q, want %q", part.name, part.got, part.want)
+		}
+	}
+
+	bare := Finding{CheckID: IDAstroDep, Severity: SeverityHardStop, Message: "summary only"}
+	if bare.What != "" || bare.Why != "" || bare.Next != "" {
+		t.Errorf("a finding that carries no copy has non-empty parts: %+v", bare)
+	}
+}
+
+// TestHasCopyAsksAboutAnyPart, not about all three. A check that wrote
+// only the action — the part a reader can act on, and the one most often
+// missing — has worked its copy out as far as it needed to, and
+// answering "no" there would throw that sentence away.
+//
+// It is asked HERE rather than at each surface so the terminal and the
+// machine-readable result cannot disagree about whether a finding has
+// copy, which is the sort of divergence nobody notices until the two
+// render the same finding differently.
+//
+// MUTATION: require all three parts. The three single-part rows red.
+func TestHasCopyAsksAboutAnyPart(t *testing.T) {
+	cases := []struct {
+		name    string
+		finding Finding
+		want    bool
+	}{
+		{"nothing", Finding{Message: "m"}, false},
+		{"what only", Finding{Message: "m", What: "w"}, true},
+		{"why only", Finding{Message: "m", Why: "y"}, true},
+		{"next only", Finding{Message: "m", Next: "n"}, true},
+		{"all three", Finding{Message: "m", What: "w", Why: "y", Next: "n"}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.finding.HasCopy(); got != tc.want {
+				t.Errorf("HasCopy() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
