@@ -134,6 +134,30 @@ linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollisio
 # it at all — which looks exactly like a row that passed.
 * github.com/curiouspub/cli/internal/guard TestReleaseConfigIsAcceptedByTheReleaseTool
 
+# The row that needs a config file it cannot read. Taking the permission
+# bits away is a request rather than a result: a process running as the
+# superuser ignores them, which a container commonly is, and some
+# filesystems do not enforce them either. The row attempts the read
+# before trusting the fixture, so the skip means the environment said no
+# rather than the row guessing.
+#
+# MEASURED: as an ordinary user on the machine this suite runs on, the
+# read is refused and the row does NOT skip. It is declared anyway,
+# because the question this file asks is whether the skip would be
+# LEGITIMATE and not whether it happens here.
+#
+# It is compiled only where the mode bits mean what it reads them to
+# mean, so Windows is absent from the platform column rather than
+# covered by a wildcard: there the row does not exist at all, and a
+# wildcard would claim this file had something to say about a leg that
+# never runs it.
+#
+# WHAT THE SKIP COSTS, because a line here is a claim: on a machine that
+# skips it, nothing in that package covers the unreadable-file branch.
+# Every other read failure — no file, a corrupt one, a path naming a
+# directory — is asserted on all three platforms.
+linux,darwin github.com/curiouspub/cli/internal/config TestLoadUnreadableFileIsReportedNotFatal
+
 # A directory the walk cannot read has to be built by taking away the
 # read bit, and two environments legitimately refuse to produce it:
 # Windows, where permission bits do not gate a directory read the same

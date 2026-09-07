@@ -739,6 +739,14 @@ func createConfigDir(dir string) error {
 //     they are flushed; without this a crash can leave the config
 //     pointing at an empty file, which reads as "logged out".
 //
+//     THIS LINE IS PAPER AND STAYS PAPER, recorded here so the next
+//     reader of a green suite knows which claim it is not making.
+//     Nothing observable distinguishes a synced write from an unsynced
+//     one without cutting the power: both produce the same bytes, the
+//     same mode and the same rename. A row asserting that no row can be
+//     written would be a guard for a guard, so there is none, and this
+//     sentence is the record instead.
+//
 //   - Rename over the target, never a truncate-in-place. The usual
 //     argument is a crash between truncating and writing, which leaves
 //     an empty config that reads as "logged out" and costs the user
