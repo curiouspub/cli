@@ -1,4 +1,4 @@
 export default {
   site: 'https://example.com',
-  description: 'note: build format info lives in the docs',
+  description: "example config: build: { format: 'file' } is Astro's file mode",
 };
