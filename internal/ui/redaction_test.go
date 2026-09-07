@@ -145,7 +145,7 @@ func TestASecretReachesTheTerminalThroughNothingThisPackageWrites(t *testing.T) 
 
 	u.Step("token is %v", secret)
 	u.Result("token is %v", secret)
-	u.Fail(Failure{
+	u.Fail(&Failure{
 		What: fmt.Sprintf("Token %v was refused.", secret),
 		Why:  fmt.Sprintf("The server did not accept %v.", secret),
 		Next: "Run `curious deploy` again to log in.",

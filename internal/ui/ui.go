@@ -56,6 +56,13 @@ type UI struct {
 	// must not leave a shell with echo off.
 	restore func()
 
+	// endInterrupted ends a run that was interrupted, in the way this
+	// platform's shells understand — see terminateInterrupted, which has
+	// one file per platform because the right answer differs. It is a
+	// field so a test can observe that it was reached without the test
+	// process being killed by its own assertion.
+	endInterrupted func()
+
 	// exit ends the process. It is a field so the interrupt path can be
 	// tested for the code it produces rather than for the fact that it
 	// terminated the test binary.
@@ -90,7 +97,7 @@ func New() *UI {
 // terminal, which is not a thing a test can portably arrange.
 func newUI(in io.Reader, out, errw io.Writer, lookupEnv func(string) (string, bool), interactive bool) *UI {
 	_, debug := lookupEnv(debugEnvVar)
-	return &UI{
+	u := &UI{
 		out:         out,
 		err:         errw,
 		reader:      bufio.NewReader(in),
@@ -100,6 +107,8 @@ func newUI(in io.Reader, out, errw io.Writer, lookupEnv func(string) (string, bo
 		restore:     func() {},
 		exit:        os.Exit,
 	}
+	u.endInterrupted = func() { terminateInterrupted(u) }
+	return u
 }
 
 // debugEnvVar names the variable that adds detail to an unexpected

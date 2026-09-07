@@ -34,7 +34,32 @@ type Failure struct {
 	Next string
 }
 
-func (f Failure) Error() string { return f.What }
+// Error makes a Failure travel as an error, so a check deep in a flow
+// can return the copy it owns and let the top of the program render it.
+// It returns What alone: a whole sentence, capitalised and stopped,
+// unlike an ordinary Go error string on purpose — this is product copy
+// that happens to travel as an error, not an error string that happens
+// to be shown.
+//
+// THE RECEIVER IS A POINTER, and that is a correction rather than a
+// preference. With a value receiver both Failure and *Failure satisfied
+// error, so `return &ui.Failure{...}` — the more natural of the two
+// spellings — compiled perfectly and then failed to match the
+// errors.As target in ExitCode, which looks for the value type. The
+// caller's own copy was silently replaced by the internal-fault copy: a
+// wrong message, with nothing anywhere reporting that a substitution had
+// happened. One spelling is now the only spelling, and the compiler is
+// what enforces it.
+func (f *Failure) Error() string { return f.What }
+
+// NewFailure builds one. It exists so the pointer is produced by this
+// package rather than by every caller remembering an ampersand, and so
+// the three parts are named at the call site — a positional
+// Failure{a, b, c} reads as three interchangeable strings, and they are
+// not: the third is the only one the reader can act on.
+func NewFailure(what, why, next string) *Failure {
+	return &Failure{What: what, Why: why, Next: next}
+}
 
 // NoLockfile and NotAnAstroProject are the two worked examples, kept
 // here so the checks that own those conditions render the same words
@@ -42,7 +67,7 @@ func (f Failure) Error() string { return f.What }
 // diverges, and the divergence shows up as two halves of one program
 // telling a user different stories.
 var (
-	NoLockfile = Failure{
+	NoLockfile = &Failure{
 		What: "No lockfile found.",
 		Why: "curious installs your dependencies from a lockfile, so it builds the\n" +
 			"exact versions you tested. Your project has package.json but no\n" +
@@ -51,7 +76,7 @@ var (
 			"creates, and try again.",
 	}
 
-	NotAnAstroProject = Failure{
+	NotAnAstroProject = &Failure{
 		What: "This doesn't look like an Astro project.",
 		Why: "curious deploys Astro sites, and package.json here doesn't list\n" +
 			"astro as a dependency.",
@@ -65,7 +90,7 @@ var (
 // what it needed to ask, so a caller with a specific message handles
 // ErrNotInteractive itself and this is what is left for one that has
 // none.
-var notInteractiveFailure = Failure{
+var notInteractiveFailure = &Failure{
 	What: "curious needs a terminal for that.",
 	Why: "It had a question to ask you and no way to ask it. That happens when\n" +
 		"curious runs through a pipe, from a script, or inside a tool that\n" +
@@ -73,9 +98,30 @@ var notInteractiveFailure = Failure{
 	Next: "Run curious directly in a terminal and answer the question there.",
 }
 
+// noAnswerFailure is what a prompt renders when it has asked its bounded
+// number of times and never got an answer it could use.
+//
+// It exists because the alternative was the internal-fault copy. That
+// path told a person "this is a fault in curious rather than a problem
+// with your project, so there is nothing here for you to fix" and invited
+// a bug report — after they had typed four answers the prompt could not
+// read. The claim was false, the advice was useless, and it appeared in
+// the one surface whose entire job is telling people what happened.
+//
+// So this copy does the opposite of blaming the program: it says plainly
+// that the answers were not understood, and it names the two words that
+// work. Nothing about it suggests anything is broken, because nothing is.
+var noAnswerFailure = &Failure{
+	What: "Didn't catch that.",
+	Why: "curious asked the same question a few times and couldn't read any of\n" +
+		"the answers, so it stopped rather than keep asking.",
+	Next: "Run the command again and answer with y or n — or press Ctrl-C to\n" +
+		"stop here.",
+}
+
 // Fail writes a Failure to stderr — never stdout, because a failure is
 // prose for a person and stdout is for output a program will read.
-func (u *UI) Fail(f Failure) {
+func (u *UI) Fail(f *Failure) {
 	fmt.Fprint(u.err, u.renderFailure(f))
 }
 
@@ -88,7 +134,10 @@ func (u *UI) Fail(f Failure) {
 // a half-filled Failure looks wrong to its author rather than merely
 // spacious. Nothing this package exports has an empty part, and a test
 // says so.
-func (u *UI) renderFailure(f Failure) string {
+func (u *UI) renderFailure(f *Failure) string {
+	if f == nil {
+		return ""
+	}
 	parts := make([]string, 0, 3)
 	if f.What != "" {
 		parts = append(parts, u.styled(f.What))
@@ -136,7 +185,7 @@ const (
 // placeholder here like everywhere else, and there is a test for exactly
 // that.
 func (u *UI) Internal(err error) {
-	f := Failure{
+	f := &Failure{
 		What: internalWhat,
 		Why:  internalWhy,
 		Next: "Re-run with " + debugEnvVar + "=1 to see the detail, and please\n" +
@@ -183,12 +232,21 @@ func (u *UI) ExitCode(err error) int {
 	case errors.Is(err, ErrNotInteractive):
 		u.Fail(notInteractiveFailure)
 		return 1
+
+	case errors.Is(err, ErrNoAnswer):
+		// A person answering unusably is not a fault in this program,
+		// and this case's absence was how they got told it was. Every
+		// sentinel this package exports now has a mapping here; that is
+		// the property to keep, and the test table below is written to
+		// notice when it stops holding.
+		u.Fail(noAnswerFailure)
+		return 1
 	}
 
 	// A Failure carries its own copy, written by whoever owns the check
 	// that produced it, so it renders as itself rather than as an
 	// internal fault.
-	var f Failure
+	var f *Failure
 	if errors.As(err, &f) {
 		u.Fail(f)
 		return 1

@@ -54,7 +54,7 @@ func readGolden(t *testing.T, name string) string {
 func TestFailureGoldens(t *testing.T) {
 	cases := []struct {
 		name    string
-		failure Failure
+		failure *Failure
 		golden  string
 	}{
 		{"no lockfile", NoLockfile, "no-lockfile.golden"},
@@ -102,7 +102,7 @@ func TestGoldenComparisonCanFail(t *testing.T) {
 // SET rather than one representative, because a list is one fact with
 // several parts and testing one part is not sampling the list.
 func TestEveryPublishedFailureNamesAnAction(t *testing.T) {
-	published := map[string]Failure{
+	published := map[string]*Failure{
 		"NoLockfile":            NoLockfile,
 		"NotAnAstroProject":     NotAnAstroProject,
 		"notInteractiveFailure": notInteractiveFailure,
@@ -287,6 +287,46 @@ func TestExitCode(t *testing.T) {
 			wantOnErr: "needs a terminal",
 		},
 		{
+			// THE ROW THAT WAS MISSING, and its absence is the whole
+			// finding. Every other sentinel this package exports had a
+			// row here; this one did not, and it was also the only one
+			// ExitCode did not map — so four unusable answers were
+			// rendered as "a fault in curious … nothing here for you to
+			// fix", with an invitation to file a bug report about their
+			// own typing.
+			//
+			// REQUIRED MUTATION: delete the ErrNoAnswer branch from
+			// ExitCode. This row reds on both halves — the copy that
+			// should be there is missing, and the internal-fault copy
+			// that should not be there appears.
+			name:       "running out of answers is the user's business, not a fault",
+			err:        ErrNoAnswer,
+			wantCode:   1,
+			wantOnErr:  "Didn't catch that.",
+			wantAbsent: internalWhat,
+		},
+		{
+			name:       "a wrapped no-answer is still not a fault",
+			err:        fmt.Errorf("confirming the deploy: %w", ErrNoAnswer),
+			wantCode:   1,
+			wantOnErr:  "Didn't catch that.",
+			wantAbsent: internalWhat,
+		},
+		{
+			// A Failure built by a caller rather than published here.
+			// Before the receiver became a pointer, `&ui.Failure{...}`
+			// compiled, satisfied error, and then did NOT match the
+			// errors.As target — so the caller's copy was silently
+			// replaced by the internal-fault copy. There is now one
+			// spelling and the compiler enforces it; this row is the
+			// floor under that.
+			name:       "a Failure a caller constructed renders its own copy",
+			err:        NewFailure("Something specific went wrong.", "Because of this.", "Do that."),
+			wantCode:   1,
+			wantOnErr:  "Something specific went wrong.",
+			wantAbsent: internalWhat,
+		},
+		{
 			// REQUIRED MUTATION: delete the errors.As branch, so a
 			// Failure falls through to Internal. This row reds on the
 			// missing copy, and the row below reds too.
@@ -332,6 +372,59 @@ func TestExitCode(t *testing.T) {
 			}
 			if out.Len() != 0 {
 				t.Errorf("a failure reached stdout: %q", out.String())
+			}
+		})
+	}
+}
+
+// TestEverySentinelIsMapped is the row that would have caught the
+// no-answer defect without anybody thinking of no answers, and it is
+// here because of how that defect was found.
+//
+// A reviewer noticed the tell before the behaviour: this package exports
+// three sentinels, ExitCode had branches for two, and the test table
+// above had rows for the same two. THE ONLY UNMAPPED SENTINEL WAS THE
+// ONLY ONE MISSING FROM THE TABLE — the gap in the code and the gap in
+// its tests had the same shape, because both were written by asking
+// "what can go wrong" and answering from the same imagination.
+//
+// So this asserts the SET rather than its members. A fourth sentinel
+// added tomorrow reds here on the day it is added, whether or not
+// anybody remembers to write a row for it, and it reds for the right
+// reason: not "you forgot a test" but "a person can reach a message that
+// blames this program for something they did".
+//
+// The sentinels are listed here rather than discovered by reflection —
+// Go gives no way to enumerate a package's exported vars from inside it —
+// so this list is itself something that can go stale. That is why the
+// assertion is on the OUTCOME (does the sentinel render as an internal
+// fault?) rather than on the branch: a sentinel added to this list
+// without a branch reds immediately, which is the direction that matters.
+//
+// REQUIRED MUTATION: delete any one of ExitCode's sentinel branches. The
+// corresponding subtest reds with the internal-fault copy in its output.
+func TestEverySentinelIsMapped(t *testing.T) {
+	sentinels := map[string]error{
+		"ErrNotInteractive": ErrNotInteractive,
+		"ErrAborted":        ErrAborted,
+		"ErrNoAnswer":       ErrNoAnswer,
+	}
+
+	for name, sentinel := range sentinels {
+		t.Run(name, func(t *testing.T) {
+			u, _, errOut := testUI("", false, nil)
+			u.ExitCode(sentinel)
+
+			if strings.Contains(errOut.String(), internalWhat) {
+				t.Errorf("%s renders as a fault in curious: %q\n"+
+					"Every sentinel this package exports is a thing that HAPPENED, not a "+
+					"thing that broke. Falling through to the internal-fault copy tells a "+
+					"person their own action was a bug in the program and asks them to "+
+					"report it.", name, errOut.String())
+			}
+			if errOut.Len() == 0 {
+				t.Errorf("%s renders nothing at all, so the check above cannot observe "+
+					"whether it renders the WRONG thing", name)
 			}
 		})
 	}
