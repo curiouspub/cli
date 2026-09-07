@@ -230,11 +230,21 @@ prose, which is why nothing in any of them quotes an example — a rule
 file that quoted its own targets would be a leak shipping inside the file
 that hunts leaks.
 
-**`go.sum` is exempt from the vendor check, and `go.mod` is not.** The
-line is GENERATED versus AUTHORED, not "manifest": a person chooses every
-module path in `go.mod`, and a provider SDK appearing there is exactly
-what the dependency rule is for — while nobody chooses the bytes of a
-`go.sum` hash.
+**A `go.sum` CHECKSUM COLUMN is exempt from the vendor check. Nothing
+else is** — not the rest of that line, and not `go.mod`. The line is
+GENERATED versus AUTHORED, not "manifest" and not even "file": a
+`go.sum` line carries a machine-chosen hash **and** a human-chosen module
+path, side by side, and only the first of them is an accident.
+
+That distinction was learned the expensive way. The first version of this
+rule excused the whole file on the grounds that nobody chooses the bytes
+of a hash — true of the hash, false of the path beside it. `go.sum`
+retains entries for modules no longer in the build graph until someone
+runs `go mod tidy`, so a provider SDK named in a stale entry became
+invisible here; and the dependency check could not see it either, since
+`go list -m all` omits a module nothing imports. Two rules, one blind by
+construction and one blinded by a carve-out drawn wider than its own
+argument.
 
 That distinction is load-bearing rather than tidy, because the vendor
 check reads subwords inside identifiers and base64 produces capitalised
