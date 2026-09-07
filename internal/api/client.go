@@ -197,19 +197,45 @@ type Client struct {
 	Token ui.Secret
 }
 
-// New constructs a Client. An empty baseURL falls back to
-// CURIOUS_API_URL, and then to the compiled-in default. Every base URL —
-// explicit, from the environment, or the default — passes through the
-// address guard before this returns; see validateBaseURL.
-func New(baseURL string, opts ...Option) (*Client, error) {
-	if baseURL == "" {
-		baseURL = os.Getenv("CURIOUS_API_URL")
+// ResolveBaseURL answers "which API endpoint is this run talking to",
+// and it is the ONE place that question is answered. An explicit argument
+// wins; an empty one falls back to CURIOUS_API_URL, and then to the
+// compiled-in default.
+//
+// It is exported because more than this package needs the answer. The
+// stored credential records the endpoint it was issued against so a
+// token from a local development server is never sent to production, and
+// the code holding that file has to know what the effective endpoint IS
+// before it can compare. Without this, that code would have to repeat the
+// fallback chain — including a second copy of the default URL, which the
+// compiled-in-hostname guard refuses outright, correctly: a URL a reader
+// cannot find by grepping for one declaration is the shape a phone-home
+// takes.
+//
+// It performs NO validation. The result is the base URL a caller MEANT,
+// which is exactly what a comparison needs even when it is one the
+// address guard would refuse to dial — a stored endpoint that a
+// tightened guard now rejects must still be comparable, or the guard
+// would strand a config it can no longer describe. New applies the guard
+// immediately afterwards; nothing else should assume it has been applied.
+func ResolveBaseURL(explicit string) string {
+	if explicit != "" {
+		return explicit
 	}
-	if baseURL == "" {
-		baseURL = defaultAPIBase
+	if fromEnv := os.Getenv("CURIOUS_API_URL"); fromEnv != "" {
+		return fromEnv
 	}
+	return defaultAPIBase
+}
 
-	normalized, err := validateBaseURL(baseURL)
+// New constructs a Client. An empty baseURL falls back to
+// CURIOUS_API_URL, and then to the compiled-in default — through
+// ResolveBaseURL, which is the same function anything else asking that
+// question uses, so the two cannot drift. Every base URL — explicit, from
+// the environment, or the default — passes through the address guard
+// before this returns; see validateBaseURL.
+func New(baseURL string, opts ...Option) (*Client, error) {
+	normalized, err := validateBaseURL(ResolveBaseURL(baseURL))
 	if err != nil {
 		return nil, err
 	}
