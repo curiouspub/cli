@@ -122,3 +122,24 @@ func (e *UndeclaredSeverityError) Error() string {
 	return fmt.Sprintf("a finding from %s carries no declared severity",
 		strings.Join(e.CheckIDs, ", "))
 }
+
+// ContradictedFindingError is what Combine returns when a finding
+// reports on a check the manifest says declined.
+//
+//	Skipped lockfile: couldn't read package.json
+//	lockfile is stale
+//
+// Two adjacent lines about one id, disagreeing about whether anybody
+// looked. The claimed-ids rule permits it by construction, because the
+// id IS claimed — the row is there, it simply says the check declined.
+//
+// A check that looked enough to find something ANSWERED. A check that
+// declined has nothing to report. There is no third case.
+type ContradictedFindingError struct {
+	CheckIDs []string
+}
+
+func (e *ContradictedFindingError) Error() string {
+	return fmt.Sprintf("a finding reports on %s, which the manifest says was declined; "+
+		"a check that found something answered", strings.Join(e.CheckIDs, ", "))
+}

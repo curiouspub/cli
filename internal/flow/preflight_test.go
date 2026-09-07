@@ -454,9 +454,14 @@ func TestPreflightRenderIsByteIdenticalAcrossRuns(t *testing.T) {
 		warning(check.IDBuildFormat, "build.format will not produce routable URLs."),
 		{CheckID: check.IDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
 	}
+	// The declines sit on ids that carry NO finding, which the gate now
+	// requires: a check that found something answered, so a finding and
+	// a decline about one id is a report contradicting itself. The
+	// fixture used to decline pages-dir while carrying a note under it,
+	// and the fifth enforcement refuses exactly that.
 	report := reportOf(t, findings,
 		environmental(check.IDLockfile, "couldn't read package.json"),
-		environmental(check.IDPagesDir, "couldn't read astro.config"))
+		environmental(check.IDSymlinks, "couldn't read the project directory"))
 
 	run := func() string {
 		r := &recorder{answer: true}

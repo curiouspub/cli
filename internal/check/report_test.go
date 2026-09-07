@@ -287,3 +287,86 @@ func TestReportAccessorsHandBackTheirOwnSlices(t *testing.T) {
 		t.Errorf("a caller overwriting its copy changed the report: %v", ids(report.Manifest()))
 	}
 }
+
+// TestCombineRefusesAFindingUnderADeclinedID is the fifth enforcement,
+// and it closes a contradiction the other four permit by construction.
+//
+//	Skipped lockfile: couldn't read package.json
+//	lockfile is stale
+//
+// Two adjacent lines about one id, disagreeing about whether anybody
+// looked. Claimed-ids allows exactly this, because the id IS claimed —
+// the row is there, it simply says the check declined.
+//
+// A check that looked enough to find something ANSWERED. A check that
+// declined has nothing to report. There is no third case, and this is
+// where that becomes true rather than hoped.
+//
+// MUTATION: remove the enforcement. Reds here.
+// MUST NOT MOVE: the four rows above — a duplicate, a coverage gap, an
+// unclaimed finding and an undeclared severity each still red on their
+// own enforcement and on nothing else.
+func TestCombineRefusesAFindingUnderADeclinedID(t *testing.T) {
+	m := everyDeclaredID()
+	for i := range m {
+		if m[i].CheckID == IDLockfile {
+			m[i] = Ran{
+				CheckID: IDLockfile,
+				Status:  Declined,
+				Kind:    Environmental,
+				Reason:  "couldn't read package.json",
+			}
+		}
+	}
+
+	_, err := Combine(Results{
+		Manifest: m,
+		Findings: []Finding{
+			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "answered, fine"},
+			{CheckID: IDLockfile, Severity: SeverityWarning, Message: "lockfile is stale"},
+		},
+	})
+
+	var contradicted *ContradictedFindingError
+	if !errors.As(err, &contradicted) {
+		t.Fatalf("error = %#v, want a contradiction failure", err)
+	}
+	if !reflect.DeepEqual(contradicted.CheckIDs, []string{IDLockfile}) {
+		t.Errorf("CheckIDs = %v, want [%s]", contradicted.CheckIDs, IDLockfile)
+	}
+	if !strings.Contains(err.Error(), IDLockfile) {
+		t.Errorf("message = %q, want it to name the id", err.Error())
+	}
+}
+
+// TestCombineAllowsAFindingUnderAnAnsweredIDBesideOtherDeclines is the
+// floor. The rule is about the id a finding is ABOUT, not about whether
+// the report contains declines at all — without this the enforcement
+// could be "refuse any report with both findings and declines", which
+// would refuse most real reports.
+func TestCombineAllowsAFindingUnderAnAnsweredIDBesideOtherDeclines(t *testing.T) {
+	m := everyDeclaredID()
+	for i := range m {
+		if m[i].CheckID == IDBuildFormat {
+			m[i] = Ran{
+				CheckID: IDBuildFormat,
+				Status:  Declined,
+				Kind:    ByDesign,
+				Reason:  "the config builds this value at run time",
+			}
+		}
+	}
+
+	report, err := Combine(Results{
+		Manifest: m,
+		Findings: []Finding{
+			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "a development URL"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Combine: %v", err)
+	}
+	if len(report.Findings()) != 1 {
+		t.Errorf("findings = %+v, want the one under an answered id", report.Findings())
+	}
+}
