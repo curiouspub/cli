@@ -81,6 +81,12 @@ type Finding struct {
 	// rendered into a result an agent may act on, and a separator that
 	// changes with the machine that produced it is a difference nobody
 	// asked for in a field meant to be compared.
+	//
+	// BUILD IT WITH NewPaths. A producer working from the standard
+	// library's relative-path helper gets the host's separator, and this
+	// struct accepts backslashes in silence — a documented contract with
+	// nothing enforcing it is a contract that holds until the first
+	// Windows user.
 	Paths []string
 
 	// What, Why and Next are OPTIONAL product copy: what happened, why
