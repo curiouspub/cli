@@ -218,10 +218,18 @@ type Config struct {
 	// then a decision rather than an accident.
 	PermissionsChecked bool
 
-	// unknown holds every top-level field this build does not know,
+	// Unknown holds every top-level field this build does not know,
 	// exactly as it was read, so Save can write it back. Losing it would
 	// mean an older binary run once silently deletes a newer one's state.
-	unknown map[string]json.RawMessage
+	//
+	// It is EXPORTED for the same reason Token is, and the reason is not
+	// stylistic: fmt cannot call a method on a value it reaches by
+	// reflecting an unexported field, so a type that redacts itself
+	// stops redacting the moment it is hidden below one. This field's
+	// values are raw JSON out of a file this build has never seen the
+	// schema of, which is exactly where the next credential will arrive.
+	// See UnknownFields.
+	Unknown UnknownFields
 }
 
 // Path returns the config file's location, resolving in this order:
@@ -334,7 +342,7 @@ func Load(effectiveAPIURL string) (*Config, error) {
 
 	cfg.APIURL = fc.APIURL
 	stripKnownKeys(raw)
-	cfg.unknown = raw
+	cfg.Unknown = raw
 
 	if strings.TrimSpace(fc.Token) == "" {
 		cfg.NoTokenReason = fmt.Errorf(
@@ -696,8 +704,8 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 // that held a ui.Secret would put the redaction placeholder into the
 // file. Both reasons point at the same code; see fileConfig.
 func (c *Config) marshal(token ui.Secret, issuedAgainst string) ([]byte, error) {
-	out := make(map[string]json.RawMessage, len(c.unknown)+3)
-	for k, v := range c.unknown {
+	out := make(map[string]json.RawMessage, len(c.Unknown)+3)
+	for k, v := range c.Unknown {
 		out[k] = v
 	}
 
