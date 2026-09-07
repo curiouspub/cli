@@ -737,6 +737,7 @@ func TestSaveRecordsTheEndpointItWasGiven(t *testing.T) {
 		t.Errorf("the token saved against this run's endpoint was not offered back "+
 			"to it: %v", again.NoTokenReason)
 	}
+
 }
 
 // TestSaveFromAFreshValueClaimsNothingAboutUnknownFields makes the doc's
@@ -767,8 +768,22 @@ func TestSaveFromAFreshValueClaimsNothingAboutUnknownFields(t *testing.T) {
 	// has. The future field is on disk and this value knows nothing
 	// about it.
 	fresh := &Config{Path: path}
+	if fresh.Version != 0 {
+		t.Fatalf("the fixture starts with a version already set, so the assertion " +
+			"below cannot see anything")
+	}
 	if err := fresh.Save(testToken, endpoint); err != nil {
 		t.Fatalf("Save(): %v", err)
+	}
+	// The value describes the file after a successful save, and the
+	// version is part of the file. A fresh value writes this build's
+	// schema and has to know it did: the refusal to downgrade a file
+	// from the future is decided by exactly this field, so one that
+	// never learned what was written is one whose next save is deciding
+	// on a value nothing put there.
+	if fresh.Version != SchemaVersion {
+		t.Errorf("Version = %d after a save that wrote %d — the value no longer "+
+			"describes the file it just wrote", fresh.Version, SchemaVersion)
 	}
 	var afterFresh map[string]any
 	if err := json.Unmarshal(readFile(t, path), &afterFresh); err != nil {

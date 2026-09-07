@@ -934,6 +934,11 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 	// credential is stored when nothing was written.
 	c.Token = token
 	c.APIURL = issuedAgainst
+	// Including the version, which is the field the next save's refusal
+	// to downgrade a file from the future is decided by. A value that
+	// wrote this build's schema and still reported none would be
+	// deciding that on something nothing put there.
+	c.Version = SchemaVersion
 	return nil
 }
 
