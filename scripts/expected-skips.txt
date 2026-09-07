@@ -1,0 +1,65 @@
+# Skipped test rows this repository accepts, and where.
+#
+# One rule per line: PLATFORMS, package, test. Platforms is a
+# comma-separated list of the operating systems this repository builds
+# for, or an asterisk for all of them. internal/skipcheck reads this file
+# on every run and keeps no copy of its own, so deleting a line here
+# measurably changes what the suite allows — which is how anyone can
+# check it is really being read.
+#
+# THE RULE THIS FILE EXISTS FOR: a skipped row prints nothing in a
+# non-verbose run, so a green tick over a row that stopped running looks
+# exactly like a green tick over one that passed. Several rows here skip
+# on conditions that are honest on one platform and a broken environment
+# on another — a missing program, a filesystem feature the account cannot
+# use, a permission the runner does not hold. A skip that is not listed
+# below fails the run.
+#
+# WHAT DOES NOT BELONG HERE is as important as what does. The differential
+# row that compares this project's ignore-rule matcher against the real
+# program skips when that program is not installed, and that skip is
+# deliberately absent from this file: the machine running these tests
+# obtained the source with it, so the skip can only mean something is
+# wrong. Its own brief asked that the skip never hide, and leaving it
+# undeclared is what delivers that.
+#
+# A line here is a claim that the skip is legitimate on the platforms it
+# names. Say why in a comment above it; the next reader is deciding
+# whether the claim still holds.
+
+# The child half of a row that re-executes the test binary to watch it
+# die of a signal. It is a test only when the parent invokes it with the
+# marker in the environment; on an ordinary run it has nothing to do.
+* github.com/curiouspub/cli/internal/ui TestInterruptHelperProcess
+
+# Windows has no named pipe this repository's dependency policy can
+# reach, and no symbolic link an unprivileged account can create. Each of
+# these rows needs a real one on disk; every property they confirm is
+# asserted on all three platforms from a synthetic directory listing, so
+# what the skip costs is the confirmation and not the coverage.
+windows github.com/curiouspub/cli/internal/pack TestWalkSkipsARealNamedPipe
+windows github.com/curiouspub/cli/internal/pack TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile
+windows github.com/curiouspub/cli/internal/pack TestWalkListsARealSymlink
+windows github.com/curiouspub/cli/internal/pack TestWalkEmitsItsFindingsFromOneTree
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_FIFODoesNotHang
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkToFIFODoesNotHang
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkedConfigResolves
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UncheckedCandidateQualifiesTheWinner
+
+# Dying of a signal is the property under test, and Windows has no
+# equivalent to observe.
+windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSignal
+
+# Permission bits do not gate reads and stats on Windows the way these
+# rows need, and a process running as the superuser ignores them
+# everywhere — which a container commonly is. Both conditions produce the
+# same skip, so the rule covers every platform.
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableConfigWarnsNotCrashes
+* github.com/curiouspub/cli/internal/preflight TestAdvisoriesSuppressesNotesAndNothingElse
+* github.com/curiouspub/cli/internal/config TestSaveIntoAnUnwritableDirectoryLeavesTheOriginalUntouched
+
+# Two names differing only in case cannot both exist on a case-folding
+# volume. The row is compiled only where they usually can, and checks the
+# actual volume anyway, because the tag says what the platform generally
+# does and not what this mount does.
+linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollision
