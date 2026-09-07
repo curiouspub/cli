@@ -330,18 +330,109 @@ func endpointMismatch(stored, effective string) error {
 // claim about it that no test can reach is a claim nobody has checked.
 var renameFile = os.Rename
 
+// The modes the two kinds of directory get, and they are different on
+// purpose — see createConfigDir.
+const (
+	ownDirMode    = 0o700
+	sharedDirMode = 0o755
+)
+
+// createConfigDir creates every missing level of dir, and corrects the
+// mode of each level it created — ONLY of those.
+//
+// # Why this is not one MkdirAll
+//
+// The config file's platform default is two levels deep: a config root
+// shared with every other tool, and this tool's own directory inside it.
+// On an account where nothing has used the shared root yet, both are
+// missing, and the mode a directory is CREATED with is masked by the
+// process umask exactly as a file's is. MkdirAll applies that mask to
+// every level it makes, so under a mask that removes the owner's execute
+// or write bit the outer level comes out unusable — and then the inner
+// mkdir fails outright with a permission error. Correcting the leaf
+// afterwards cannot help: the leaf is what could not be created. So each
+// level is corrected as soon as it exists, which a single MkdirAll gives
+// no place to do.
+//
+// # Why the levels get different modes
+//
+// The leaf is ours and it holds a bearer token, so 0700: a directory
+// anyone can list is a token anyone can find. Every level ABOVE it is
+// shared — other tools keep their own configuration there — and
+// narrowing a directory this tool does not own is changing something
+// that was not its business. A level created here therefore gets the
+// mode creating it by hand under an ordinary mask would have produced.
+//
+// # A level that was already there is never touched
+//
+// Which levels exist is noted BEFORE anything is created, because
+// afterwards there is no way to tell a directory this code made from one
+// that was already there — and that difference is the whole of whose
+// mode it is to set. A stat that fails for any reason OTHER than "not
+// there" leaves the question unanswered rather than answered "absent",
+// and an unanswered question is refused: guessing here means either
+// re-permissioning a stranger's directory or failing to permission our
+// own.
+func createConfigDir(dir string) error {
+	var missing []string
+	for level := dir; ; {
+		_, err := os.Stat(level)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf(
+				"could not tell whether the config directory %s already exists: %w — "+
+					"fix the permissions on it or on a directory above it, or set %s "+
+					"to a full path somewhere this command can write", level, err,
+				envConfigPath)
+		}
+		missing = append(missing, level)
+		parent := filepath.Dir(level)
+		if parent == level {
+			break
+		}
+		level = parent
+	}
+
+	// Shallowest first, so the correction to one level lands before the
+	// mkdir that needs it. missing[0] is the leaf.
+	for i := len(missing) - 1; i >= 0; i-- {
+		level := missing[i]
+		mode := os.FileMode(sharedDirMode)
+		if i == 0 {
+			mode = ownDirMode
+		}
+		if err := os.Mkdir(level, mode); err != nil {
+			// Somebody else created it between the survey above and
+			// here. It is then not ours, so its mode is not ours to set
+			// either, and the loop carries on into it.
+			if errors.Is(err, fs.ErrExist) {
+				continue
+			}
+			return fmt.Errorf("could not create the config directory %s: %w", level, err)
+		}
+		if err := os.Chmod(level, mode); err != nil {
+			return fmt.Errorf(
+				"could not set the permissions of the config directory %s: %w", level, err)
+		}
+	}
+	return nil
+}
+
 // Save writes c to its Path atomically, with the file mode this token
 // deserves.
 //
 // The shape, and why each step is there:
 //
-//   - The directory is created 0700, and chmod'ed to 0700 AFTERWARDS if
-//     we were the ones who created it. mkdir's mode argument is masked
+//   - EVERY missing directory level is created and then corrected, and
+//     only the levels this call created. mkdir's mode argument is masked
 //     by the process umask exactly as open's is, so a restrictive umask
-//     can produce a directory we cannot even write into. A directory
-//     that was already there is left alone: it may be one the user
-//     pointed us at, and re-permissioning somebody else's directory is
-//     not this tool's business.
+//     produces a level nothing can be created inside — and the fix has
+//     to arrive before the next level is attempted rather than after the
+//     last one. A directory that was already there is left alone: it may
+//     be one the user pointed us at, and re-permissioning somebody
+//     else's directory is not this tool's business. See createConfigDir.
 //
 //   - The token is written to a temp file in the SAME directory. A temp
 //     file somewhere else cannot be renamed into place — rename across
@@ -395,16 +486,8 @@ func (c *Config) Save() error {
 	}
 
 	dir := filepath.Dir(c.Path)
-	_, statErr := os.Stat(dir)
-	weCreatedIt := errors.Is(statErr, fs.ErrNotExist)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("could not create the config directory %s: %w", dir, err)
-	}
-	if weCreatedIt {
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return fmt.Errorf(
-				"could not restrict the config directory %s to its owner: %w", dir, err)
-		}
+	if err := createConfigDir(dir); err != nil {
+		return err
 	}
 
 	data, err := c.marshal()
