@@ -984,22 +984,65 @@ func TestEngineDeclinesEveryIDWhenTheWholeCheckCannotRun(t *testing.T) {
 // be the failure with no symptom: the report looks complete and a
 // producer's answer has vanished.
 //
-// MUTATION: skip declines for ids outside the check's own list. Reds
-// here; every other engine row keeps its manifest.
+// FOUR STRAYS AND REPEATED RUNS, because one of each proves less than it
+// looks. The row began with a single stray id and a single run, and the
+// mutation that removes the ordering sailed straight past it: with one
+// element there is no order to lose, and with one run there is nothing
+// to compare against. Go randomises map iteration precisely so that this
+// kind of dependency cannot hide, and the row now uses that rather than
+// being defeated by it.
+//
+// MUTATION: skip declines for ids outside the check's own list. The
+// membership assertion reds.
+// MUTATION: stop ordering the strays. The stability assertion reds.
+// MUST NOT MOVE: every other engine row, none of which has a stray.
 func TestEngineKeepsADeclineForAnIDTheCheckDidNotClaim(t *testing.T) {
-	stray := Check{
-		IDs: []string{check.IDPagesDir},
-		Run: func(FS, string) Result {
-			return Result{Declined: map[string]check.Decline{
-				check.IDLocalhost: {Reason: "a check declining something it never claimed"},
-			}}
-		},
+	// UNDECLARED ids, and that is the second correction this row needed.
+	// Declared ones are put in order by the manifest's own sort, which
+	// keys on the declared universe — so with declared strays the
+	// engine's ordering of them is dead code and the mutation that
+	// removes it changes nothing. Undeclared ids all rank equal, so
+	// their order among themselves is decided here or nowhere.
+	strays := []string{"stray-delta", "stray-alpha", "stray-charlie", "stray-bravo"}
+	build := func() Check {
+		return Check{
+			IDs: []string{check.IDPagesDir},
+			Run: func(FS, string) Result {
+				declined := map[string]check.Decline{}
+				for _, id := range strays {
+					declined[id] = check.Decline{Reason: "declined something it never claimed"}
+				}
+				return Result{Declined: declined}
+			},
+		}
 	}
 
-	res := Run([]Check{stray}, OSFileSystem{}, engineFixture(t, "clean"))
+	first := manifestIDs(Run([]Check{build()}, OSFileSystem{}, engineFixture(t, "clean")).Manifest)
 
-	if got := manifestIDs(res.Manifest); !equalStrings(got,
-		[]string{check.IDPagesDir, check.IDLocalhost}) {
-		t.Errorf("manifest = %v, want the stray decline kept where the gate can see it", got)
+	if !equalStrings(first[len(first)-len(strays):],
+		[]string{"stray-alpha", "stray-bravo", "stray-charlie", "stray-delta"}) {
+		t.Errorf("manifest = %v, want the strays in a settled order after the claimed id",
+			first)
+	}
+
+	for _, id := range append([]string{check.IDPagesDir}, strays...) {
+		found := false
+		for _, got := range first {
+			found = found || got == id
+		}
+		if !found {
+			t.Errorf("manifest = %v, want the stray decline for %s kept where the gate "+
+				"can see it", first, id)
+		}
+	}
+
+	// Map iteration order changes between runs, so an unordered result
+	// disagrees with itself within a handful of them.
+	for i := 0; i < 20; i++ {
+		again := manifestIDs(Run([]Check{build()}, OSFileSystem{}, engineFixture(t, "clean")).Manifest)
+		if !equalStrings(again, first) {
+			t.Fatalf("run %d ordered the manifest differently:\nfirst %v\nagain %v",
+				i+2, first, again)
+		}
 	}
 }
