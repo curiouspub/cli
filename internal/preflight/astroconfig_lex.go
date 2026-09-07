@@ -119,6 +119,27 @@ const tokenPunct = "{}(),.:[]"
 // introduces some OTHER byte capable of forging a quote, a bracket, a
 // comment opener or a colon would need its own carve-out reasoned about
 // on the same terms — the gate is a method, not a closed list.
+//
+// THE ARGUMENT FOR EXACTLY TWO BYTES, verbatim, because a reader who
+// cannot find it will assume "/" and "?" are two special cases and add a
+// third the same way this scanner acquired its blind spots in the first
+// place: this scanner's structural vocabulary is brackets, a colon, the
+// three quote styles and the two comment openers; the only bytes able to
+// FORGE one of those without being one are "/" — a regex body may
+// contain any of them as its own literal syntax — and "?", whose partner
+// ":" is byte-identical to a property colon. Every other byte the
+// tokenizer drops is incapable of shifting a bracket count or inventing
+// a key, alone or in sequence.
+//
+// THE GATE IS BROADER THAN THE FINDINGS THAT PROMPTED IT, AND THAT IS
+// ACCEPTED RATHER THAN TOLERATED. TypeScript's optional-property syntax
+// uses the same byte as a conditional, so a .ts config with an optional
+// property inside the exported object is now globally unresolved.
+// Nobody named that case; it falls out of the construction, which is the
+// construction working. A gate whose breadth surprises its author is
+// behaving as designed — the alternative is a gate that only covers the
+// shapes somebody already thought of, which is what the last three
+// rounds kept producing.
 func tokenize(src []byte) (toks []token, unresolved bool, reason string) {
 	i, n := 0, len(src)
 

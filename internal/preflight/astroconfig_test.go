@@ -807,6 +807,65 @@ func TestCheckAstroConfig_BuildFormatComputedStaysSilent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// The advisory sentence: corrected to name the real consequence.
+// ---------------------------------------------------------------------
+
+// TestCheckAstroConfig_AdvisoryNamesRealConsequence pins the corrected
+// ending across every pages-dir warning shape this file can produce. The
+// retired premise — "if they don't, the build will fail with the reason
+// in its log" — survived the hard stop's own removal because an earlier
+// correction preserved the surrounding wording "as drafted", and the
+// drafted sentence still asserted a build failure a reviewer had already
+// disproved by running real builds: a missing pages directory does not
+// fail an Astro build, it exits 0 and publishes an empty output
+// directory. Every warning below must name THAT consequence instead, and
+// none may repeat the retired one.
+//
+// REQUIRED MUTATION: put "if they don't, the build will fail with the
+// reason in its log." back in any one of resolvePagesDirFindings' or
+// CheckAstroConfig's messages (astroconfig.go) and every row in this
+// table reds on the "must not contain" half. Run and observed to fail
+// before this comment was committed; see the report for the red and the
+// checksum-verified revert.
+func TestCheckAstroConfig_AdvisoryNamesRealConsequence(t *testing.T) {
+	root := fixtureRoot(t)
+
+	// One fixture per static-testdata message template that carries the
+	// advisory sentence — no-config, unresolved-parse, ambiguous, no-key,
+	// non-literal-value and rejected-path. The seventh shape (an
+	// unreadable config) has no testdata fixture of its own — see
+	// TestCheckAstroConfig_UnreadableConfigWarnsNotCrashes, built at test
+	// time — and is exercised there instead of duplicated here.
+	fixtures := []string{
+		"srcdir-no-config",
+		"srcdir-regex-escaped-closer", // unresolved (subset gate)
+		"srcdir-two-keys",             // ambiguous
+		"srcdir-no-key",               // no live key
+		"srcdir-pathjoin",             // found but not a plain string
+		"srcdir-absolute",             // resolved but rejected (absolute path)
+		"srcdir-outside-root",         // resolved but rejected (escapes root)
+	}
+
+	for _, name := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, name))
+			var msg string
+			for _, f := range findings {
+				if f.CheckID == CheckIDPagesDir {
+					msg = f.Message
+					break
+				}
+			}
+			if msg == "" {
+				t.Fatalf("no pages-dir finding among %+v", findings)
+			}
+			mustContainAll(t, msg, []string{"the build will still succeed", "publish a site with nothing in it"})
+			mustContainNone(t, msg, []string{"the build will fail", "reason in its log"})
+		})
+	}
+}
+
+// ---------------------------------------------------------------------
 // The structural guarantee behind the central ruling of this round: this
 // check cannot hard-stop a deploy, full stop.
 // ---------------------------------------------------------------------
@@ -942,6 +1001,99 @@ func TestCheckAstroConfig_FIFODoesNotHang(t *testing.T) {
 		mustContainAll(t, findings[0].Message, []string{"astro.config"})
 	case <-time.After(2 * time.Second):
 		t.Fatal("CheckAstroConfig hung for more than 2s reading a FIFO named astro.config.mjs — " +
-			"isFile must reject non-regular files (Lstat, regular files only) before Open is ever called")
+			"isFile must reject a non-regular file before Open is ever called")
+	}
+}
+
+// TestCheckAstroConfig_SymlinkedConfigResolves is the regression row: the
+// first fix for the FIFO problem (Lstat, and require the Lstat result
+// itself to be regular) closed the hang but also made a symlinked
+// astro.config.mjs report as absent, since Lstat never calls a symlink
+// itself "regular" no matter what it points at. A symlinked config
+// pointing at a file shared across a monorepo is an ordinary layout, and
+// reporting it as absent is a confident WRONG claim about absence — the
+// exact category this task has ruled out twice. The corrected isFile
+// follows a symlink and judges the TARGET, so this must resolve exactly
+// as if the real file had been named directly.
+//
+// Built at test time rather than committed as a testdata fixture,
+// because a symlink committed to git behaves differently across
+// checkouts (Windows needs Developer Mode or an elevated process to
+// materialise one at all) — constructing it here and skipping cleanly if
+// this platform/permission set refuses is the portable form of this row.
+//
+// REQUIRED MUTATION: revert isFile (astroconfig.go) to Lstat-only
+// ("return err == nil && info.Mode().IsRegular()" with no symlink
+// branch) and this test reds — the symlink is reported as not found.
+// Run and observed to fail before this comment was committed; see the
+// report for the red and the checksum-verified revert.
+func TestCheckAstroConfig_SymlinkedConfigResolves(t *testing.T) {
+	dir := t.TempDir()
+
+	sharedDir := filepath.Join(dir, "shared-config-location")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realConfig := filepath.Join(sharedDir, "astro.config.mjs")
+	body := "export default {\n  srcDir: './source',\n};\n"
+	if err := os.WriteFile(realConfig, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "source", "pages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	linkPath := filepath.Join(dir, "astro.config.mjs")
+	if err := os.Symlink(realConfig, linkPath); err != nil {
+		t.Skipf("cannot create a symlink on this platform/permission set: %v", err)
+	}
+
+	cfs := &countingFS{}
+	findings := CheckAstroConfig(cfs, dir)
+	if len(findings) != 0 {
+		t.Fatalf("a symlinked astro.config.mjs pointing at a regular, resolvable config must "+
+			"pass cleanly, got %+v", findings)
+	}
+	if len(cfs.opens) != 1 {
+		t.Errorf("opens = %v, want exactly 1 (the symlink, opened once, same as a direct file)", cfs.opens)
+	}
+}
+
+// TestCheckAstroConfig_SymlinkToFIFODoesNotHang is the shape the naive
+// fix (follow every symlink unconditionally, drop the regular-file
+// requirement) would have missed in the other direction: a symlink named
+// astro.config.mjs pointing at a FIFO must still be refused, not
+// resolved through to a blocking Open. Correcting the symlink regression
+// without keeping the target's own type check would have reopened the
+// exact hang TestCheckAstroConfig_FIFODoesNotHang exists to close, just
+// one level of indirection away.
+//
+// REQUIRED MUTATION: in isFile, change "target.Mode().IsRegular()" to
+// always return true when a symlink is found — this test reds, timing
+// out at 2s exactly like the direct-FIFO row does on the equivalent
+// mutation. Run and observed to fail before this comment was committed;
+// see the report for the measured duration and the checksum-verified
+// revert.
+func TestCheckAstroConfig_SymlinkToFIFODoesNotHang(t *testing.T) {
+	dir, ok := newSymlinkToFIFOFixture(t)
+	if !ok {
+		t.Skip("named pipes and/or symlinks are not portably constructible on this platform")
+	}
+
+	done := make(chan []Finding, 1)
+	go func() {
+		done <- CheckAstroConfig(&countingFS{}, dir)
+	}()
+
+	select {
+	case findings := <-done:
+		if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+			t.Fatalf("findings = %+v, want exactly one pages-dir warning (a symlink to a FIFO "+
+				"must be treated as no config found)", findings)
+		}
+		mustContainAll(t, findings[0].Message, []string{"astro.config"})
+	case <-time.After(2 * time.Second):
+		t.Fatal("CheckAstroConfig hung for more than 2s reading a symlink to a FIFO named " +
+			"astro.config.mjs — isFile must reject a non-regular TARGET before Open is ever called")
 	}
 }

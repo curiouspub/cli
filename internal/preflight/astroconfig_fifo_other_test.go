@@ -14,3 +14,11 @@ func newFIFOFixture(t *testing.T) (string, bool) {
 	t.Helper()
 	return "", false
 }
+
+// newSymlinkToFIFOFixture has the same no-portable-FIFO limitation as
+// newFIFOFixture above — see astroconfig_fifo_unix_test.go for the real
+// one.
+func newSymlinkToFIFOFixture(t *testing.T) (string, bool) {
+	t.Helper()
+	return "", false
+}

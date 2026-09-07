@@ -86,19 +86,18 @@ var configCandidates = []string{
 type FS interface {
 	// Stat reports whether name exists and, when it does, its size and
 	// mode, FOLLOWING a symlink to whatever it points at. Used for
-	// existence checks (a pages directory) and the size gate below.
-	// Never counted as "opening" a file's contents, and never used to
-	// decide whether something is safe to Open — see Lstat for that.
+	// existence checks (a pages directory) and the size gate below — and,
+	// by isFile, to classify what a symlinked candidate config actually
+	// points at. Never counted as "opening" a file's contents.
 	Stat(name string) (fs.FileInfo, error)
-	// Lstat reports on name itself, WITHOUT following a symlink — it is
-	// what isFile uses to decide whether a candidate config is a regular
-	// file before ever calling Open on it. A symlink is deliberately not
-	// resolved and then judged by its target: resolving it is itself an
-	// operation that can be slow or blocking for reasons that have
-	// nothing to do with this check (an unresponsive mount at the far
-	// end of the link), so this check does not perform it at all — a
-	// symlinked candidate is simply not a regular file as far as this
-	// check is concerned.
+	// Lstat reports on name itself, WITHOUT following a symlink. isFile
+	// calls this FIRST, so a FIFO, socket or device node named directly
+	// (not through a link) is rejected without ever resolving anything —
+	// the operation that matters for the FIFO problem is Open, not the
+	// stat that precedes it, so Lstat alone is enough to keep a direct
+	// FIFO from ever reaching Open. When Lstat reports a symlink, isFile
+	// goes on to Stat the same name — see isFile's own doc comment for
+	// why a symlink is resolved rather than refused outright.
 	Lstat(name string) (fs.FileInfo, error)
 	// Open opens name for reading its contents. This is the operation a
 	// read-counting wrapper counts: the common project (a pages
@@ -173,7 +172,8 @@ func CheckAstroConfig(fsys FS, root string) []Finding {
 			Severity: SeverityWarning,
 			Message: "Couldn't find src/pages, and no astro.config file was found to check " +
 				"for a custom srcDir. If your pages live somewhere else, this is fine and the " +
-				"build will work; if they don't, the build will fail with the reason in its log.",
+				"build will work. If they don't, the build will still succeed — and publish a " +
+				"site with nothing in it.",
 		}}
 	}
 
@@ -188,8 +188,8 @@ func CheckAstroConfig(fsys FS, root string) []Finding {
 			Message: fmt.Sprintf(
 				"Couldn't find src/pages, and %s couldn't be read (%v), so a custom srcDir "+
 					"couldn't be checked either. If your pages live somewhere else, this is "+
-					"fine and the build will work; if they don't, the build will fail with the "+
-					"reason in its log.",
+					"fine and the build will work. If they don't, the build will still succeed "+
+					"— and publish a site with nothing in it.",
 				filepath.Base(configPath), readErr),
 		}}
 	}
@@ -258,11 +258,12 @@ func findConfig(fsys FS, root string) (winner string, extra []string, found bool
 // (never more than maxConfigBytes+1 bytes, never a slurp into memory)
 // and a close. What this function does not do, on any path, is block
 // waiting for something that never arrives — isFile has already
-// restricted every candidate reaching this function to an Lstat-
-// confirmed regular file, so this never opens a FIFO with no writer, a
-// socket, or a device node. That guarantee lives in isFile, not here:
-// this function has no timeout of its own and would hang exactly as
-// before if that guarantee were ever weakened.
+// restricted every candidate reaching this function to one whose
+// ultimate target (following a symlink, if there is one) is a regular
+// file, so this never opens a FIFO with no writer, a socket, or a device
+// node, reached directly or through a link. That guarantee lives in
+// isFile, not here: this function has no timeout of its own and would
+// hang exactly as before if that guarantee were ever weakened.
 func readConfigCapped(fsys FS, name string) ([]byte, error) {
 	info, err := fsys.Stat(name)
 	if err != nil {
@@ -350,8 +351,8 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 			Message: fmt.Sprintf(
 				"Couldn't find src/pages, and %s couldn't be fully read: it contains %s, which "+
 					"this check doesn't parse, so it can't confirm a custom srcDir either. If your "+
-					"pages live somewhere else, this is fine and the build will work; if they "+
-					"don't, the build will fail with the reason in its log.",
+					"pages live somewhere else, this is fine and the build will work. If they "+
+					"don't, the build will still succeed — and publish a site with nothing in it.",
 				configName, parsed.unresolvedReason),
 		}
 	case parsed.srcDirAmbiguous:
@@ -361,8 +362,8 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 			Message: fmt.Sprintf(
 				"Couldn't find src/pages, and %s sets srcDir more than once, so which value "+
 					"applies is ambiguous. If your pages live somewhere else, this is fine and "+
-					"the build will work; if they don't, the build will fail with the reason in "+
-					"its log.", configName),
+					"the build will work. If they don't, the build will still succeed — and "+
+					"publish a site with nothing in it.", configName),
 		}
 	case !parsed.srcDirFound:
 		// No live key at all: this scan cannot tell a plain "src" project
@@ -377,7 +378,8 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 					"read, so it can't confirm where your pages live. Astro's own default is "+
 					"src, but a missing key here doesn't prove that default is actually in "+
 					"force. If your pages live somewhere else, this is fine and the build will "+
-					"work; if they don't, the build will fail with the reason in its log.",
+					"work. If they don't, the build will still succeed — and publish a site with "+
+					"nothing in it.",
 				configName),
 		}
 	case !parsed.srcDirResolved:
@@ -387,8 +389,8 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 			Message: fmt.Sprintf(
 				"Couldn't find src/pages, and couldn't read srcDir out of %s (the value isn't "+
 					"a plain string). If your pages live somewhere else, this is fine and the "+
-					"build will work; if they don't, the build will fail with the reason in its "+
-					"log.", configName),
+					"build will work. If they don't, the build will still succeed — and publish "+
+					"a site with nothing in it.", configName),
 		}
 	default:
 		resolvedDir, rejectReason := resolveSrcDirPath(parsed.srcDirValue)
@@ -399,8 +401,9 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 				Severity: SeverityWarning,
 				Message: fmt.Sprintf(
 					"Couldn't find src/pages, and %s sets srcDir to %q, which %s. If your pages "+
-						"live somewhere else, this is fine and the build will work; if they "+
-						"don't, the build will fail with the reason in its log.",
+						"live somewhere else, this is fine and the build will work. If they "+
+						"don't, the build will still succeed — and publish a site with nothing "+
+						"in it.",
 					configName, parsed.srcDirValue, rejectReason),
 			}
 		default:
@@ -605,20 +608,50 @@ func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 	}
 }
 
-// isFile reports whether name is a REGULAR file, and only a regular
-// file — checked with Lstat rather than Stat specifically so a symlink
-// is never followed to find out. A FIFO, a socket, a device node, or a
-// symlink to any of those used to pass this check (it only asked
-// "!IsDir()", which every one of those satisfies), and readConfigCapped
-// would then call Open on it. Opening a FIFO with no writer on the other
-// end blocks forever, with no timeout anywhere in this package to
-// notice — a named pipe called astro.config.mjs hung this check
-// indefinitely. Restricting entry to what Lstat reports as a regular
-// file closes that off before Open is ever reachable, rather than
-// trying to detect or time out the hang after the fact.
+// isFile reports whether name is safe for readConfigCapped to Open: a
+// regular file, or a symlink whose TARGET is a regular file. Lstat runs
+// first and never follows anything — a FIFO, socket or device node named
+// directly is rejected right there, before this function ever resolves
+// a link. Only when Lstat itself reports a symlink does isFile go on to
+// Stat the same name, which follows the link and reports on whatever is
+// at the far end.
+//
+// The two-step shape is a CORRECTION, not the original design. The first
+// version of this fix used Lstat alone and required the result itself to
+// be regular — which closes the FIFO problem (a named pipe called
+// astro.config.mjs used to make "!IsDir()" pass, and readConfigCapped
+// would then Open it and block forever with no writer ever connecting,
+// no timeout anywhere in this package to notice) but ALSO reports a
+// symlinked config as absent, since Lstat never reports a symlink itself
+// as regular no matter what it points at. A symlinked astro.config.mjs
+// pointing at a file shared across a monorepo is an ordinary layout, and
+// "absent" is not an admission — it is a confident wrong claim about
+// absence, the exact category this task has ruled out twice over. The
+// intent was always don't-block, not don't-follow: Stat-ing the target
+// of a symlink is an ordinary stat() call and cannot itself block the
+// way Opening a FIFO can, so following the link costs nothing this check
+// is trying to avoid, and refusing to follow it was solving a problem
+// that was never actually about symlinks.
+//
+// Both properties hold together: a FIFO reached directly is refused by
+// the first Lstat; a FIFO reached THROUGH a symlink is refused by the
+// second call, because Stat on the link reports the FIFO's own type, not
+// "regular", regardless of how it was reached; a symlink to an ordinary
+// file resolves and reads exactly as if the file had been named
+// directly.
 func isFile(fsys FS, name string) bool {
 	info, err := fsys.Lstat(name)
-	return err == nil && info.Mode().IsRegular()
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := fsys.Stat(name)
+		if err != nil {
+			return false
+		}
+		return target.Mode().IsRegular()
+	}
+	return info.Mode().IsRegular()
 }
 
 func isDir(fsys FS, name string) bool {
