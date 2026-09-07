@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/curiouspub/cli/internal/check"
 )
 
 // ---------------------------------------------------------------------
@@ -116,7 +118,7 @@ func fixtureRoot(t *testing.T) string {
 
 type wantFinding struct {
 	checkID      string
-	severity     Severity
+	severity     check.Severity
 	messageHas   []string
 	messageLacks []string
 }
@@ -143,10 +145,10 @@ var astroConfigTable = []struct {
 	// build.format: each fixture has src/pages present, so the
 	// hard-stop path is out of the picture and only this key is live.
 	{"build-format-file", []wantFinding{
-		{CheckIDBuildFormat, SeverityWarning, []string{"file", "directory"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"file", "directory"}, nil},
 	}, nil},
 	{"build-format-preserve", []wantFinding{
-		{CheckIDBuildFormat, SeverityWarning, []string{"preserve", "directory"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"preserve", "directory"}, nil},
 	}, nil},
 	{"build-format-directory", nil, nil},
 	{"build-format-absent", nil, nil},
@@ -160,14 +162,14 @@ var astroConfigTable = []struct {
 	// so the required mutation has one obvious row to target; included
 	// here too so the outcome table stays complete.
 	{"buildformat-gate-trip-pages-present", nil, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"substitution"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"substitution"}, nil},
 	}},
 
 	// srcDir resolution: every fixture below has src/pages ABSENT, which
 	// is what makes this path run at all.
 	{"srcdir-relative", nil, nil},
 	{"srcdir-resolves-no-pages-dir", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
 	}, nil},
 	{"srcdir-backtick", nil, nil},
 	// PINNED TO A MECHANISM, not to a severity. This row and the three
@@ -184,41 +186,41 @@ var astroConfigTable = []struct {
 	// so both keys go unresolved and build-format breaks its usual
 	// silence too.
 	{"srcdir-template-interp", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"couldn't be fully read", "substitution"}, []string{"source"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"couldn't be fully read", "substitution"}, []string{"source"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"substitution"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"substitution"}, nil},
 	}},
 	{"srcdir-fileurltopath", nil, nil},
 	// A call this check doesn't recognise: a LOCAL unknown. The key was
 	// found and its value can't be read — the file itself scanned fine,
 	// which is what the "couldn't be fully read" exclusion pins.
 	{"srcdir-pathjoin", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}, nil},
 	{"srcdir-commented-out", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
 	}, nil},
 	{"srcdir-block-comment", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"old", "sets srcDir to"}},
 	}, nil},
 	{"srcdir-url-before-key", nil, nil},
 	// A duplicate key is a LOCAL unknown too — bounded by the object it
 	// was counted in — so it reports ambiguity, not a whole-file
 	// refusal.
 	{"srcdir-two-keys", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"more than once"}, []string{"couldn't be fully read"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"more than once"}, []string{"couldn't be fully read"}},
 	}, nil},
 	{"srcdir-absolute", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"absolute"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"absolute"}, nil},
 	}, nil},
 	{"srcdir-outside-root", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"escapes"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"escapes"}, nil},
 	}, nil},
 	{"srcdir-both-configs-ambiguous", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "astro.config.ts"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs", "astro.config.ts"}, nil},
 	}, nil},
 	{"srcdir-no-config", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config"}, nil},
 	}, nil},
 
 	// AMENDED: no live srcDir key at all is UNRESOLVED, never "the
@@ -230,7 +232,7 @@ var astroConfigTable = []struct {
 	// "astro.config.mjs sets srcDir to 'src'" — a claim the config
 	// never makes.
 	{"srcdir-no-key", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
 	}, nil},
 
 	// The five rows below came from an independent reconstruction of this
@@ -255,7 +257,7 @@ var astroConfigTable = []struct {
 	// so a regression that put .cjs or .cts back into configCandidates
 	// reds this row immediately with a message naming cjssrc.
 	{"legacy-extensions-not-candidates", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning,
+		{check.CheckIDPagesDir, check.SeverityWarning,
 			[]string{"no astro.config file was found"},
 			[]string{"astro.config.cjs", "astro.config.cts", "cjssrc"}},
 	}, nil},
@@ -278,12 +280,12 @@ var astroConfigTable = []struct {
 	// together, and two independent warnings together, each asserting
 	// both findings are present rather than just one.
 	{"srcdir-resolves-no-pages-dir-plus-buildformat-warning", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
-		{CheckIDBuildFormat, SeverityWarning, []string{"file"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs", "www", "www/pages"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"file"}, nil},
 	}, nil},
 	{"srcdir-pathjoin-plus-buildformat-warning", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, nil},
-		{CheckIDBuildFormat, SeverityWarning, []string{"preserve"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"preserve"}, nil},
 	}, nil},
 
 	// Rows added for the false-hard-stop fix round: every one of these
@@ -296,7 +298,7 @@ var astroConfigTable = []struct {
 	// The scanner must not claim knowledge it cannot have: a shorthand
 	// property has no "key:" pair to find at all.
 	{"srcdir-shorthand-property", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"./source", "sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"./source", "sets srcDir to"}},
 	}, nil},
 	// A spread from an imported base config. This used to reach the
 	// "no live srcDir key" message, which happened to be the right
@@ -305,16 +307,16 @@ var astroConfigTable = []struct {
 	// object can set the key from a file the scan never opens. It is now
 	// a gate trip, and it says so.
 	{"srcdir-spread-base-config", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"spread"}, []string{"sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"spread"}, []string{"sets srcDir to"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"spread"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"spread"}, nil},
 	}},
 	// The shape a documentation-site integration ships: routes injected
 	// by the integration, no srcDir key, and no pages directory
 	// anywhere. Must warn at most, never hard-stop — this is the
 	// concrete case the hard stop's removal exists for.
 	{"srcdir-integration-injects-routes", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"sets srcDir to"}},
 	}, nil},
 
 	// Scope anchoring: the key must belong to the EXPORTED config, not
@@ -322,7 +324,7 @@ var astroConfigTable = []struct {
 	// with the real config imported and re-exported by identifier, must
 	// not resolve from that local object — "wrong" must never appear.
 	{"srcdir-scope-unused-local-object", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"wrong", "sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"wrong", "sets srcDir to"}},
 	}, nil},
 	// srcDir inside an integration's own options is not Astro's own
 	// setting — it's nested inside the integration call's argument
@@ -330,7 +332,7 @@ var astroConfigTable = []struct {
 	// defineConfig(), the shape nearly every real Astro project actually
 	// uses.
 	{"srcdir-scope-integration-options", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"wrong", "sets srcDir to"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"wrong", "sets srcDir to"}},
 	}, nil},
 
 	// The call-wrapped export shape itself — export default
@@ -364,20 +366,20 @@ var astroConfigTable = []struct {
 	// scanner must warn instead, because "./source" + "/nested" is not
 	// provably "./source".
 	{"srcdir-string-concat", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}, nil},
 
 	// Windows path forms are invisible to path.IsAbs/path.Clean (POSIX,
 	// slash-only) and must be caught explicitly instead of silently
 	// treated as an ordinary relative path segment.
 	{"srcdir-windows-backslash-relative", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"Windows"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"Windows"}, nil},
 	}, nil},
 	{"srcdir-windows-drive-absolute", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"Windows", "drive"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"Windows", "drive"}, nil},
 	}, nil},
 	{"srcdir-windows-unc", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"Windows", "UNC"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"Windows", "UNC"}, nil},
 	}, nil},
 
 	// build.format scope anchoring: a build.format that belongs to some
@@ -389,7 +391,7 @@ var astroConfigTable = []struct {
 	// of the real "build: { format: 'file' }" silently swallowed the
 	// warning. The real one must still warn.
 	{"build-format-vite-shadow", []wantFinding{
-		{CheckIDBuildFormat, SeverityWarning, []string{"file", "directory"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"file", "directory"}, nil},
 	}, nil},
 
 	// ---------------------------------------------------------------
@@ -407,18 +409,18 @@ var astroConfigTable = []struct {
 	// ever inspected, and build-format's own silence must break too,
 	// since the same construct makes it unresolved as well.
 	{"srcdir-regex-escaped-closer", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, []string{"wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs"}, []string{"wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, nil, []string{"wrong"}},
+		{check.CheckIDBuildFormat, check.SeverityNote, nil, []string{"wrong"}},
 	}},
 	// Finding 1b (srcDir variant): a quote inside a regex used to let
 	// the following string literal's CONTENTS re-emerge as live code,
 	// reading "srcDir: \"wrong\"," out of a description string. Must
 	// never mention "wrong".
 	{"srcdir-quote-inside-regex", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, []string{"wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs"}, []string{"wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, nil, []string{"wrong"}},
+		{check.CheckIDBuildFormat, check.SeverityNote, nil, []string{"wrong"}},
 	}},
 	// Finding 1b (build.format variant): the same mechanism firing the
 	// 404 warning on a config that never sets build.format at all —
@@ -426,9 +428,9 @@ var astroConfigTable = []struct {
 	// if it were the real key. The old, wrong finding named "file" with
 	// confidence; the fix must admit it cannot tell, not name a value.
 	{"srcdir-quote-inside-regex-buildformat", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs"}, nil},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, nil, []string{"build.format is set to"}},
+		{check.CheckIDBuildFormat, check.SeverityNote, nil, []string{"build.format is set to"}},
 	}},
 	// Finding 2: a regex ending in "\/" produces the byte pair that
 	// opens a line comment, eating the rest of the statement and
@@ -451,9 +453,9 @@ var astroConfigTable = []struct {
 	// suite, and its byte-identical control below is what proves the
 	// gate, not the surrounding shape, is what changed the answer.
 	{"srcdir-regex-trailing-escaped-slash", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs"}, nil},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, nil, []string{"build.format is set to"}},
+		{check.CheckIDBuildFormat, check.SeverityNote, nil, []string{"build.format is set to"}},
 	}},
 	// The review's own "byte-identical control": the same shape with a
 	// plain string instead of a regex must parse NORMALLY — a real,
@@ -461,16 +463,16 @@ var astroConfigTable = []struct {
 	// Without this row, nothing proves the admission above is really
 	// about the regex and not about the surrounding shape.
 	{"srcdir-regex-trailing-slash-control", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"src/pages"}, []string{"couldn't be fully read"}},
-		{CheckIDBuildFormat, SeverityWarning, []string{"file", "directory"}, nil},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"src/pages"}, []string{"couldn't be fully read"}},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"file", "directory"}, nil},
 	}, nil},
 	// The ternary: its ":" used to be read as a property colon, so
 	// "outDir: useCustom ? srcDir : 'dist'" claimed srcDir was "dist".
 	// Must never mention "dist".
 	{"srcdir-ternary", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"astro.config.mjs"}, []string{"dist"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"astro.config.mjs"}, []string{"dist"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, nil, []string{"dist"}},
+		{check.CheckIDBuildFormat, check.SeverityNote, nil, []string{"dist"}},
 	}},
 
 	// Duplicate build/format keys: JavaScript takes the LAST, this
@@ -481,10 +483,10 @@ var astroConfigTable = []struct {
 	// silence. Both fixtures have src/pages present, isolating the
 	// build-format concern the way every other build-format row does.
 	{"build-format-duplicate-build-key", []wantFinding{
-		{CheckIDBuildFormat, SeverityWarning, []string{"more than once"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"more than once"}, nil},
 	}, nil},
 	{"build-format-duplicate-format-key", []wantFinding{
-		{CheckIDBuildFormat, SeverityWarning, []string{"more than once"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityWarning, []string{"more than once"}, nil},
 	}, nil},
 
 	// Byte-oriented escapes, fixed to be code-point-oriented. Both
@@ -510,16 +512,16 @@ var astroConfigTable = []struct {
 	// must NOT claim the whole file is unreadable; they hit the
 	// ordinary "found a key, can't read its value" path.
 	{"srcdir-malformed-hex-escape", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}, nil},
 	{"srcdir-fileurltopath-malformed-escape", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}, nil},
 	// An unpaired high surrogate: valid hex, but not a valid Unicode
 	// scalar value on its own, and not followed by the low surrogate
 	// that would complete it. Must be unresolved, never a mangled path.
 	{"srcdir-unpaired-surrogate", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read"}},
 	}, nil},
 
 	// A quoted key ("srcDir": "./quoted") is a legitimate spelling this
@@ -547,9 +549,9 @@ var astroConfigTable = []struct {
 	// said so) and could not locate its end. Both keys must go
 	// unresolved, and "wrong" must never appear.
 	{"srcdir-template-nested-backtick", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"substitution"}, []string{"wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"substitution"}, []string{"wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"substitution"}, []string{"wrong"}},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"substitution"}, []string{"wrong"}},
 	}},
 
 	// Annex B HTML-like comment markers, in an "astro.config.js" — which
@@ -569,14 +571,14 @@ var astroConfigTable = []struct {
 	// neither that warning nor a silent pass: both keys unresolved, and
 	// the message names the construct.
 	{"srcdir-html-comment-open", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"HTML-style comment"}, []string{"more than once", "wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"HTML-style comment"}, []string{"more than once", "wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"HTML-style comment"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"HTML-style comment"}, nil},
 	}},
 	{"srcdir-html-comment-close", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"HTML-style comment"}, []string{"more than once", "wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"HTML-style comment"}, []string{"more than once", "wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"HTML-style comment"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"HTML-style comment"}, nil},
 	}},
 
 	// A spread AFTER the key. JavaScript gives the spread the last word,
@@ -586,9 +588,9 @@ var astroConfigTable = []struct {
 	// where the old code happened to stay silent, so the suite recorded
 	// a pass on the half that was accidentally right.
 	{"srcdir-spread-after-key", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"spread"}, []string{"wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"spread"}, []string{"wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"spread"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"spread"}, nil},
 	}},
 
 	// A wrapper that is not defineConfig. The old code accepted ANY
@@ -597,9 +599,9 @@ var astroConfigTable = []struct {
 	// defineConfig is known to be the identity; withDefaults may return
 	// anything at all.
 	{"srcdir-unknown-wrapper", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"withDefaults"}, []string{"wrong"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"withDefaults"}, []string{"wrong"}},
 	}, []wantFinding{
-		{CheckIDBuildFormat, SeverityNote, []string{"withDefaults"}, nil},
+		{check.CheckIDBuildFormat, check.SeverityNote, []string{"withDefaults"}, nil},
 	}},
 
 	// A legacy octal escape: "'./\163ource'" is "./source" to a
@@ -612,7 +614,7 @@ var astroConfigTable = []struct {
 	// a LOCAL unknown — the string still terminates where it appears
 	// to — so it must NOT claim the whole file was unreadable.
 	{"srcdir-octal-escape", []wantFinding{
-		{CheckIDPagesDir, SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read", "163ource", "source/pages"}},
+		{check.CheckIDPagesDir, check.SeverityWarning, []string{"isn't a plain string"}, []string{"couldn't be fully read", "163ource", "source/pages"}},
 	}, nil},
 
 	// THE INERT BUCKET'S POSITIVE CONTROL, and it did not exist before
@@ -657,7 +659,7 @@ func TestCheckAstroConfig_AmbiguousNoteFiresWithPagesPresent(t *testing.T) {
 		t.Fatalf("findings = %+v, want exactly one (the ambiguity note, standalone)", findings)
 	}
 	f := findings[0]
-	if f.CheckID != CheckIDPagesDir || f.Severity != SeverityWarning {
+	if f.CheckID != check.CheckIDPagesDir || f.Severity != check.SeverityWarning {
 		t.Errorf("finding = %+v, want a pages-dir warning", f)
 	}
 	mustContainAll(t, f.Message, []string{"astro.config.mjs", "astro.config.ts", "Both"})
@@ -693,25 +695,25 @@ func TestCheckAstroConfig_Table(t *testing.T) {
 			}
 
 			// The two columns are asserted SEPARATELY and both exactly.
-			// Advisories are what a surface shows; notes are what it
+			// check.Advisories are what a surface shows; notes are what it
 			// records and shows nobody. Checking only the first would
 			// make "stopped recording the note" invisible, and checking
 			// only the total would let a note that became a warning
 			// pass — which is the exact regression the criterion behind
 			// the note severity exists to prevent.
-			var notes []Finding
+			var notes []check.Finding
 			for _, f := range findings {
 				if !f.Advisory() {
 					notes = append(notes, f)
 				}
 			}
-			assertFindings(t, "advisory", Advisories(findings), tc.want)
+			assertFindings(t, "advisory", check.Advisories(findings), tc.want)
 			assertFindings(t, "note", notes, tc.notes)
 		})
 	}
 }
 
-func assertFindings(t *testing.T, kind string, got []Finding, want []wantFinding) {
+func assertFindings(t *testing.T, kind string, got []check.Finding, want []wantFinding) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("got %d %s findings, want %d\ngot:  %+v\nwant: %+v", len(got), kind, len(want), got, want)
@@ -802,7 +804,7 @@ func TestCheckAstroConfig_EachExtensionAloneResolves(t *testing.T) {
 			if len(cfs.opens) != 0 {
 				t.Errorf("opens = %v, want none — %s is not a file a current Astro loads", cfs.opens, ext)
 			}
-			if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir {
+			if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir {
 				t.Fatalf("findings = %+v, want the one no-config warning", findings)
 			}
 			mustContainAll(t, findings[0].Message, []string{"no astro.config file was found"})
@@ -841,7 +843,7 @@ func TestCheckAstroConfig_ReadCounting(t *testing.T) {
 			t.Errorf("opens = %v, want exactly 1", cfs.opens)
 		}
 		for _, f := range findings {
-			if f.Severity == SeverityHardStop {
+			if f.Severity == check.SeverityHardStop {
 				t.Errorf("got a hard stop with pages present (srcDir resolution ran when it must not have): %+v", f)
 			}
 		}
@@ -909,7 +911,7 @@ func TestCheckAstroConfig_NoHardStopWhenPagesPresent(t *testing.T) {
 
 			findings := CheckAstroConfig(&countingFS{}, dst)
 			for _, f := range findings {
-				if f.Severity == SeverityHardStop {
+				if f.Severity == check.SeverityHardStop {
 					t.Errorf("hard stop with src/pages present: %+v", f)
 				}
 			}
@@ -947,7 +949,7 @@ func TestCheckAstroConfig_OversizedConfigUnresolved(t *testing.T) {
 	if cfs.bytesRead > maxConfigBytes {
 		t.Errorf("read %d bytes, want at most %d", cfs.bytesRead, maxConfigBytes)
 	}
-	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+	if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
 	}
 }
@@ -972,7 +974,7 @@ func TestCheckAstroConfig_UnreadableConfigWarnsNotCrashes(t *testing.T) {
 	}
 
 	findings := CheckAstroConfig(&countingFS{}, dir)
-	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+	if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 		t.Fatalf("findings = %+v, want exactly one pages-dir warning, not a crash", findings)
 	}
 }
@@ -1012,18 +1014,18 @@ func TestCheckAstroConfig_GateTripIsSilentButRecorded(t *testing.T) {
 	root := fixtureRoot(t)
 	findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, "buildformat-gate-trip-pages-present"))
 
-	if shown := Advisories(findings); len(shown) != 0 {
+	if shown := check.Advisories(findings); len(shown) != 0 {
 		t.Errorf("advisories = %+v, want none — a config this check couldn't finish reading "+
 			"gives the user nothing to act on or observe, so it must say nothing", shown)
 	}
 
-	var notes []Finding
+	var notes []check.Finding
 	for _, f := range findings {
 		if !f.Advisory() {
 			notes = append(notes, f)
 		}
 	}
-	if len(notes) != 1 || notes[0].CheckID != CheckIDBuildFormat || notes[0].Severity != SeverityNote {
+	if len(notes) != 1 || notes[0].CheckID != check.CheckIDBuildFormat || notes[0].Severity != check.SeverityNote {
 		t.Fatalf("notes = %+v, want exactly one build-format note — silence must not be "+
 			"achieved by forgetting", notes)
 	}
@@ -1037,17 +1039,17 @@ func TestCheckAstroConfig_GateTripIsSilentButRecorded(t *testing.T) {
 // and "returns its input unchanged" is the failure mode that looks
 // exactly like working code on a slice with no notes in it.
 func TestAdvisoriesSuppressesNotesAndNothingElse(t *testing.T) {
-	in := []Finding{
-		{CheckID: "a", Severity: SeverityHardStop},
-		{CheckID: "b", Severity: SeverityNote},
-		{CheckID: "c", Severity: SeverityWarning},
-		{CheckID: "d", Severity: SeverityNote},
+	in := []check.Finding{
+		{CheckID: "a", Severity: check.SeverityHardStop},
+		{CheckID: "b", Severity: check.SeverityNote},
+		{CheckID: "c", Severity: check.SeverityWarning},
+		{CheckID: "d", Severity: check.SeverityNote},
 	}
-	got := Advisories(in)
+	got := check.Advisories(in)
 	if len(got) != 2 || got[0].CheckID != "a" || got[1].CheckID != "c" {
 		t.Fatalf("Advisories = %+v, want the hard stop and the warning, in order", got)
 	}
-	if len(Advisories(nil)) != 0 {
+	if len(check.Advisories(nil)) != 0 {
 		t.Error("Advisories(nil) must be empty")
 	}
 }
@@ -1106,7 +1108,7 @@ func TestCheckAstroConfig_UnreadableSrcDirTargetSaysCouldntCheck(t *testing.T) {
 	unreadableDir(t, dir, "source", "pages")
 
 	findings := CheckAstroConfig(&countingFS{}, dir)
-	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+	if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
 	}
 	mustContainAll(t, findings[0].Message, []string{"couldn't be checked", "source/pages"})
@@ -1129,7 +1131,7 @@ func TestCheckAstroConfig_UnreadableSrcPagesSaysCouldntCheck(t *testing.T) {
 	unreadableDir(t, dir, "src", "pages")
 
 	findings := CheckAstroConfig(&countingFS{}, dir)
-	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+	if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
 	}
 	mustContainAll(t, findings[0].Message,
@@ -1149,7 +1151,7 @@ func TestCheckAstroConfig_UncheckableCandidatesAreNotAbsence(t *testing.T) {
 	root := filepath.Join(parent, "project")
 
 	findings := CheckAstroConfig(&countingFS{}, root)
-	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+	if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 		t.Fatalf("findings = %+v, want exactly one pages-dir warning", findings)
 	}
 	mustContainAll(t, findings[0].Message, []string{"couldn't be checked", "astro.config.mjs"})
@@ -1182,7 +1184,7 @@ func TestCheckAstroConfig_UncheckedCandidateQualifiesTheWinner(t *testing.T) {
 	}
 
 	findings := CheckAstroConfig(&countingFS{}, dir)
-	if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir {
+	if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir {
 		t.Fatalf("findings = %+v, want exactly one pages-dir note", findings)
 	}
 	mustContainAll(t, findings[0].Message,
@@ -1314,7 +1316,7 @@ func TestCheckAstroConfig_AdvisoryNamesRealConsequence(t *testing.T) {
 			findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, name))
 			var msg string
 			for _, f := range findings {
-				if f.CheckID == CheckIDPagesDir {
+				if f.CheckID == check.CheckIDPagesDir {
 					msg = f.Message
 					break
 				}
@@ -1351,7 +1353,7 @@ func TestCheckAstroConfig_NeverHardStopsAnywhere(t *testing.T) {
 		t.Run(tc.dir, func(t *testing.T) {
 			findings := CheckAstroConfig(&countingFS{}, filepath.Join(root, tc.dir))
 			for _, f := range findings {
-				if f.Severity == SeverityHardStop {
+				if f.Severity == check.SeverityHardStop {
 					t.Errorf("got a hard stop: %+v — this check must never hard-stop a deploy", f)
 				}
 			}
@@ -1446,7 +1448,7 @@ func TestCheckAstroConfig_FIFODoesNotHang(t *testing.T) {
 		t.Skip("named pipes are not portably constructible on this platform")
 	}
 
-	done := make(chan []Finding, 1)
+	done := make(chan []check.Finding, 1)
 	go func() {
 		done <- CheckAstroConfig(&countingFS{}, dir)
 	}()
@@ -1458,7 +1460,7 @@ func TestCheckAstroConfig_FIFODoesNotHang(t *testing.T) {
 		// at all": no src/pages either, in this fixture, so the ordinary
 		// no-config warning fires — never a crash, never a resolved
 		// value read from a pipe that was never written to.
-		if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+		if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 			t.Fatalf("findings = %+v, want exactly one pages-dir warning (the FIFO must be treated as no config found)", findings)
 		}
 		mustContainAll(t, findings[0].Message, []string{"astro.config"})
@@ -1543,14 +1545,14 @@ func TestCheckAstroConfig_SymlinkToFIFODoesNotHang(t *testing.T) {
 		t.Skip("named pipes and/or symlinks are not portably constructible on this platform")
 	}
 
-	done := make(chan []Finding, 1)
+	done := make(chan []check.Finding, 1)
 	go func() {
 		done <- CheckAstroConfig(&countingFS{}, dir)
 	}()
 
 	select {
 	case findings := <-done:
-		if len(findings) != 1 || findings[0].CheckID != CheckIDPagesDir || findings[0].Severity != SeverityWarning {
+		if len(findings) != 1 || findings[0].CheckID != check.CheckIDPagesDir || findings[0].Severity != check.SeverityWarning {
 			t.Fatalf("findings = %+v, want exactly one pages-dir warning (a symlink to a FIFO "+
 				"must be treated as no config found)", findings)
 		}

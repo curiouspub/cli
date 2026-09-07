@@ -9,9 +9,12 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/curiouspub/cli/internal/check"
 )
 
-// Check ids this file emits. Both are warning-only. pages-dir resolves a
+// The two check ids this file emits are declared in the result package,
+// with the rest of them, and both are warning-only. pages-dir resolves a
 // custom srcDir out of astro.config when the default pages directory is
 // missing, and warns — never blocks — when it still can't find a pages
 // directory once srcDir is accounted for: a real Astro build with no
@@ -20,10 +23,6 @@ import (
 // injects its own routes is exactly the case where it would be wrong
 // every time. build-format runs on every project and warns when a build
 // setting would break this platform's routing.
-const (
-	CheckIDPagesDir    = "pages-dir"
-	CheckIDBuildFormat = "build-format"
-)
 
 // maxConfigBytes bounds how much of a candidate config this check will
 // ever read. A file bigger than this is not a config; the check reports
@@ -172,7 +171,7 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 // alone if none does — the ambiguity note used to be decided inside the
 // pages-dir path, and was therefore silently dropped on every project
 // whose pages directory was already where Astro expects it.
-func CheckAstroConfig(fsys FS, root string) []Finding {
+func CheckAstroConfig(fsys FS, root string) []check.Finding {
 	pagesDir := isDir(fsys, filepath.Join(root, "src", "pages"))
 
 	configPath, extraCandidates, uncheckedCandidates, found := findConfig(fsys, root)
@@ -180,9 +179,9 @@ func CheckAstroConfig(fsys FS, root string) []Finding {
 		if pagesDir == present {
 			return finish(nil, "", uncheckedCandidates)
 		}
-		return finish([]Finding{{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
+		return finish([]check.Finding{{
+			CheckID:  check.CheckIDPagesDir,
+			Severity: check.SeverityWarning,
 			Message:  openingClause(pagesDir) + noConfigClause(uncheckedCandidates) + advisoryTail,
 		}}, "", uncheckedCandidates)
 	}
@@ -194,9 +193,9 @@ func CheckAstroConfig(fsys FS, root string) []Finding {
 		if pagesDir == present {
 			return finish(nil, configName, uncheckedCandidates)
 		}
-		return finish([]Finding{{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
+		return finish([]check.Finding{{
+			CheckID:  check.CheckIDPagesDir,
+			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"%s%s couldn't be read (%v), so a custom srcDir couldn't be checked either.%s",
 				openingClause(pagesDir), configName, readErr, advisoryTail),
@@ -205,7 +204,7 @@ func CheckAstroConfig(fsys FS, root string) []Finding {
 
 	parsed := parseAstroConfig(content)
 
-	var findings []Finding
+	var findings []check.Finding
 	switch pagesDir {
 	case absent:
 		findings = append(findings, resolvePagesDirFindings(fsys, root, configName, parsed)...)
@@ -215,9 +214,9 @@ func CheckAstroConfig(fsys FS, root string) []Finding {
 		// it is attempted: resolving a custom srcDir would be answering
 		// a question nobody has shown needs asking, and the answer would
 		// be printed under a sentence claiming src/pages is missing.
-		findings = append(findings, Finding{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
+		findings = append(findings, check.Finding{
+			CheckID:  check.CheckIDPagesDir,
+			Severity: check.SeverityWarning,
 			Message: "Couldn't check whether src/pages exists (the directory couldn't be " +
 				"read), so this check can't tell whether your pages are where Astro looks " +
 				"for them." + advisoryTail,
@@ -281,7 +280,7 @@ func noConfigClause(unchecked []string) string {
 // this check read may not be the one that counts. With no winner there is
 // nothing to qualify — noConfigClause has already said, in the finding
 // itself, which candidates could not be checked.
-func finish(findings []Finding, winner string, unchecked []string) []Finding {
+func finish(findings []check.Finding, winner string, unchecked []string) []check.Finding {
 	if len(unchecked) == 0 || winner == "" {
 		return findings
 	}
@@ -298,14 +297,14 @@ func finish(findings []Finding, winner string, unchecked []string) []Finding {
 // finding often does not exist at all (pages already present, or srcDir
 // resolved cleanly), and the ambiguity note used to be silently dropped
 // on exactly that path.
-func attachPagesDirNote(findings []Finding, note string) []Finding {
+func attachPagesDirNote(findings []check.Finding, note string) []check.Finding {
 	for i := range findings {
-		if findings[i].CheckID == CheckIDPagesDir {
+		if findings[i].CheckID == check.CheckIDPagesDir {
 			findings[i].Message = findings[i].Message + " " + note
 			return findings
 		}
 	}
-	return append(findings, Finding{CheckID: CheckIDPagesDir, Severity: SeverityWarning, Message: note})
+	return append(findings, check.Finding{CheckID: check.CheckIDPagesDir, Severity: check.SeverityWarning, Message: note})
 }
 
 // findConfig searches configCandidates, in order, for the first that
@@ -443,16 +442,16 @@ type astroConfig struct {
 // note (more than one astro.config.* file on disk) is NOT decided here
 // any more — see CheckAstroConfig, which attaches it whenever it
 // applies, independent of whether this function ran at all.
-func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfig) []Finding {
-	warn := func(format string, args ...any) *Finding {
-		return &Finding{
-			CheckID:  CheckIDPagesDir,
-			Severity: SeverityWarning,
+func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfig) []check.Finding {
+	warn := func(format string, args ...any) *check.Finding {
+		return &check.Finding{
+			CheckID:  check.CheckIDPagesDir,
+			Severity: check.SeverityWarning,
 			Message:  fmt.Sprintf(format, args...) + advisoryTail,
 		}
 	}
 
-	var base *Finding
+	var base *check.Finding
 	switch {
 	case parsed.unresolved:
 		// tokenize refused the file outright — see astroConfig's own doc
@@ -510,9 +509,9 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 				// established where the pages should be and found
 				// nothing there, so it names the fix instead of
 				// restating the general advice.
-				base = &Finding{
-					CheckID:  CheckIDPagesDir,
-					Severity: SeverityWarning,
+				base = &check.Finding{
+					CheckID:  check.CheckIDPagesDir,
+					Severity: check.SeverityWarning,
 					Message: fmt.Sprintf(
 						"%s sets srcDir to %q, but %s doesn't exist. Astro looks for pages in "+
 							"%s — create it, or point srcDir at the directory that actually has "+
@@ -525,7 +524,7 @@ func resolvePagesDirFindings(fsys FS, root, configName string, parsed astroConfi
 	if base == nil {
 		return nil
 	}
-	return []Finding{*base}
+	return []check.Finding{*base}
 }
 
 // ambiguousConfigNote names every config candidate that exists on disk
@@ -682,16 +681,16 @@ func isASCIILetter(b byte) bool {
 // warning passes it — the user really does have no src/pages, which they
 // can check — and keeps warning. This one does not: there is nothing to
 // look at and nothing to do.
-func buildFormatFinding(configName string, parsed astroConfig) *Finding {
+func buildFormatFinding(configName string, parsed astroConfig) *check.Finding {
 	if parsed.unresolved {
 		// Recorded below advisory severity: no surface shows this by
 		// default. It is kept because "the scan gave up" and "the key is
 		// absent" are different states, and a caller that needs to tell
 		// them apart — a future --verbose, a support transcript — has
 		// nowhere else to learn it.
-		return &Finding{
-			CheckID:  CheckIDBuildFormat,
-			Severity: SeverityNote,
+		return &check.Finding{
+			CheckID:  check.CheckIDBuildFormat,
+			Severity: check.SeverityNote,
 			Message: fmt.Sprintf(
 				"%s couldn't be fully read: it contains %s, so build.format couldn't be "+
 					"confirmed either way.",
@@ -699,9 +698,9 @@ func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 		}
 	}
 	if parsed.buildFormatAmbiguous {
-		return &Finding{
-			CheckID:  CheckIDBuildFormat,
-			Severity: SeverityWarning,
+		return &check.Finding{
+			CheckID:  check.CheckIDBuildFormat,
+			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"%s sets build, or format inside it, more than once, so which value actually "+
 					"applies is ambiguous. If you're relying on Astro's default output format, "+
@@ -717,9 +716,9 @@ func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 	}
 	switch parsed.buildFormatValue {
 	case "file", "preserve":
-		return &Finding{
-			CheckID:  CheckIDBuildFormat,
-			Severity: SeverityWarning,
+		return &check.Finding{
+			CheckID:  check.CheckIDBuildFormat,
+			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"build.format is set to %q. This platform's routing expects Astro's default "+
 					"(%q), which emits /about as about/index.html; %q emits about.html instead, "+
