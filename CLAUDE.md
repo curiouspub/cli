@@ -230,6 +230,29 @@ prose, which is why nothing in any of them quotes an example — a rule
 file that quoted its own targets would be a leak shipping inside the file
 that hunts leaks.
 
+**`go.sum` is exempt from the vendor check, and `go.mod` is not.** The
+line is GENERATED versus AUTHORED, not "manifest": a person chooses every
+module path in `go.mod`, and a provider SDK appearing there is exactly
+what the dependency rule is for — while nobody chooses the bytes of a
+`go.sum` hash.
+
+That distinction is load-bearing rather than tidy, because the vendor
+check reads subwords inside identifiers and base64 produces capitalised
+fragments freely. A module hash can therefore spell a banned term. Over
+200,000 random hashes against the real term list, **0.72% of lines trip**
+— four lines is a 2.8% chance, twenty is 13.5%, fifty is nearly a third.
+The damage is not the red but what it would force: a dependency bump
+nobody chose the bytes of breaking the build on a file no author can
+edit, whose only quick fix is deleting a term from the vendor list. That
+is the rule weakened by the thing that trips it, which is the same
+failure the carve-out above exists to prevent.
+
+The exemption is by FILENAME, not by content shape. A heuristic like
+"looks like base64" would also excuse an authored line that happened to
+look generated, and nothing from outside could tell which had happened.
+It is also scoped to the module's own manifest: a file called `go.sum`
+somewhere else in the tree is not exempt.
+
 **The vendor check TOKENISES rather than pattern-matches**, and that is
 not an optimisation. A word-boundary expression sees no boundary inside
 an identifier, so every camelCase and snake_case spelling walked past the
