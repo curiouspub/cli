@@ -172,7 +172,12 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 // pages-dir path, and was therefore silently dropped on every project
 // whose pages directory was already where Astro expects it.
 func CheckAstroConfig(fsys FS, root string) []check.Finding {
-	pagesDir := isDir(fsys, filepath.Join(root, "src", "pages"))
+	defaultPagesDir := filepath.Join(root, "src", "pages")
+	pagesDir := isDir(fsys, defaultPagesDir)
+	var pagesBlocker string
+	if pagesDir == undetermined {
+		pagesBlocker = blockingFile(fsys, root, defaultPagesDir)
+	}
 
 	configPath, extraCandidates, uncheckedCandidates, found := findConfig(fsys, root)
 	if !found {
@@ -182,7 +187,7 @@ func CheckAstroConfig(fsys FS, root string) []check.Finding {
 		return finish([]check.Finding{{
 			CheckID:  check.IDPagesDir,
 			Severity: check.SeverityWarning,
-			Message:  openingClause(pagesDir) + noConfigClause(uncheckedCandidates) + advisoryTail,
+			Message:  openingClause(pagesDir, pagesBlocker) + noConfigClause(uncheckedCandidates) + advisoryTail,
 		}}, "", uncheckedCandidates)
 	}
 
@@ -198,7 +203,7 @@ func CheckAstroConfig(fsys FS, root string) []check.Finding {
 			Severity: check.SeverityWarning,
 			Message: fmt.Sprintf(
 				"%s%s couldn't be read (%v), so a custom srcDir couldn't be checked either.%s",
-				openingClause(pagesDir), configName, readErr, advisoryTail),
+				openingClause(pagesDir, pagesBlocker), configName, readErr, advisoryTail),
 		}}, configName, uncheckedCandidates)
 	}
 
@@ -249,8 +254,11 @@ const advisoryTail = " If your pages live somewhere else, this is fine and the b
 // be looked at. It is a function rather than a literal because the same
 // seven messages are reached from both states, and the difference between
 // them is exactly the difference this round exists to stop collapsing.
-func openingClause(pagesDir presence) string {
-	if pagesDir == undetermined {
+func openingClause(pagesDir presence, blocker string) string {
+	switch {
+	case pagesDir == undetermined && blocker != "":
+		return blocker + " is a file, not a directory, so src/pages can't be under it, and "
+	case pagesDir == undetermined:
 		return "Couldn't check whether src/pages exists, and "
 	}
 	return "Couldn't find src/pages, and "
@@ -789,7 +797,7 @@ func isFile(fsys FS, name string) presence {
 	switch {
 	case err == nil:
 	case errors.Is(err, fs.ErrNotExist):
-		return absent
+		return missingOrUnanswerable(fsys, name)
 	default:
 		return undetermined
 	}
@@ -830,8 +838,79 @@ func isDir(fsys FS, name string) presence {
 	case err == nil:
 		return absent
 	case errors.Is(err, fs.ErrNotExist):
-		return absent
+		return missingOrUnanswerable(fsys, name)
 	default:
 		return undetermined
+	}
+}
+
+// missingOrUnanswerable decides what a NOT-EXIST answer about name
+// actually established, by confirming what is above it.
+//
+// IT EXISTS BECAUSE THE OPERATING SYSTEM WAS DECIDING THE ANSWER. Ask
+// about src/pages where src is a regular file and Unix says "not a
+// directory" while Windows says the path does not exist — the same tree,
+// described two ways. Keyed on the error alone, this check called it
+// undetermined on one platform and confidently ABSENT on the other, so
+// which sentence a user read depended on which machine read their
+// project.
+//
+// The distinction that actually matters is not the errno:
+//
+//   - the nearest existing ancestor is a DIRECTORY — nothing is there,
+//     and that is a real determination;
+//   - nothing exists on the way up at all — nothing is there either, for
+//     the same reason one level further out;
+//   - the nearest existing ancestor is NOT a directory — the question
+//     has no answer, because nothing can be below a file and nothing is
+//     missing from one. Answering "absent" here would be a confident
+//     wrong claim, which is the category this check has ruled out
+//     repeatedly.
+func missingOrUnanswerable(fsys FS, name string) presence {
+	for parent := filepath.Dir(name); ; {
+		info, err := fsys.Stat(parent)
+		switch {
+		case err == nil && info.IsDir():
+			return absent
+		case err == nil:
+			return undetermined
+		case !errors.Is(err, fs.ErrNotExist):
+			return undetermined
+		}
+
+		next := filepath.Dir(parent)
+		if next == parent {
+			// The top, with nothing existing on the way. Absent.
+			return absent
+		}
+		parent = next
+	}
+}
+
+// blockingFile returns the nearest ancestor of name that exists and is
+// NOT a directory, project-relative, or "" when there is none.
+//
+// It is what lets the message say what was found instead of claiming an
+// inability. "Couldn't check whether src/pages exists" is a sentence
+// about this program, offered about a tree the program read perfectly
+// well; "src is a file, not a directory" is a sentence about the
+// project, and it is the one a reader can act on.
+func blockingFile(fsys FS, root, name string) string {
+	for parent := filepath.Dir(name); ; {
+		info, err := fsys.Stat(parent)
+		if err == nil {
+			if info.IsDir() {
+				return ""
+			}
+			if rel, relErr := filepath.Rel(root, parent); relErr == nil {
+				return filepath.ToSlash(rel)
+			}
+			return filepath.ToSlash(parent)
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return ""
+		}
+		parent = next
 	}
 }
