@@ -146,17 +146,24 @@ func collisionFindings(paths []string) []check.Finding {
 }
 
 // hasCombiningMark reports whether any part of p carries a combining
-// mark — a letter and its accent written as two characters rather than
-// one.
+// mark — a character that attaches to its neighbour, so a name is more
+// characters than it appears to be.
 //
-// IT SURVIVED THE WARNING THAT USED TO CALL IT. That warning was retired
-// because it could never fire alone; the detection is still worth having,
-// because it decides which sentence the hard stop uses, and a name whose
-// accent is a separate character is the refusal a person is least able
-// to see for themselves in a file listing.
+// ALL THREE CATEGORIES UNICODE CALLS A MARK, which is a correction. It
+// asked Mn — NONSPACING marks — alone, so a spacing mark (Mc, a
+// Devanagari visarga) or an enclosing one (Me, a combining circle) fell
+// through to the fallback and was refused by naming the character
+// instead. Neither publishes either way, so nothing was let through;
+// what was missed was the SENTENCE.
+//
+// AND THE SENTENCE IS WHY THIS FUNCTION EXISTS. The warning that used to
+// call it was retired because it could never fire alone, on the argument
+// that the wording was the actionable half — so a rule kept for its
+// wording that covered two of its three categories was that argument
+// holding for two thirds of its subject.
 func hasCombiningMark(p string) bool {
 	for _, r := range p {
-		if unicode.Is(unicode.Mn, r) {
+		if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r) || unicode.Is(unicode.Me, r) {
 			return true
 		}
 	}
@@ -220,9 +227,9 @@ func charsetProblem(p string) string {
 	// listing, where a space does not. A name breaking both rules is
 	// better described by the one its owner would never have found.
 	if hasCombiningMark(p) {
-		return "its name is written with a combining accent mark — the accent is a " +
-			"separate character from the letter it sits on, so the name is two " +
-			"characters where it looks like one"
+		return "its name is written with a combining mark — the mark is a separate " +
+			"character from the one it attaches to, so two names that look the same " +
+			"can be different files"
 	}
 	for _, r := range p {
 		if r == '/' || allowedInPath(r) {
@@ -280,7 +287,7 @@ func countOf(n int, one, many string) string {
 // the name.
 func nextFor(p string) string {
 	if hasCombiningMark(p) {
-		return "Rename it using plain unaccented letters — retyping the accented letter " +
+		return "Rename it using plain unmarked letters — retyping the marked letter " +
 			"gives you its other spelling, which this platform cannot serve either — " +
 			"then update whatever links to it and run `curious deploy` again."
 	}
