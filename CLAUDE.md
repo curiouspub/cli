@@ -168,6 +168,26 @@ what passes locally and what passes in CI cannot diverge.
   underneath it starts violating the rule. That is measured, not
   theorised: a banned import added elsewhere went undetected on a cached
   run and failed instantly without the cache.
+- **A SKIPPED ROW CANNOT PASS QUIETLY.** `go test` prints nothing for a
+  skip without `-v`, so a green tick over a row that stopped running is
+  indistinguishable from one over a row that passed — and this suite has
+  rows that skip on a missing program, a filesystem feature an account
+  cannot use, or a permission the runner does not hold, each of which is
+  honest on one platform and a broken environment on another. `make test`
+  therefore runs through `internal/skipcheck`, which prints every skip
+  with the reason its author wrote, checks it against
+  `scripts/expected-skips.txt`, and **fails the run on a skip nobody
+  declared**. It passes its arguments through and returns the same exit
+  code; a declared skip that did not happen is not a failure, because
+  every one of these is conditional on the machine.
+
+  The manifest is a fourth rule file read on every run with no copy
+  kept — deleting a line measurably changes what the suite allows. One
+  skip is deliberately absent from it: the row comparing this project's
+  ignore-rule matcher against the real version-control program skips when
+  that program is not installed, and the machine running these tests
+  obtained the source with it, so that skip can only mean something is
+  wrong.
 - CI runs on **ubuntu, macos and windows**. Path handling, file
   permissions and the user config directory differ on all three, and this
   is a tool whose job is walking someone's project directory.
@@ -217,8 +237,8 @@ when it is introduced rather than at review. They live in
 Each guard fails loudly if it scanned nothing, so none of them can pass
 by looking at an empty set.
 
-**Three manifests are RULE FILES, and they get exactly one narrow
-carve-out.** `scripts/citation-patterns.txt`,
+**Three of the four manifests are RULE FILES, and they get exactly one
+narrow carve-out.** `scripts/citation-patterns.txt`,
 `scripts/banned-dependencies.txt` and `scripts/vendor-terms.txt` have to
 spell the things they forbid — you cannot match a module path without
 writing one down — so their **data** lines are exempt **from the vendor

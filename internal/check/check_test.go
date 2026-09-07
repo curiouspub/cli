@@ -165,18 +165,24 @@ func TestManifestKeepsDeclaredOrder(t *testing.T) {
 // is the whole of what they get.
 func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 	ids := map[string]string{
-		"IDAstroDep":    IDAstroDep,
-		"IDLockfile":    IDLockfile,
-		"IDPagesDir":    IDPagesDir,
-		"IDBuildFormat": IDBuildFormat,
-		"IDLocalhost":   IDLocalhost,
+		"IDAstroDep":      IDAstroDep,
+		"IDLockfile":      IDLockfile,
+		"IDPagesDir":      IDPagesDir,
+		"IDBuildFormat":   IDBuildFormat,
+		"IDLocalhost":     IDLocalhost,
+		"IDSymlinks":      IDSymlinks,
+		"IDCaseCollision": IDCaseCollision,
+		"IDPathCharset":   IDPathCharset,
 	}
 	want := map[string]string{
-		"IDAstroDep":    "astro-dep",
-		"IDLockfile":    "lockfile",
-		"IDPagesDir":    "pages-dir",
-		"IDBuildFormat": "build-format",
-		"IDLocalhost":   "localhost",
+		"IDAstroDep":      "astro-dep",
+		"IDLockfile":      "lockfile",
+		"IDPagesDir":      "pages-dir",
+		"IDBuildFormat":   "build-format",
+		"IDLocalhost":     "localhost",
+		"IDSymlinks":      "symlinks",
+		"IDCaseCollision": "case-collision",
+		"IDPathCharset":   "path-charset",
 	}
 	if !reflect.DeepEqual(ids, want) {
 		t.Errorf("check ids = %#v, want %#v", ids, want)
@@ -231,7 +237,10 @@ func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 // produces both off one parse of one file, and splitting them would put
 // two facts about one file in two places.
 func TestDeclaredOrderIsTheCompleteUniverseInReportOrder(t *testing.T) {
-	want := []string{IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost}
+	want := []string{
+		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
+		IDSymlinks, IDCaseCollision, IDPathCharset,
+	}
 	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("DeclaredOrder() = %v, want %v", got, want)
 	}
@@ -249,7 +258,10 @@ func TestDeclaredOrderHandsBackACopy(t *testing.T) {
 	for i := range first {
 		first[i] = "clobbered"
 	}
-	want := []string{IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost}
+	want := []string{
+		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
+		IDSymlinks, IDCaseCollision, IDPathCharset,
+	}
 	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("after a caller overwrote what it was given, DeclaredOrder() = %v, want %v",
 			got, want)

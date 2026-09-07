@@ -1,0 +1,91 @@
+# Skipped test rows this repository accepts, and where.
+#
+# One rule per line: PLATFORMS, package, test. Platforms is a
+# comma-separated list of the operating systems this repository builds
+# for, or an asterisk for all of them. internal/skipcheck reads this file
+# on every run and keeps no copy of its own, so deleting a line here
+# measurably changes what the suite allows — which is how anyone can
+# check it is really being read.
+#
+# THE RULE THIS FILE EXISTS FOR: a skipped row prints nothing in a
+# non-verbose run, so a green tick over a row that stopped running looks
+# exactly like a green tick over one that passed. Several rows here skip
+# on conditions that are honest on one platform and a broken environment
+# on another — a missing program, a filesystem feature the account cannot
+# use, a permission the runner does not hold. A skip that is not listed
+# below fails the run.
+#
+# WHAT DOES NOT BELONG HERE is as important as what does, and the test is
+# whether the skip could ever be LEGITIMATE — not whether it happens to
+# occur on the machine in front of you. The differential row that compares
+# this project's ignore-rule matcher against the real program skips when
+# that program is not installed; the machine running these tests obtained
+# the source with it, so that skip can only mean something is wrong. It is
+# deliberately absent from this file, and that absence is what makes the
+# skip impossible to hide.
+#
+# A line here is a claim that the skip is legitimate on the platforms it
+# names. Say why in a comment above it; the next reader is deciding
+# whether the claim still holds.
+
+# The child half of a row that re-executes the test binary to watch it
+# die of a signal. It is a test only when the parent invokes it with the
+# marker in the environment; on an ordinary run it has nothing to do.
+* github.com/curiouspub/cli/internal/ui TestInterruptHelperProcess
+
+# Windows has no named pipe this repository's dependency policy can
+# reach. Each of these rows needs a real one on disk; every property they
+# confirm is asserted on all three platforms from a synthetic directory
+# listing, so what the skip costs is the confirmation and not the
+# coverage.
+windows github.com/curiouspub/cli/internal/pack TestWalkSkipsARealNamedPipe
+windows github.com/curiouspub/cli/internal/pack TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile
+
+# The rows needing a real symbolic link. MEASURED: the machine this suite
+# runs on can create them, so these do not skip there today — and they
+# are declared anyway, because an account without the privilege is an
+# environment this project supports and the skip would be honest in it.
+#
+# THAT IS THE LINE THIS FILE DRAWS, and the first draft drew it in the
+# wrong place: it left these out on the grounds that they do not skip
+# here, so that anybody would be "told" if that changed. Being told would
+# mean a red build on a correctly-configured machine, which is how a gate
+# earns its reputation for crying wolf and then gets switched off. The
+# question is not whether a skip HAPPENS here — the report at the end of
+# every run answers that, and answers it better. The question is whether
+# the skip would be LEGITIMATE, and only a skip that could never be
+# legitimate belongs outside this file.
+windows github.com/curiouspub/cli/internal/pack TestWalkListsARealSymlink
+windows github.com/curiouspub/cli/internal/pack TestWalkEmitsItsFindingsFromOneTree
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_FIFODoesNotHang
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkToFIFODoesNotHang
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkedConfigResolves
+windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UncheckedCandidateQualifiesTheWinner
+
+# Dying of a signal is the property under test, and Windows has no
+# equivalent to observe.
+windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSignal
+
+# Permission bits do not gate reads and stats on Windows the way these
+# rows need, and a process running as the superuser ignores them
+# everywhere — which a container commonly is. Both conditions produce the
+# same skip, so the rules cover every platform.
+#
+# THE LAST THREE WERE FOUND BY THIS GATE, on its first run, and are worth
+# a sentence. They skip inside a SHARED HELPER rather than in their own
+# bodies, so the hand search that assembled the rest of this file — which
+# looked for the skip call inside each test function — did not see them.
+# A list built by reading the source cannot contain what the source does
+# not spell where the reader is looking; only running it can.
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableConfigWarnsNotCrashes
+* github.com/curiouspub/cli/internal/preflight TestAdvisoriesSuppressesNotesAndNothingElse
+* github.com/curiouspub/cli/internal/config TestSaveIntoAnUnwritableDirectoryLeavesTheOriginalUntouched
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableSrcDirTargetSaysCouldntCheck
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableSrcPagesSaysCouldntCheck
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UncheckableCandidatesAreNotAbsence
+
+# Two names differing only in case cannot both exist on a case-folding
+# volume. The row is compiled only where they usually can, and checks the
+# actual volume anyway, because the tag says what the platform generally
+# does and not what this mount does.
+linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollision

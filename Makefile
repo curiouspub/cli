@@ -26,8 +26,23 @@ build:
 # added to a test file went undetected on a cached run and failed
 # immediately with -count=1. A guard that can report a stale pass is
 # worse than no guard, because it is trusted.
+#
+# THE SUITE RUNS THROUGH A WRAPPER, and the reason is the same shape one
+# line up: a run can report a pass it has not earned. A skipped row
+# prints NOTHING without -v, so a green tick over a row that stopped
+# running looks exactly like a green tick over one that passed — and
+# several rows here skip on conditions that are honest on one platform
+# and a broken environment on another. The wrapper prints every skip with
+# the reason its author wrote, checks it against
+# scripts/expected-skips.txt, and fails the run on one nobody declared.
+# It passes its arguments straight through and returns the same exit
+# code; what it adds is the section at the end.
+#
+# Making the whole suite verbose would surface the same three lines
+# inside ten thousand, which is a way of hiding them that also annoys
+# everybody.
 test:
-	go test -count=1 ./...
+	go run ./internal/skipcheck -- -count=1 ./...
 
 vet:
 	go vet ./...
