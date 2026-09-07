@@ -216,3 +216,137 @@ func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 		t.Errorf("NotRun() on a full manifest = %#v, want nil", got)
 	}
 }
+
+// ---------------------------------------------------------------------
+// The declared universe
+// ---------------------------------------------------------------------
+
+// TestDeclaredOrderIsTheCompleteUniverseInReportOrder pins both things
+// this list is: the SET of check ids anything is expected to cover, and
+// the ORDER results are reported in. Cheapest and most fundamental
+// first, so somebody standing in the wrong directory reads "this isn't
+// an Astro project" as the first line and not as the fourth.
+//
+// build-format sits immediately after pages-dir because one check
+// produces both off one parse of one file, and splitting them would put
+// two facts about one file in two places.
+func TestDeclaredOrderIsTheCompleteUniverseInReportOrder(t *testing.T) {
+	want := []string{IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost}
+	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
+		t.Errorf("DeclaredOrder() = %v, want %v", got, want)
+	}
+}
+
+// TestDeclaredOrderHandsBackACopy. The list is the single place the
+// universe is written down, and a caller that ranged over it and sorted
+// it in place would silently reorder every later run in the process.
+// One shared mutable list is the same failure as two lists, arriving
+// from the other direction.
+//
+// MUTATION: return the backing slice instead of a copy. Reds here.
+func TestDeclaredOrderHandsBackACopy(t *testing.T) {
+	first := DeclaredOrder()
+	for i := range first {
+		first[i] = "clobbered"
+	}
+	want := []string{IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost}
+	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
+		t.Errorf("after a caller overwrote what it was given, DeclaredOrder() = %v, want %v",
+			got, want)
+	}
+}
+
+// TestRankFollowsTheDeclaredOrder, and an id nobody declared ranks after
+// every id that was — never dropped, never a panic. A producer reporting
+// something unexpected is still reporting something, and the failure
+// mode with no symptom is the one to avoid.
+func TestRankFollowsTheDeclaredOrder(t *testing.T) {
+	for i, id := range DeclaredOrder() {
+		if got := Rank(id); got != i {
+			t.Errorf("Rank(%q) = %d, want %d", id, got, i)
+		}
+	}
+	if got, floor := Rank("nobody-declared-this"), len(DeclaredOrder()); got != floor {
+		t.Errorf("Rank of an undeclared id = %d, want %d — after everything declared", got, floor)
+	}
+}
+
+// TestSortFindingsGroupsBySeverityThenDeclaredOrder. Every hard stop,
+// then every warning, then the notes no surface shows; within one
+// severity the declared order; within one check, arrival.
+//
+// It lives here rather than in the engine because the engine is not the
+// only producer of findings, and two sorters would disagree the first
+// time one of them was changed.
+//
+// MUTATION: drop the severity key. Reds on the warning arriving before
+// the second hard stop.
+func TestSortFindingsGroupsBySeverityThenDeclaredOrder(t *testing.T) {
+	findings := []Finding{
+		{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "second warning"},
+		{CheckID: IDBuildFormat, Severity: SeverityNote, Message: "a note"},
+		{CheckID: IDPagesDir, Severity: SeverityHardStop, Message: "second hard stop"},
+		{CheckID: IDLockfile, Severity: SeverityWarning, Message: "first warning"},
+		{CheckID: IDAstroDep, Severity: SeverityHardStop, Message: "first hard stop"},
+	}
+
+	SortFindings(findings)
+
+	want := []string{"first hard stop", "second hard stop", "first warning", "second warning", "a note"}
+	var got []string
+	for _, f := range findings {
+		got = append(got, f.Message)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// TestSortFindingsKeepsArrivalOrderWithinOneCheck. A check that reports
+// three files in the order it walked them must not have them shuffled,
+// and the sort has to be total or two runs over one project stop
+// producing the same bytes.
+//
+// MUTATION: swap the stable sort for an unstable one. Reds
+// intermittently, which is the reason the comparison is total.
+func TestSortFindingsKeepsArrivalOrderWithinOneCheck(t *testing.T) {
+	findings := []Finding{
+		{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "first"},
+		{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "second"},
+		{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "third"},
+	}
+
+	SortFindings(findings)
+
+	want := []string{"first", "second", "third"}
+	var got []string
+	for _, f := range findings {
+		got = append(got, f.Message)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// TestSortManifestFollowsTheDeclaredOrder. The manifest is rendered, so
+// its order is as load-bearing as the findings' — a report that reorders
+// between two runs over one project cannot be diffed.
+func TestSortManifestFollowsTheDeclaredOrder(t *testing.T) {
+	m := Manifest{
+		{CheckID: IDLocalhost, Ran: true},
+		{CheckID: IDAstroDep, Ran: true},
+		{CheckID: IDBuildFormat, Ran: true},
+		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+	}
+
+	SortManifest(m)
+
+	want := []string{IDAstroDep, IDLockfile, IDBuildFormat, IDLocalhost}
+	var got []string
+	for _, row := range m {
+		got = append(got, row.CheckID)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
