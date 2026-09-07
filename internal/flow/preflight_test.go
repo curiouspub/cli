@@ -684,13 +684,18 @@ func TestPreflightRenderFillsAMissingHeadlineFromTheSummary(t *testing.T) {
 	}
 }
 
-// TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths pins a real
-// asymmetry rather than papering over it. A finding WITHOUT copy has its
-// paths listed under the summary, because nothing else would name them.
-// A finding WITH copy is rendered exactly as its author wrote it — the
-// author had the paths and chose what to say about them, and a renderer
-// appending a list underneath would be editing somebody's prose.
-func TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths(t *testing.T) {
+// TestPreflightRenderCopyKeepsItsWordsAndStillNamesTheFiles pins what
+// "verbatim" means here, because the word can be read two ways and only
+// one of them is safe.
+//
+// VERBATIM IS A PROMISE NOT TO EDIT AN AUTHOR'S WORDS. It is not a
+// promise to withhold data the finding is carrying. So the three parts
+// render exactly as written and the file list follows the reason — which
+// means a check that works out beautiful copy and forgets to name its
+// file does not silently lose it in the terminal. The alternative put an
+// obligation on every check author who has not been hired yet, and the
+// failure mode was silence.
+func TestPreflightRenderCopyKeepsItsWordsAndStillNamesTheFiles(t *testing.T) {
 	withCopy := lockfileFinding()
 	withCopy.Paths = []string{"package.json"}
 
@@ -698,8 +703,13 @@ func TestPreflightRenderCopyIsVerbatimAndDoesNotGrowPaths(t *testing.T) {
 		fullManifest(check.IDLockfile), 0)
 
 	got, _ := renderedBytes(t, err)
-	if want := readGolden(t, "lone-hard-finding-with-copy.golden"); got != want {
-		t.Errorf("copy was not rendered verbatim:\n%s\nwant:\n%s", got, want)
+	if want := readGolden(t, "lone-hard-finding-with-copy-and-paths.golden"); got != want {
+		t.Errorf("carried copy did not render as written, or lost its file:\n%s\nwant:\n%s", got, want)
+	}
+	for _, part := range []string{withCopy.What, withCopy.Why, withCopy.Next} {
+		if !strings.Contains(got, part) {
+			t.Errorf("a part of the author's copy was edited or dropped:\nmissing: %q\nin:\n%s", part, got)
+		}
 	}
 
 	bare := check.Finding{
