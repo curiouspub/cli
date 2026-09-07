@@ -151,10 +151,11 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 //     warn, never hard stop, and its default is SILENCE where pages-dir's
 //     is a warning: here "cannot tell" overwhelmingly means the default
 //     applies, and warning on every config this check cannot fully parse
-//     would be noise on projects that are otherwise fine. Two states
-//     break that silence — see buildFormatFinding — and both are cases
-//     where the scan knows it could not finish looking rather than cases
-//     where it looked and found nothing.
+//     would be noise on projects that are otherwise fine — which is not a
+//     hypothetical, it was measured. Exactly one state breaks that
+//     silence, a duplicate key; a file the scan could not finish reading
+//     is RECORDED at SeverityNote and shown by nothing. See
+//     buildFormatFinding for the ruling that changed and what changed it.
 //
 // Both concerns are read from the same parse of the same file, so a
 // project whose pages directory is exactly where Astro expects it never
@@ -643,28 +644,57 @@ func isASCIILetter(b byte) bool {
 // check, because both are stronger signals than "not found" and each is
 // its own finding in the maximum-rigour review:
 //
-//   - parsed.unresolved: tokenize refused the whole file, so "not found"
-//     would be a lie — the scanner does not know whether build.format
-//     was set, only that it could not finish looking. Finding 2's regex
-//     ending in "\/" used to make this silent by DESYNCING THE SCAN
-//     rather than by there being no live key, and the two are not the
-//     same fact: one means "the default applies", the other means "this
-//     check has no idea". Staying silent on the second is the dishonest
-//     half of "a silent empty parse and a declared unresolved are
-//     different outcomes".
+//   - parsed.unresolved: the scan hit something it could not bound, so
+//     "not found" would be a lie — this check does not know whether
+//     build.format was set, only that it could not finish looking. That
+//     is recorded, at SeverityNote, and NOT raised. See below for why
+//     this stopped being a warning.
 //   - parsed.buildFormatAmbiguous: a duplicate "build" or "format" key.
 //     Ambiguity is itself informative in exactly the way absence is
 //     not — srcDir's own ambiguous state already warns rather than
-//     staying silent, for the same reason.
+//     staying silent, for the same reason. It also passes the criterion
+//     below on its own terms: the user has two of the same key in a file
+//     they wrote, which they can go and look at.
+//
+// THE UNRESOLVED CASE USED TO WARN, AND THAT RULING IS SUPERSEDED —
+// 2026-09-07. The argument for warning was sound as far as it went: a
+// desynchronised scan going quiet is not the same fact as "the default
+// applies", and staying silent on the second was the dishonest half of
+// "a silent empty parse and a declared unresolved are different
+// outcomes". What it could not anticipate is that the subset gate would
+// make "could not finish looking" COMMON. Measured the day the gate
+// widened to cover template interpolation: two of the three real Astro
+// configs on the authors' machine began emitting this warning on every
+// run, both because of an analytics snippet building a string with
+// "${}". Nothing was wrong with either project.
+//
+// It is also, on inspection, the state this function ALREADY answers
+// with silence one branch down. A "format" key whose value is a bare
+// identifier is found-but-unreadable — this check has no idea what it
+// resolves to — and that stays silent, with a required mutation
+// protecting the silence. "The file was unreadable" is the same
+// epistemic state with strictly LESS information, and it was the louder
+// of the two. That is not a defensible line.
+//
+// The criterion this now follows, minted with the ruling and stated in
+// full on Severity: AN ADVISORY NAMES SOMETHING THE USER CAN ACT ON OR
+// OBSERVE, OR IT DOES NOT FIRE. The pages-dir concern's own gate-trip
+// warning passes it — the user really does have no src/pages, which they
+// can check — and keeps warning. This one does not: there is nothing to
+// look at and nothing to do.
 func buildFormatFinding(configName string, parsed astroConfig) *Finding {
 	if parsed.unresolved {
+		// Recorded below advisory severity: no surface shows this by
+		// default. It is kept because "the scan gave up" and "the key is
+		// absent" are different states, and a caller that needs to tell
+		// them apart — a future --verbose, a support transcript — has
+		// nowhere else to learn it.
 		return &Finding{
 			CheckID:  CheckIDBuildFormat,
-			Severity: SeverityWarning,
+			Severity: SeverityNote,
 			Message: fmt.Sprintf(
-				"Couldn't fully read %s: it contains %s, so it can't confirm build.format "+
-					"either. If you haven't changed build.format away from Astro's default, "+
-					"this is fine; otherwise, check it by hand.",
+				"%s couldn't be fully read: it contains %s, so build.format couldn't be "+
+					"confirmed either way.",
 				configName, parsed.unresolvedReason),
 		}
 	}

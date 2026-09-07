@@ -3,8 +3,8 @@ package preflight
 import "testing"
 
 // TestFindingRoundTrips is the shape test: a Finding constructed with
-// either severity carries its check id, severity and message back out
-// unchanged, and both severities construct.
+// any severity carries its check id, severity and message back out
+// unchanged, and every severity constructs.
 func TestFindingRoundTrips(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -12,6 +12,7 @@ func TestFindingRoundTrips(t *testing.T) {
 	}{
 		{"hard stop", SeverityHardStop},
 		{"warning", SeverityWarning},
+		{"note", SeverityNote},
 	}
 
 	for _, tc := range cases {
