@@ -544,11 +544,33 @@ func TestWalkWillNotReadRulesFromSomethingThatIsNotAFile(t *testing.T) {
 	}
 }
 
+// walkDeadline is how long this row waits before calling a walk hung.
+//
+// It is generous against the work — listing a two-entry directory — and
+// short against the alternative, which is the package timeout. The
+// number only has to separate "slow machine" from "never finishing", and
+// nothing in between is a state this fixture can produce.
+const walkDeadline = 10 * time.Second
+
 // TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile is the confirmation
-// half, and the failure it prevents is a HANG rather than a wrong
+// half, and its failure mode is NOT FINISHING rather than a wrong
 // answer: nothing ever opens the write end of this pipe, so a walk that
-// read what it found would wait here forever and the row would time out
-// instead of reporting.
+// read what it found waits here forever.
+//
+// SO THE ROW CARRIES ITS OWN DEADLINE. Borrowing the package timeout
+// makes the failure a minute of silence followed by a stack dump of
+// every goroutine in the binary — which reads like a slow machine or a
+// flake, and buries the one row that actually knows what went wrong
+// under the ones that merely had not finished yet. Its own deadline
+// makes it fast, named, and about this fixture.
+//
+// The walk runs on its own goroutine so the deadline can be observed at
+// all; a hung one stays blocked on the read, which costs nothing because
+// a failing binary is on its way out.
+//
+// MUTATION: take rules from any entry wearing the ignore file's name.
+// Reds here, by deadline rather than by assertion, in ten seconds
+// instead of the package's sixty.
 func TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile(t *testing.T) {
 	root, ok := ignoreFilePipeFixture(t)
 	if !ok {
@@ -557,9 +579,28 @@ func TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile(t *testing.T) {
 			"TestWalkWillNotReadRulesFromSomethingThatIsNotAFile")
 	}
 
-	tree := mustWalk(t, OSFileSystem{}, root)
-	if got := pathsOf(tree.Files); !reflect.DeepEqual(got, []string{"page.astro"}) {
-		t.Errorf("files = %v, want only page.astro", got)
+	type outcome struct {
+		tree Tree
+		err  error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		tree, err := Walk(OSFileSystem{}, root)
+		done <- outcome{tree, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Walk: %v", got.err)
+		}
+		if files := pathsOf(got.tree.Files); !reflect.DeepEqual(files, []string{"page.astro"}) {
+			t.Errorf("files = %v, want only page.astro", files)
+		}
+	case <-time.After(walkDeadline):
+		t.Fatalf("the walk did not finish within %s over a tree holding one file and a "+
+			"named pipe called %s — it is reading the pipe, and nothing will ever write "+
+			"to it", walkDeadline, gitignoreName)
 	}
 }
 
