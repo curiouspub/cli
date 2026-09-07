@@ -22,6 +22,11 @@
 // package's own tests hermetic: a test that cannot redirect the path has
 // to either read the developer's real token or skip itself.
 //
+// It names the FILE, not a directory, and it is used exactly as given —
+// a relative path stays relative, and a leading tilde is a directory
+// name rather than a home directory. A path naming a directory is
+// reported as such, with the variable that does take one; see Path.
+//
 // # What the file looks like
 //
 // A small JSON object carrying a schema version, the token, and the API

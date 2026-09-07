@@ -18,7 +18,7 @@ import "os"
 // token file inherits whatever permissions its directory carries, and
 // the second return value is what lets a caller say so instead of
 // implying a protection that is not there.
-func modeWarning(string, os.FileInfo) (string, bool) {
+func modeWarning(string, os.FileInfo, bool) (string, bool) {
 	return "", false
 }
 
@@ -29,6 +29,6 @@ func modeWarning(string, os.FileInfo) (string, bool) {
 // read-only flag somebody set deliberately. It cannot express the thing
 // the other platforms use it for, and a call that appears to restrict a
 // file without restricting it is worse than no call at all.
-func chmodFile(*os.File) error {
+func chmodFile(*os.File, os.FileMode) error {
 	return nil
 }

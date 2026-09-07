@@ -102,6 +102,28 @@ func TestPathPrecedence(t *testing.T) {
 		}
 	})
 
+	// The two variables are treated differently on purpose, so the
+	// difference is asserted rather than left to the doc comment. The
+	// standard's variable is read out of an environment this program did
+	// not set up; the override is something a person typed for this
+	// command, and quietly resolving it would put the token somewhere
+	// other than where they said.
+	t.Run("a relative CURIOUS_CONFIG is honoured exactly as given", func(t *testing.T) {
+		for _, given := range []string{"config.json", "./cfg/config.json", "~/cfg.json"} {
+			t.Setenv(envConfigPath, given)
+			t.Setenv(envXDGConfigHome, t.TempDir())
+
+			got, err := Path()
+			if err != nil {
+				t.Fatalf("Path(): %v", err)
+			}
+			if got != given {
+				t.Errorf("Path() = %q, want %q exactly — the override names the file "+
+					"and is used as given", got, given)
+			}
+		}
+	})
+
 	t.Run("a relative XDG_CONFIG_HOME is ignored", func(t *testing.T) {
 		t.Setenv(envConfigPath, "")
 		t.Setenv(envXDGConfigHome, "relative/path")

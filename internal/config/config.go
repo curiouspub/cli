@@ -243,6 +243,18 @@ type Config struct {
 // standard requires and which is also just safer: resolved against the
 // working directory it would scatter a token file into whatever
 // directory the user happened to be standing in.
+//
+// CURIOUS_CONFIG gets no such treatment: it is honoured EXACTLY as
+// given, including a relative path and including one starting with a
+// tilde. The documentation asks for a full path, and the two rules
+// differ because the variables do. The base-directory one is a
+// standard's, read out of an environment this program did not set up and
+// shared with every other tool; this one is an escape hatch somebody
+// typed for this command on purpose, and second-guessing it would mean
+// writing the token somewhere other than where they said. A tilde is
+// expanded by a shell before the program ever sees it, so one that
+// survives into this value was quoted deliberately and names a directory
+// whose first character really is a tilde.
 func Path() (string, error) {
 	if p := os.Getenv(envConfigPath); p != "" {
 		return p, nil
@@ -276,6 +288,15 @@ func Path() (string, error) {
 // NoTokenReason, because every one of them is recoverable by logging in
 // again and none of them should end the run.
 //
+// THE ASYMMETRY IN HOW THIS TREATS ITS OWN ARGUMENT is deliberate, and
+// it is written down because a reader meets it as an inconsistency. An
+// EMPTY effective endpoint ends the call; an unparseable one is a soft
+// mismatch that costs a login. Empty can only be a caller that forgot to
+// wire the value through, and reporting it as "no token" would hide the
+// bug for ever behind a run that simply logs in every time. Garbage most
+// likely arrives from the user's own environment variable, where ending
+// the run would strand them with no way past it.
+//
 // Load never writes to the file, and that includes never repairing it.
 func Load(effectiveAPIURL string) (*Config, error) {
 	if effectiveAPIURL == "" {
@@ -291,7 +312,8 @@ func Load(effectiveAPIURL string) (*Config, error) {
 	}
 	cfg := &Config{Version: SchemaVersion, Path: path}
 
-	if fi, statErr := os.Stat(path); statErr == nil {
+	fi, statErr := os.Stat(path)
+	if statErr == nil && fi.IsDir() {
 		// A DIRECTORY GETS ITS OWN BRANCH, because it is the natural
 		// mistake rather than an exotic one: the base-directory variable
 		// takes a directory, so pointing the file override at one is
@@ -299,33 +321,54 @@ func Load(effectiveAPIURL string) (*Config, error) {
 		// operating system's own "is a directory" and the generic
 		// message advises changing the permissions of the directory and
 		// then deleting it — two actions, neither of them the problem.
-		if fi.IsDir() {
-			cfg.NoTokenReason = fmt.Errorf(
-				"%s names %s, which is a directory rather than a file — it has to be "+
-					"the full path to the config file itself, ending in %s. (The "+
-					"base-directory variable %s is the one that takes a directory.)",
-				envConfigPath, path, fileName, envXDGConfigHome)
-			return cfg, nil
-		}
-		warning, checked := modeWarning(path, fi)
+		// The mode check is skipped entirely: the mode of a directory is
+		// not the question, and answering it here would be a warning
+		// nobody can act on.
+		cfg.NoTokenReason = fmt.Errorf(
+			"%s names %s, which is a directory rather than a file — it has to be "+
+				"the full path to the config file itself, ending in %s. (The "+
+				"base-directory variable %s is the one that takes a directory.)",
+			envConfigPath, path, fileName, envXDGConfigHome)
+		return cfg, nil
+	}
+
+	// THE FILE IS READ BEFORE ITS MODE IS JUDGED, and the order is the
+	// whole of a small correction: the warning used to say the file
+	// "holds an access token" whatever was in it, including a file this
+	// package was about to report as holding nothing.
+	holdsToken := cfg.read(path, effectiveAPIURL)
+	if statErr == nil {
+		warning, checked := modeWarning(path, fi, holdsToken)
 		cfg.PermissionsChecked = checked
 		if warning != "" {
 			cfg.Warnings = append(cfg.Warnings, warning)
 		}
 	}
+	return cfg, nil
+}
 
+// read fills cfg from the file at path and reports whether that file
+// APPEARS TO HOLD A TOKEN — which is a different question from whether
+// one came back, and is asked only so the permissions warning does not
+// claim something the read already disproved.
+//
+// When the answer cannot be determined — an unreadable file, a corrupt
+// one, a schema from the future — it reports TRUE. Mentioning a token
+// that turns out not to be there costs a clause; omitting one that is
+// there costs the point of the warning.
+func (cfg *Config) read(path, effectiveAPIURL string) bool {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		// No file is the ordinary first run, not a problem: no warning,
 		// no reason, nothing for the caller to print.
-		return cfg, nil
+		return false
 	}
 	if err != nil {
 		cfg.NoTokenReason = fmt.Errorf(
 			"could not read the config file at %s: %w — fix the file's permissions, "+
 				"or delete it and run this command again to log in from scratch",
 			path, err)
-		return cfg, nil
+		return true
 	}
 
 	// A BYTE-ORDER MARK IS TOLERATED AT THE FRONT. The comments in this
@@ -344,13 +387,17 @@ func Load(effectiveAPIURL string) (*Config, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		cfg.NoTokenReason = corruptError(path, err)
-		return cfg, nil
+		return true
 	}
 	var fc fileConfig
 	if err := json.Unmarshal(data, &fc); err != nil {
 		cfg.NoTokenReason = corruptError(path, err)
-		return cfg, nil
+		return true
 	}
+
+	// From here the file has parsed, so this is an answer rather than a
+	// default.
+	holdsToken := strings.TrimSpace(fc.Token) != ""
 
 	if fc.Version != 0 {
 		cfg.Version = fc.Version
@@ -365,7 +412,7 @@ func Load(effectiveAPIURL string) (*Config, error) {
 	// version had been read before the sentence was printed.
 	if cfg.Version != SchemaVersion {
 		cfg.NoTokenReason = versionError(path, cfg.Version)
-		return cfg, nil
+		return holdsToken
 	}
 
 	// Before anything is read OUT of the file, whether it can be read at
@@ -374,27 +421,27 @@ func Load(effectiveAPIURL string) (*Config, error) {
 	// names disagree about what it says.
 	if spellings := ambiguousSpellings(raw); spellings != nil {
 		cfg.NoTokenReason = ambiguousError(path, spellings)
-		return cfg, nil
+		return true
 	}
 
 	cfg.APIURL = fc.APIURL
 	stripKnownKeys(raw)
 	cfg.Unknown = raw
 
-	if strings.TrimSpace(fc.Token) == "" {
+	if !holdsToken {
 		cfg.NoTokenReason = fmt.Errorf(
 			"the config file at %s has no token in it — delete the file and run this "+
 				"command again to log in", path)
-		return cfg, nil
+		return false
 	}
 
 	if reason := endpointMismatch(fc.APIURL, effectiveAPIURL); reason != nil {
 		cfg.NoTokenReason = reason
-		return cfg, nil
+		return true
 	}
 
 	cfg.Token = ui.Secret(fc.Token)
-	return cfg, nil
+	return true
 }
 
 // corruptError is the one message a user gets for a file this package
@@ -451,6 +498,15 @@ func versionError(path string, version int) error {
 // CanonicalKey's result is used for COMPARISON ONLY and never as a base
 // URL. It carries an explicit port the user may never have typed, and
 // what gets dialled is the client's own base.
+//
+// THE EQUIVALENCE HAS A KNOWN BLIND SPOT, accepted with this note. A
+// percent-encoded slash in a path compares equal to a real one, so two
+// endpoints spelled /a%2Fb and /a/b are treated as one. They share a
+// host, so no token can cross from one issuer to another through it —
+// which is the failure this comparison exists to prevent, and the reason
+// the collapse is tolerable. It is recorded because a blind spot nobody
+// wrote down is one the next reader has to rediscover by finding it in
+// the field.
 //
 // An error from CanonicalKey is a MISMATCH, not a failure. A stored URL
 // that cannot be canonicalised — truncated, carrying credentials, or
@@ -730,9 +786,19 @@ func createConfigDir(dir string) error {
 //     filesystems fails — and the fallback everyone reaches for then is
 //     a copy, which is exactly the non-atomic write this avoids.
 //
-//   - The mode is set explicitly BEFORE any bytes are written, so the
-//     token never exists on disk in a file anyone else could read, not
-//     even for the length of one write call.
+//   - The mode is set explicitly, and the reason is that A UMASK
+//     REMOVES BITS. A create mode is masked by the process umask, so it
+//     is a ceiling rather than a setting: under umask 0277 a file asked
+//     for at 0600 arrives at 0400 and this package cannot read back what
+//     it just wrote. The reason once given here — that the token never
+//     exists on disk in a file anyone else could read — is true and
+//     holds WITHOUT this line, because the temp file is created at 0600
+//     already. Two comments in this package gave two different reasons
+//     for one line, and only one of them was the reason.
+//
+//   - A STRICTER existing mode is kept rather than widened. See
+//     fileModeFor: the load path calls a narrower mode nobody else's
+//     business, and the save used to undo it on the next login.
 //
 //   - Sync before rename. Rename is atomic with respect to the
 //     directory, but the file's own contents are not on the disk until
@@ -768,6 +834,17 @@ func createConfigDir(dir string) error {
 //     crash, a signal or any timing at all. Reproduced directly: 26
 //     bytes of real config to 0, in a directory chmod'ed 0500, while
 //     the atomic path returned "permission denied" and changed nothing.
+//
+//     WHAT THE RENAME COSTS, stated rather than discovered. If the
+//     config path is a SYMLINK, the rename replaces the link itself and
+//     the file it pointed at keeps the old token. That is inherent to
+//     renaming over a target and there is no version of an atomic write
+//     that avoids it — following the link first would reintroduce the
+//     truncate this exists to prevent. The person it affects is the one
+//     who symlinked their config into a synced dotfiles directory, and
+//     who is therefore left with a stale credential sitting in the
+//     directory they sync. Worth knowing about; not worth trading the
+//     property above for.
 func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 	if strings.TrimSpace(string(token)) == "" {
 		return errors.New(
@@ -829,9 +906,9 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 
 	// Explicit, and not redundant beside the mode the temp file was
 	// created with: a create mode is masked by the process umask, so it
-	// is a ceiling rather than a setting. This is the line that makes the
-	// mode exactly 0600 whatever the umask is — in both directions.
-	if err := chmodFile(f); err != nil {
+	// is a ceiling rather than a setting. This is the line that makes
+	// the mode exact whatever the umask is — in both directions.
+	if err := chmodFile(f, fileModeFor(c.Path)); err != nil {
 		return fmt.Errorf("could not restrict %s to its owner: %w", tmp, err)
 	}
 	if _, err := f.Write(data); err != nil {
@@ -858,6 +935,40 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 	c.Token = token
 	c.APIURL = issuedAgainst
 	return nil
+}
+
+// configFileMode is what this package writes a config file as: readable
+// and writable by its owner and by nobody else.
+const configFileMode os.FileMode = 0o600
+
+// fileModeFor returns the mode the file at path should be written with:
+// configFileMode, unless the file already there is STRICTER, in which
+// case that mode is kept.
+//
+// The load path warns about a file anyone else can read and deliberately
+// says nothing about one that is narrower than this package would write
+// — a user who tightened their own config has done nothing wrong. The
+// next save then widened it straight back, so the tightening survived
+// exactly as far as the next login.
+//
+// Two limits on "stricter", and both are there to stop this becoming a
+// way to write a file nobody wants. A WIDER mode is not preserved: the
+// file is being replaced, and 0600 is what it should be. And a mode with
+// no owner-read bit is not a stricter setting but a file this package
+// could never read back, which is not something to reproduce on purpose.
+//
+// A symlink is followed here, as it is everywhere else in this call —
+// see Save on what a rename does to one.
+func fileModeFor(path string) os.FileMode {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return configFileMode
+	}
+	perm := fi.Mode().Perm()
+	if perm&^configFileMode == 0 && perm&0o400 != 0 {
+		return perm
+	}
+	return configFileMode
 }
 
 // tempPattern is the name the temp file is created under, and the
