@@ -36,12 +36,13 @@ var walkIDs = []string{
 // answered builds a manifest row, and it is THE ONLY PLACE IN THIS
 // PACKAGE ONE IS BUILT.
 //
-// The row's shape is expected to change — a per-check status carrying a
-// reason and a kind, rather than a flag and a string — and a change with
-// one site is mechanical while the same change spread over three is an
-// invitation to update two of them. Nothing in the compiler notices a
-// second literal appearing, so a guard in this package's own suite reads
-// the source and asserts there is one.
+// The row's shape DID change — from a flag and a string to a per-id
+// status carrying a decline's kind and reason — and having one site made
+// that mechanical where the same change spread over three would have
+// been an invitation to update two of them. Nothing in the compiler
+// notices a second literal appearing, so a guard in this package's own
+// suite reads the source and asserts there is one. It earned its keep on
+// the first change it met.
 //
 // Every row this walk produces reports as having run, because the walk
 // always runs: it is not a check the engine registers and there is no
@@ -50,7 +51,7 @@ var walkIDs = []string{
 // that simply omitted a check nobody could see would say the same
 // nothing as a report of a clean project.
 func answered(id string) check.Ran {
-	return check.Ran{CheckID: id, Ran: true}
+	return check.Ran{CheckID: id}
 }
 
 func walkManifest() check.Manifest {

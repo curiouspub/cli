@@ -13,7 +13,7 @@ import (
 func everyDeclaredID() Manifest {
 	var m Manifest
 	for _, id := range DeclaredOrder() {
-		m = append(m, Ran{CheckID: id, Ran: true})
+		m = append(m, Ran{CheckID: id})
 	}
 	return m
 }
@@ -94,7 +94,7 @@ func TestCombineRefusesAnIncompleteUniverse(t *testing.T) {
 // list, which in practice is a mistyped id and reaches the user as the
 // name of a check they have never heard of.
 func TestCombineRefusesAnIDNobodyDeclared(t *testing.T) {
-	m := append(everyDeclaredID(), Ran{CheckID: "lockfle", Ran: true})
+	m := append(everyDeclaredID(), Ran{CheckID: "lockfle"})
 
 	_, err := Combine(Results{Manifest: m})
 	var gap *CoverageError
@@ -222,19 +222,19 @@ func TestCombineDeepCopiesPaths(t *testing.T) {
 func TestCombineIsIndependentOfArgumentOrder(t *testing.T) {
 	early := Results{
 		Manifest: Manifest{
-			{CheckID: IDAstroDep, Ran: true},
-			{CheckID: IDLockfile, Ran: true},
-			{CheckID: IDPagesDir, Ran: true},
-			{CheckID: IDBuildFormat, Ran: true},
+			{CheckID: IDAstroDep},
+			{CheckID: IDLockfile},
+			{CheckID: IDPagesDir},
+			{CheckID: IDBuildFormat},
 		},
 		Findings: []Finding{{CheckID: IDAstroDep, Severity: SeverityWarning, Message: "from the engine"}},
 	}
 	late := Results{
 		Manifest: Manifest{
-			{CheckID: IDLocalhost, Ran: true},
-			{CheckID: IDSymlinks, Ran: true},
-			{CheckID: IDCaseCollision, Ran: true},
-			{CheckID: IDPathCharset, Ran: true},
+			{CheckID: IDLocalhost},
+			{CheckID: IDSymlinks},
+			{CheckID: IDCaseCollision},
+			{CheckID: IDPathCharset},
 		},
 		Findings: []Finding{{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "from the walk"}},
 	}

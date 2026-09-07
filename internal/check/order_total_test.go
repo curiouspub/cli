@@ -79,7 +79,7 @@ func TestFindingComparatorIsTotal(t *testing.T) {
 func TestManifestComparatorIsTotal(t *testing.T) {
 	var placed []placedRan
 	for _, id := range []string{IDAstroDep, IDLockfile, "one", "two", "three"} {
-		placed = append(placed, placedRan{row: Ran{CheckID: id, Ran: true}, arrival: len(placed)})
+		placed = append(placed, placedRan{row: Ran{CheckID: id}, arrival: len(placed)})
 	}
 
 	for i := range placed {
@@ -166,7 +166,7 @@ func TestSortManifestKeepsArrivalOrderPastTheThreshold(t *testing.T) {
 			fmt.Sprintf("undeclared-%02d", i),
 			IDLocalhost,
 		} {
-			m = append(m, Ran{CheckID: id, Ran: true})
+			m = append(m, Ran{CheckID: id})
 		}
 		want = append(want, fmt.Sprintf("undeclared-%02d", i))
 	}

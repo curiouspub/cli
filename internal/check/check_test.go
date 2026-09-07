@@ -120,16 +120,16 @@ func TestAdvisoriesKeepsOrderAndDropsNotes(t *testing.T) {
 // the reason is the only thing standing between a reader and the
 // assumption that silence means a clean result.
 func TestRanRecordsWhyNot(t *testing.T) {
-	ran := Ran{CheckID: IDPagesDir, Ran: true}
-	if !ran.Ran {
+	ran := Ran{CheckID: IDPagesDir}
+	if ran.Status != Answered {
 		t.Error("Ran = false on a row that ran")
 	}
 	if ran.Reason != "" {
 		t.Errorf("Reason = %q on a row that ran, want empty", ran.Reason)
 	}
 
-	skipped := Ran{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"}
-	if skipped.Ran {
+	skipped := Ran{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"}
+	if skipped.Status != Declined {
 		t.Error("Ran = true on a row that did not run")
 	}
 	if skipped.Reason != "couldn't read package.json" {
@@ -143,9 +143,9 @@ func TestRanRecordsWhyNot(t *testing.T) {
 // thing a deterministic report cannot have.
 func TestManifestKeepsDeclaredOrder(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: IDPagesDir, Ran: true},
+		{CheckID: IDAstroDep},
+		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDPagesDir},
 	}
 
 	want := []string{IDAstroDep, IDLockfile, IDPagesDir}
@@ -203,23 +203,23 @@ func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 // project nobody looked at.
 func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: IDPagesDir, Ran: true},
-		{CheckID: IDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: IDAstroDep},
+		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDPagesDir},
+		{CheckID: IDBuildFormat, Status: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
 	}
 
 	want := []Ran{
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: IDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDBuildFormat, Status: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
 	}
-	if got := m.NotRun(); !reflect.DeepEqual(got, want) {
-		t.Errorf("NotRun() = %#v, want %#v", got, want)
+	if got := m.Declines(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Declines() = %#v, want %#v", got, want)
 	}
 
-	full := Manifest{{CheckID: IDAstroDep, Ran: true}, {CheckID: IDLockfile, Ran: true}}
-	if got := full.NotRun(); got != nil {
-		t.Errorf("NotRun() on a full manifest = %#v, want nil", got)
+	full := Manifest{{CheckID: IDAstroDep}, {CheckID: IDLockfile}}
+	if got := full.Declines(); got != nil {
+		t.Errorf("Declines() on a full manifest = %#v, want nil", got)
 	}
 }
 
@@ -345,10 +345,10 @@ func TestSortFindingsKeepsArrivalOrderWithinOneCheck(t *testing.T) {
 // between two runs over one project cannot be diffed.
 func TestSortManifestFollowsTheDeclaredOrder(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDLocalhost, Ran: true},
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDBuildFormat, Ran: true},
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: IDLocalhost},
+		{CheckID: IDAstroDep},
+		{CheckID: IDBuildFormat},
+		{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 	}
 
 	SortManifest(m)

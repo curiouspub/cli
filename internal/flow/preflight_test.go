@@ -82,6 +82,19 @@ func warning(id, message string) check.Finding {
 	return check.Finding{CheckID: id, Severity: check.SeverityWarning, Message: message}
 }
 
+// environmental and byDesign build the two kinds of decline. Callers
+// build rows through these rather than by hand, because a hand-written
+// row that forgets its status reads as a TICK — and a check reported as
+// having answered when it did not is the lie this whole manifest exists
+// to prevent.
+func environmental(id, reason string) check.Ran {
+	return check.Ran{CheckID: id, Status: check.Declined, Kind: check.Environmental, Reason: reason}
+}
+
+func byDesign(id, reason string) check.Ran {
+	return check.Ran{CheckID: id, Status: check.Declined, Kind: check.ByDesign, Reason: reason}
+}
+
 // reportOf builds the validated article the renderer requires, THROUGH
 // THE REAL GATE. Every row in this file therefore renders something a
 // caller could actually have produced — a manifest covering the whole
@@ -102,7 +115,7 @@ func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Ran) check
 			m = append(m, row)
 			continue
 		}
-		m = append(m, check.Ran{CheckID: id, Ran: true})
+		m = append(m, check.Ran{CheckID: id})
 	}
 
 	report, err := check.Combine(check.Results{Findings: findings, Manifest: m})
@@ -323,7 +336,7 @@ func TestPreflightRenderNamesChecksThatDidNotRun(t *testing.T) {
 	r := &recorder{answer: true}
 	report := reportOf(t, []check.Finding{
 		warning(check.IDPagesDir, "Couldn't find src/pages."),
-	}, check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"})
+	}, environmental(check.IDLockfile, "couldn't read package.json"))
 
 	err := RenderPreflight(r, report, 0)
 	if err != nil {
@@ -442,8 +455,8 @@ func TestPreflightRenderIsByteIdenticalAcrossRuns(t *testing.T) {
 		{CheckID: check.IDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
 	}
 	report := reportOf(t, findings,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"},
-		check.Ran{CheckID: check.IDPagesDir, Reason: "couldn't read astro.config"})
+		environmental(check.IDLockfile, "couldn't read package.json"),
+		environmental(check.IDPagesDir, "couldn't read astro.config"))
 
 	run := func() string {
 		r := &recorder{answer: true}
@@ -811,7 +824,7 @@ func TestPreflightRenderAsksAboutChecksThatDidNotRun(t *testing.T) {
 	r := &recorder{answer: true}
 
 	packed, err := gatedDeploy(r, reportOf(t, nil,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+		environmental(check.IDLockfile, "couldn't read package.json")), 0)
 
 	if err != nil {
 		t.Fatalf("error = %v, want nil after the user agreed", err)
@@ -832,7 +845,7 @@ func TestPreflightRenderDeclinedOnANotRunCheckStopsTheDeploy(t *testing.T) {
 	r := &recorder{answer: false}
 
 	packed, err := gatedDeploy(r, reportOf(t, nil,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+		environmental(check.IDLockfile, "couldn't read package.json")), 0)
 
 	if packed {
 		t.Error("the packer ran after the user declined")
@@ -853,7 +866,7 @@ func TestPreflightRenderNonInteractiveRefusesOnANotRunCheck(t *testing.T) {
 	r := &recorder{answerTo: ui.ErrNotInteractive}
 
 	packed, err := gatedDeploy(r, reportOf(t, nil,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+		environmental(check.IDLockfile, "couldn't read package.json")), 0)
 
 	if packed {
 		t.Error("the packer ran with a check nobody could be asked about")
@@ -867,7 +880,7 @@ func TestPreflightRenderNonInteractiveRefusesOnANotRunCheck(t *testing.T) {
 // a not-run check has to compose with the other two states rather than
 // have a rule of its own.
 func TestPreflightRenderNotRunPromptMatrix(t *testing.T) {
-	skipped := check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}
+	skipped := environmental(check.IDLockfile, "couldn't read package.json")
 	warn := warning(check.IDLocalhost, "A development URL is hard-coded.")
 	stop := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
 
@@ -914,7 +927,7 @@ func TestPreflightRenderNotRunPromptMatrix(t *testing.T) {
 func TestPreflightRenderNotRunWithNoReasonSaysSomething(t *testing.T) {
 	r := &recorder{answer: true}
 
-	RenderPreflight(r, reportOf(t, nil, check.Ran{CheckID: check.IDAstroDep}), 0)
+	RenderPreflight(r, reportOf(t, nil, check.Ran{CheckID: check.IDAstroDep, Status: check.Declined}), 0)
 
 	out := r.out.String()
 	if strings.Contains(out, ": \n") || strings.HasSuffix(strings.TrimRight(out, "\n"), ":") {

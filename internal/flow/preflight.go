@@ -72,7 +72,7 @@ func RenderPreflight(p Prompter, report check.Report, elapsed time.Duration) err
 	// when it could not look, so from out here those two are the same
 	// silence — and a skipped check rendered as a tick is a lie the user
 	// will act on.
-	notRun := manifest.NotRun()
+	notRun := manifest.Declines()
 	for _, row := range notRun {
 		p.Step("%s", skipped(row))
 	}

@@ -119,11 +119,16 @@ func Run(checks []Check, fsys FS, root string) check.Results {
 
 		findings = append(findings, result.Findings...)
 		for _, id := range c.IDs {
-			manifest = append(manifest, check.Ran{
-				CheckID: id,
-				Ran:     result.NotRun == "",
-				Reason:  result.NotRun,
-			})
+			if result.NotRun != "" {
+				manifest = append(manifest, check.Ran{
+					CheckID: id,
+					Status:  check.Declined,
+					Kind:    check.Environmental,
+					Reason:  result.NotRun,
+				})
+				continue
+			}
+			manifest = append(manifest, check.Ran{CheckID: id})
 		}
 	}
 

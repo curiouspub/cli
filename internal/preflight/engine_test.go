@@ -81,7 +81,7 @@ func render(r check.Results) string {
 		fmt.Fprintf(&b, "finding %s %s %q %v\n", f.CheckID, f.Severity, f.Message, f.Paths)
 	}
 	for _, row := range r.Manifest {
-		fmt.Fprintf(&b, "manifest %s ran=%v reason=%q\n", row.CheckID, row.Ran, row.Reason)
+		fmt.Fprintf(&b, "manifest %s ran=%v reason=%q\n", row.CheckID, row.Status, row.Reason)
 	}
 	return b.String()
 }
@@ -297,15 +297,15 @@ func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 			got, wantIDs)
 	}
 	for _, row := range manifest {
-		if !row.Ran {
+		if row.Status != check.Answered {
 			t.Errorf("%s: Ran = false on a clean project, want true", row.CheckID)
 		}
 		if row.Reason != "" {
 			t.Errorf("%s: Reason = %q on a check that ran, want empty", row.CheckID, row.Reason)
 		}
 	}
-	if got := manifest.NotRun(); got != nil {
-		t.Errorf("NotRun() = %+v, want nothing", got)
+	if got := manifest.Declines(); got != nil {
+		t.Errorf("Declines() = %+v, want nothing", got)
 	}
 }
 
@@ -356,8 +356,8 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 	if !found {
 		t.Fatalf("manifest = %v, want a row for %s", manifestIDs(manifest), check.IDLockfile)
 	}
-	if lockfile.Ran {
-		t.Errorf("%s: Ran = true, want false — it could not look", check.IDLockfile)
+	if lockfile.Status != check.Declined {
+		t.Errorf("%s: status = %v, want declined — it could not look", check.IDLockfile, lockfile.Status)
 	}
 	if !strings.Contains(lockfile.Reason, "package.json") {
 		t.Errorf("%s: Reason = %q, want it to name package.json", check.IDLockfile, lockfile.Reason)
@@ -413,8 +413,8 @@ func TestEngineKeepsWhatItWasNotExpecting(t *testing.T) {
 		t.Errorf("findings = %v, want %v — an undeclared id sorts last but is never dropped",
 			got, want)
 	}
-	if rows := manifest.NotRun(); len(rows) != 1 || rows[0].CheckID != check.IDLockfile {
-		t.Errorf("NotRun() = %+v, want the lockfile row — a finding does not make a check ran",
+	if rows := manifest.Declines(); len(rows) != 1 || rows[0].CheckID != check.IDLockfile {
+		t.Errorf("Declines() = %+v, want the lockfile row — a finding does not make a check ran",
 			rows)
 	}
 }
@@ -650,7 +650,7 @@ func TestCombineRefusesASecondProducerClaimingAnEngineCheck(t *testing.T) {
 		newStub(&journal, Result{}, check.IDAstroDep).check(),
 	}, OSFileSystem{}, engineFixture(t, "clean"))
 
-	imposter := check.Results{Manifest: check.Manifest{{CheckID: check.IDAstroDep, Ran: true}}}
+	imposter := check.Results{Manifest: check.Manifest{{CheckID: check.IDAstroDep}}}
 
 	if _, err := check.Combine(engineOutput, imposter); err == nil {
 		t.Fatal("a second producer claimed a check the engine had already run, and it was accepted")
@@ -683,8 +683,8 @@ func TestEngineNilRunReportsThatItDidNotRun(t *testing.T) {
 		t.Fatalf("manifest = %v, want one row", manifestIDs(res.Manifest))
 	}
 	row := res.Manifest[0]
-	if row.Ran {
-		t.Errorf("%s: Ran = true, but nothing was executed", row.CheckID)
+	if row.Status != check.Declined {
+		t.Errorf("%s: reported as answered, but nothing was executed", row.CheckID)
 	}
 	if !strings.Contains(row.Reason, check.IDAstroDep) {
 		t.Errorf("%s: Reason = %q, want it to name the check that was left unwired",
@@ -747,8 +747,8 @@ func TestEngineStatsTheRootBeforeAnythingElse(t *testing.T) {
 				t.Fatalf("manifest = %v, want a row per requested id %v", got, wantIDs)
 			}
 			for _, row := range res.Manifest {
-				if row.Ran {
-					t.Errorf("%s: Ran = true against an unusable root", row.CheckID)
+				if row.Status != check.Declined {
+					t.Errorf("%s: reported as answered against an unusable root", row.CheckID)
 				}
 				if row.Reason == "" {
 					t.Errorf("%s: Reason is empty; a skipped check with no reason renders "+
@@ -773,7 +773,7 @@ func TestEngineStatsTheRootThroughTheFilesystemItWasGiven(t *testing.T) {
 	if len(journal) != 1 {
 		t.Fatalf("the check did not run against a good root: %v", journal)
 	}
-	if len(res.Manifest) != 1 || !res.Manifest[0].Ran {
+	if len(res.Manifest) != 1 || res.Manifest[0].Status != check.Answered {
 		t.Errorf("manifest = %+v, want the check reported as having run", res.Manifest)
 	}
 }

@@ -38,9 +38,9 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 			{CheckID: IDCaseCollision, Severity: SeverityWarning, Message: "two names that collide"},
 		},
 		Manifest: Manifest{
-			{CheckID: IDSymlinks, Ran: true},
-			{CheckID: IDCaseCollision, Ran: true},
-			{CheckID: IDPathCharset, Ran: true},
+			{CheckID: IDSymlinks},
+			{CheckID: IDCaseCollision},
+			{CheckID: IDPathCharset},
 		},
 	}
 	engine := Results{
@@ -50,11 +50,11 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "a development URL"},
 		},
 		Manifest: Manifest{
-			{CheckID: IDAstroDep, Ran: true},
-			{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-			{CheckID: IDPagesDir, Ran: true},
-			{CheckID: IDBuildFormat, Ran: true},
-			{CheckID: IDLocalhost, Ran: true},
+			{CheckID: IDAstroDep},
+			{CheckID: IDLockfile, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+			{CheckID: IDPagesDir},
+			{CheckID: IDBuildFormat},
+			{CheckID: IDLocalhost},
 		},
 	}
 
@@ -89,10 +89,10 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 // MUTATION: keep the first row and drop the rest. Reds here; every other
 // row in this file passes, because none of them has a duplicate.
 func TestCombineRefusesTwoProducersClaimingOneCheck(t *testing.T) {
-	a := Results{Manifest: Manifest{{CheckID: IDAstroDep, Ran: true}}}
+	a := Results{Manifest: Manifest{{CheckID: IDAstroDep}}}
 	b := Results{Manifest: Manifest{
-		{CheckID: IDLockfile, Ran: true},
-		{CheckID: IDAstroDep, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: IDLockfile},
+		{CheckID: IDAstroDep, Status: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 	}}
 
 	_, err := Combine(a, b)
@@ -120,12 +120,12 @@ func TestCombineRefusesTwoProducersClaimingOneCheck(t *testing.T) {
 // MUTATION: return on the first duplicate found. Reds on the length.
 func TestCombineReportsEveryDuplicateAtOnce(t *testing.T) {
 	a := Results{Manifest: Manifest{
-		{CheckID: IDLocalhost, Ran: true},
-		{CheckID: IDAstroDep, Ran: true},
+		{CheckID: IDLocalhost},
+		{CheckID: IDAstroDep},
 	}}
 	b := Results{Manifest: Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDLocalhost, Ran: true},
+		{CheckID: IDAstroDep},
+		{CheckID: IDLocalhost},
 	}}
 
 	_, err := Combine(a, b)
@@ -147,8 +147,8 @@ func TestCombineReportsEveryDuplicateAtOnce(t *testing.T) {
 // would let the sloppier case through.
 func TestCombineRefusesADuplicateInsideOneProducer(t *testing.T) {
 	one := Results{Manifest: Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDAstroDep, Ran: true},
+		{CheckID: IDAstroDep},
+		{CheckID: IDAstroDep},
 	}}
 
 	if _, err := Combine(one); err == nil {
@@ -194,14 +194,14 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 		// about what Combine does to its argument, and a manifest that
 		// did not pass the gate would never reach the sort at all.
 		Manifest: Manifest{
-			{CheckID: IDLocalhost, Ran: true},
-			{CheckID: IDAstroDep, Ran: true},
-			{CheckID: IDLockfile, Ran: true},
-			{CheckID: IDPagesDir, Ran: true},
-			{CheckID: IDBuildFormat, Ran: true},
-			{CheckID: IDSymlinks, Ran: true},
-			{CheckID: IDCaseCollision, Ran: true},
-			{CheckID: IDPathCharset, Ran: true},
+			{CheckID: IDLocalhost},
+			{CheckID: IDAstroDep},
+			{CheckID: IDLockfile},
+			{CheckID: IDPagesDir},
+			{CheckID: IDBuildFormat},
+			{CheckID: IDSymlinks},
+			{CheckID: IDCaseCollision},
+			{CheckID: IDPathCharset},
 		},
 	}
 
@@ -230,9 +230,9 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 // MUTATION: return only the missing half. Reds on the unexpected half.
 func TestCoverageGapsReportsBothDirections(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDLocalhost, Ran: true},
-		{CheckID: "typo-in-an-id", Ran: true},
+		{CheckID: IDAstroDep},
+		{CheckID: IDLocalhost},
+		{CheckID: "typo-in-an-id"},
 	}
 
 	missing, unexpected := CoverageGaps(m)
@@ -255,7 +255,7 @@ func TestCoverageGapsReportsBothDirections(t *testing.T) {
 func TestCoverageGapsIsSilentOnAFullManifest(t *testing.T) {
 	var m Manifest
 	for _, id := range DeclaredOrder() {
-		m = append(m, Ran{CheckID: id, Ran: true})
+		m = append(m, Ran{CheckID: id})
 	}
 
 	missing, unexpected := CoverageGaps(m)
