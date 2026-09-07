@@ -72,6 +72,9 @@ func (e *DuplicateCoverageError) Error() string {
 //  2. Coverage, in both directions.
 //  3. Findings under ids nobody claimed.
 //  4. Severities that are not one of the three constants.
+//  5. Findings under an id the manifest says DECLINED. A check that
+//     looked enough to find something answered; a check that declined
+//     has nothing to report.
 //
 // A caller gets the first failure rather than all four. They are not
 // independent — one wiring mistake usually trips several — and a reader
@@ -100,6 +103,10 @@ func Combine(parts ...Results) (Report, error) {
 
 	if undeclared := undeclaredSeverityIDs(findings); len(undeclared) > 0 {
 		return Report{}, &UndeclaredSeverityError{CheckIDs: undeclared}
+	}
+
+	if contradicted := contradictedIDs(findings, manifest); len(contradicted) > 0 {
+		return Report{}, &ContradictedFindingError{CheckIDs: contradicted}
 	}
 
 	SortFindings(findings)
@@ -131,6 +138,34 @@ func unclaimedIDs(findings []Finding, m Manifest) []string {
 	var out []string
 	for _, f := range findings {
 		if !claimed[f.CheckID] && !seen[f.CheckID] {
+			seen[f.CheckID] = true
+			out = append(out, f.CheckID)
+		}
+	}
+	sortIDs(out)
+	return out
+}
+
+// contradictedIDs returns every check id that has a finding AND a
+// manifest row saying it declined, deterministically ordered.
+//
+// It is a different question from unclaimedIDs, which is why both exist:
+// that one asks whether anybody claimed the id at all, this one asks
+// whether the producer that claimed it says it answered. A report can
+// pass the first and fail this one, and the failure is a report
+// contradicting itself in adjacent lines.
+func contradictedIDs(findings []Finding, m Manifest) []string {
+	declined := make(map[string]bool, len(m))
+	for _, row := range m {
+		if row.Outcome == Declined {
+			declined[row.CheckID] = true
+		}
+	}
+
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range findings {
+		if declined[f.CheckID] && !seen[f.CheckID] {
 			seen[f.CheckID] = true
 			out = append(out, f.CheckID)
 		}
@@ -187,6 +222,14 @@ func duplicateIDs(m Manifest) []string {
 // This is the assertion that makes several producers safe. Each one can
 // only see its own coverage; only the union can be compared against what
 // was supposed to be covered.
+//
+// IT IS A LAMP, NOT A DOOR. Combine calls it and refuses on failure, so
+// the gate is the answer and a caller reaching for this is asking about
+// a manifest that has NOT passed the gate. That is a legitimate thing to
+// want — a producer diagnosing its own coverage before combining wants
+// exactly this — and the only risk is a reader mistaking it for the
+// enforcement. It is not: nothing downstream is safer because somebody
+// called it.
 func CoverageGaps(m Manifest) (missing, unexpected []string) {
 	covered := make(map[string]bool, len(m))
 	for _, row := range m {

@@ -115,22 +115,22 @@ func TestAdvisoriesKeepsOrderAndDropsNotes(t *testing.T) {
 	}
 }
 
-// TestRanRecordsWhyNot pins the row a manifest exists to carry. A check
+// TestStatusRecordsWhyNot pins the row a manifest exists to carry. A check
 // that ran carries no reason; one that did not carries the reason, and
 // the reason is the only thing standing between a reader and the
 // assumption that silence means a clean result.
-func TestRanRecordsWhyNot(t *testing.T) {
-	ran := Ran{CheckID: IDPagesDir, Ran: true}
-	if !ran.Ran {
-		t.Error("Ran = false on a row that ran")
+func TestStatusRecordsWhyNot(t *testing.T) {
+	ran := Status{CheckID: IDPagesDir}
+	if ran.Outcome != Answered {
+		t.Error("outcome is not answered on a row that answered")
 	}
 	if ran.Reason != "" {
 		t.Errorf("Reason = %q on a row that ran, want empty", ran.Reason)
 	}
 
-	skipped := Ran{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"}
-	if skipped.Ran {
-		t.Error("Ran = true on a row that did not run")
+	skipped := Status{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"}
+	if skipped.Outcome != Declined {
+		t.Error("outcome is not declined on a row that declined")
 	}
 	if skipped.Reason != "couldn't read package.json" {
 		t.Errorf("Reason = %q, want %q", skipped.Reason, "couldn't read package.json")
@@ -143,9 +143,9 @@ func TestRanRecordsWhyNot(t *testing.T) {
 // thing a deterministic report cannot have.
 func TestManifestKeepsDeclaredOrder(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: IDPagesDir, Ran: true},
+		{CheckID: IDAstroDep},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDPagesDir},
 	}
 
 	want := []string{IDAstroDep, IDLockfile, IDPagesDir}
@@ -158,44 +158,25 @@ func TestManifestKeepsDeclaredOrder(t *testing.T) {
 	}
 }
 
-// TestCheckIDsAreStableAndDistinct asserts the literal strings rather
-// than that the constants exist. They are read by a machine surface and
-// quoted in a support answer, so renaming one is a change to something
-// somebody outside this program is keying on — and the exact spelling
-// is the whole of what they get.
-func TestCheckIDsAreStableAndDistinct(t *testing.T) {
-	ids := map[string]string{
-		"IDAstroDep":      IDAstroDep,
-		"IDLockfile":      IDLockfile,
-		"IDPagesDir":      IDPagesDir,
-		"IDBuildFormat":   IDBuildFormat,
-		"IDLocalhost":     IDLocalhost,
-		"IDSymlinks":      IDSymlinks,
-		"IDCaseCollision": IDCaseCollision,
-		"IDPathCharset":   IDPathCharset,
-	}
-	want := map[string]string{
-		"IDAstroDep":      "astro-dep",
-		"IDLockfile":      "lockfile",
-		"IDPagesDir":      "pages-dir",
-		"IDBuildFormat":   "build-format",
-		"IDLocalhost":     "localhost",
-		"IDSymlinks":      "symlinks",
-		"IDCaseCollision": "case-collision",
-		"IDPathCharset":   "path-charset",
-	}
-	if !reflect.DeepEqual(ids, want) {
-		t.Errorf("check ids = %#v, want %#v", ids, want)
-	}
-
-	seen := make(map[string]string, len(ids))
-	for name, id := range ids {
-		if other, clash := seen[id]; clash {
-			t.Errorf("%s and %s share the id %q", name, other, id)
-		}
-		seen[id] = name
-	}
-}
+// THE CHECK-ID SET IS ASSERTED IN internal/guard, not here.
+//
+// A row stood in this place claiming to pin the ids. It compared a
+// hand-written map of the constants against a hand-written map of their
+// values — two transcriptions of one author's belief, which agree with
+// each other by construction. It could see a value change and nothing
+// else: a constant added and left out of both maps was invisible, and
+// neither map was ever compared against the declared universe, which is
+// the list the program actually uses. When a proposed check was retired
+// it caught nothing, and the declared-order rows did.
+//
+// Its replacement reads the constants out of the SOURCE with a type
+// checker and compares them against the compiled program's own declared
+// order — two mechanisms, so one edit cannot satisfy both by agreeing
+// with itself. It also asks a type question rather than a spelling one,
+// so an id named without the usual prefix is still seen.
+//
+// This note is here because a row removed with no pointer is
+// indistinguishable from a row nobody replaced.
 
 // TestManifestNotRunSelectsOnlyTheSkipped asserts the accessor a
 // renderer is meant to use, including that it reports nothing when every
@@ -203,23 +184,23 @@ func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 // project nobody looked at.
 func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: IDPagesDir, Ran: true},
-		{CheckID: IDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: IDAstroDep},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDPagesDir},
+		{CheckID: IDBuildFormat, Outcome: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
 	}
 
-	want := []Ran{
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: IDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
+	want := []Status{
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
+		{CheckID: IDBuildFormat, Outcome: Declined, Kind: Environmental, Reason: "couldn't read astro.config"},
 	}
-	if got := m.NotRun(); !reflect.DeepEqual(got, want) {
-		t.Errorf("NotRun() = %#v, want %#v", got, want)
+	if got := m.Declines(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Declines() = %#v, want %#v", got, want)
 	}
 
-	full := Manifest{{CheckID: IDAstroDep, Ran: true}, {CheckID: IDLockfile, Ran: true}}
-	if got := full.NotRun(); got != nil {
-		t.Errorf("NotRun() on a full manifest = %#v, want nil", got)
+	full := Manifest{{CheckID: IDAstroDep}, {CheckID: IDLockfile}}
+	if got := full.Declines(); got != nil {
+		t.Errorf("Declines() on a full manifest = %#v, want nil", got)
 	}
 }
 
@@ -345,10 +326,10 @@ func TestSortFindingsKeepsArrivalOrderWithinOneCheck(t *testing.T) {
 // between two runs over one project cannot be diffed.
 func TestSortManifestFollowsTheDeclaredOrder(t *testing.T) {
 	m := Manifest{
-		{CheckID: IDLocalhost, Ran: true},
-		{CheckID: IDAstroDep, Ran: true},
-		{CheckID: IDBuildFormat, Ran: true},
-		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: IDLocalhost},
+		{CheckID: IDAstroDep},
+		{CheckID: IDBuildFormat},
+		{CheckID: IDLockfile, Outcome: Declined, Kind: Environmental, Reason: "couldn't read package.json"},
 	}
 
 	SortManifest(m)

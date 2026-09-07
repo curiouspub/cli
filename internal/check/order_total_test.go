@@ -77,9 +77,9 @@ func TestFindingComparatorIsTotal(t *testing.T) {
 // manifest is smaller than the threshold, so no amount of fixture
 // growth would ever expose the gap through sorted output alone.
 func TestManifestComparatorIsTotal(t *testing.T) {
-	var placed []placedRan
+	var placed []placedStatus
 	for _, id := range []string{IDAstroDep, IDLockfile, "one", "two", "three"} {
-		placed = append(placed, placedRan{row: Ran{CheckID: id, Ran: true}, arrival: len(placed)})
+		placed = append(placed, placedStatus{row: Status{CheckID: id}, arrival: len(placed)})
 	}
 
 	for i := range placed {
@@ -87,7 +87,7 @@ func TestManifestComparatorIsTotal(t *testing.T) {
 			if i == j {
 				continue
 			}
-			forward, backward := lessPlacedRan(placed[i], placed[j]), lessPlacedRan(placed[j], placed[i])
+			forward, backward := lessPlacedStatus(placed[i], placed[j]), lessPlacedStatus(placed[j], placed[i])
 			if forward == backward {
 				t.Errorf("less(%d,%d)=%v and less(%d,%d)=%v: %q and %q are unordered",
 					i, j, forward, j, i, backward, placed[i].row.CheckID, placed[j].row.CheckID)
@@ -154,7 +154,7 @@ func TestSortFindingsKeepsArrivalOrderPastTheThreshold(t *testing.T) {
 // a shape that can observe it, and the comparator row above covers the
 // sizes a real manifest reaches.
 //
-// MUTATION: drop the arrival key from lessPlacedRan. Reds here.
+// MUTATION: drop the arrival key from lessPlacedStatus. Reds here.
 func TestSortManifestKeepsArrivalOrderPastTheThreshold(t *testing.T) {
 	n := insertionSortThreshold + 2
 
@@ -166,7 +166,7 @@ func TestSortManifestKeepsArrivalOrderPastTheThreshold(t *testing.T) {
 			fmt.Sprintf("undeclared-%02d", i),
 			IDLocalhost,
 		} {
-			m = append(m, Ran{CheckID: id, Ran: true})
+			m = append(m, Status{CheckID: id})
 		}
 		want = append(want, fmt.Sprintf("undeclared-%02d", i))
 	}

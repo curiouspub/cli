@@ -174,7 +174,7 @@ what passes locally and what passes in CI cannot diverge.
   rows that skip on a missing program, a filesystem feature an account
   cannot use, or a permission the runner does not hold, each of which is
   honest on one platform and a broken environment on another. `make test`
-  therefore runs through `internal/skipcheck`, which prints every skip
+  therefore runs through `tools/skipcheck`, which prints every skip
   with the reason its author wrote, checks it against
   `scripts/expected-skips.txt`, and **fails the run on a skip nobody
   declared**. It passes its arguments through and returns the same exit
@@ -204,9 +204,10 @@ what passes locally and what passes in CI cannot diverge.
 
 ## The guards
 
-Four rules the repo states about itself are tests, so a violation fails
-when it is introduced rather than at review. They live in
-`internal/guard`.
+Six rules the repo states about itself are tests, so a violation fails
+when it is introduced rather than at review. Five live in
+`internal/guard`; the sixth lives beside the value it checks, for the
+reason given under it.
 
 1. **No provider SDK, no telemetry dependency, no auto-updater** —
    checked against the module's real dependency graph, both the package
@@ -233,6 +234,26 @@ when it is introduced rather than at review. They live in
    does not help, because the same reflection reaches the inner field. It
    is a **type** question, not a spelling one, so it asks about
    transitive containment rather than matching how a field was written.
+5. **The exported check ids and the declared universe are one set** —
+   asserted in both directions, and the two sides deliberately come from
+   different mechanisms: the constants are read out of the source by a
+   type checker, the universe is the compiled program's own answer. It
+   replaced a row that compared two hand-written maps, which agreed with
+   each other by construction and never looked at the universe at all.
+   Like guard 4 it asks a **type** question — an exported constant of
+   bare string type — rather than matching a name, so an id spelled
+   without the usual prefix is still seen. The consequence is worth
+   knowing before it surprises anyone: an exported string constant in
+   that package which is not a check id must be given a defined type,
+   which is what every other family of constants there already has.
+6. **The platforms the skip manifest accepts are the legs CI runs** —
+   again both directions, since a platform accepted but never run makes
+   a rule that can only look like coverage, and a leg that runs but is
+   rejected makes a legitimate skip undeclarable. It lives in
+   `tools/skipcheck` rather than with the others because there it reads
+   the real variable; from outside it would have to scrape a slice
+   literal out of the syntax tree, which is a second transcription of
+   the value and the exact defect guard 5 was created to remove.
 
 Each guard fails loudly if it scanned nothing, so none of them can pass
 by looking at an empty set.

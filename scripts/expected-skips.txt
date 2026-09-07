@@ -2,7 +2,7 @@
 #
 # One rule per line: PLATFORMS, package, test. Platforms is a
 # comma-separated list of the operating systems this repository builds
-# for, or an asterisk for all of them. internal/skipcheck reads this file
+# for, or an asterisk for all of them. tools/skipcheck reads this file
 # on every run and keeps no copy of its own, so deleting a line here
 # measurably changes what the suite allows — which is how anyone can
 # check it is really being read.

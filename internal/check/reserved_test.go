@@ -60,7 +60,7 @@ func TestTheReservedIDIsClaimedByNothing(t *testing.T) {
 	}
 
 	missing, unexpected := CoverageGaps(append(everyDeclaredID(),
-		Ran{CheckID: reservedUnclaimedID, Ran: true}))
+		Status{CheckID: reservedUnclaimedID}))
 	if len(missing) != 0 {
 		t.Errorf("missing = %v, want none — the manifest claims the whole universe", missing)
 	}

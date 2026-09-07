@@ -141,12 +141,12 @@ func SortFindings(findings []Finding) {
 // sort starts reordering ties, so a gap here could never be observed
 // through sorted output however the fixture was written — the comparison
 // has to be asserted directly.
-type placedRan struct {
-	row     Ran
+type placedStatus struct {
+	row     Status
 	arrival int
 }
 
-func lessPlacedRan(a, b placedRan) bool {
+func lessPlacedStatus(a, b placedStatus) bool {
 	if ra, rb := Rank(a.row.CheckID), Rank(b.row.CheckID); ra != rb {
 		return ra < rb
 	}
@@ -154,11 +154,11 @@ func lessPlacedRan(a, b placedRan) bool {
 }
 
 func SortManifest(m Manifest) {
-	placed := make([]placedRan, len(m))
+	placed := make([]placedStatus, len(m))
 	for i, row := range m {
-		placed[i] = placedRan{row: row, arrival: i}
+		placed[i] = placedStatus{row: row, arrival: i}
 	}
-	sort.Slice(placed, func(i, j int) bool { return lessPlacedRan(placed[i], placed[j]) })
+	sort.Slice(placed, func(i, j int) bool { return lessPlacedStatus(placed[i], placed[j]) })
 	for i, p := range placed {
 		m[i] = p.row
 	}

@@ -339,7 +339,7 @@ func TestRunRefusesARunThatReachedNoTests(t *testing.T) {
 		t.Fatalf("writing the manifest fixture: %v", err)
 	}
 
-	const self = "github.com/curiouspub/cli/internal/skipcheck"
+	const self = "github.com/curiouspub/cli/tools/skipcheck"
 
 	var nothing bytes.Buffer
 	err := run(manifest, []string{"-count=1", "-run", "NoTestIsCalledThis", self},

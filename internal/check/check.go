@@ -180,7 +180,7 @@ func Advisories(findings []Finding) []Finding {
 	return out
 }
 
-// Ran is one row per check the engine was ASKED to run, whether or not
+// Status is one row per check the engine was ASKED to run, whether or not
 // it produced a finding.
 //
 // It exists to pay for a findings-only stream. A check emits a Finding
@@ -189,10 +189,75 @@ func Advisories(findings []Finding) []Finding {
 // check rendered as a tick is a lie the reader will act on. The
 // distinction is not recoverable from the findings, so it is recorded
 // separately and exactly once.
-type Ran struct {
+type Status struct {
 	CheckID string
-	Ran     bool
-	Reason  string // why not, when Ran is false; empty otherwise
+	Outcome Outcome
+
+	// Kind and Reason describe a decline, and are empty on an answered
+	// row. The reason is written for a person and reaches a surface
+	// verbatim.
+	Kind   DeclineKind
+	Reason string
+}
+
+// Status is what a check had to say about one id: it answered, or it
+// declined.
+//
+// PER ID, not per check, and that is the correction this type carries. A
+// check may cover more than one question off one read — the config check
+// answers where the pages live and gives up on the build format whenever
+// the value is built at run time — and a single flag for the whole check
+// reported both as looked-at. The row the manifest exists for was
+// therefore wrong about exactly the case that motivated it.
+type Outcome int
+
+const (
+	// Answered is the zero value. A row built without a status reads as
+	// a tick, which is the shape this program calls a lie when it is
+	// wrong, and it is tolerable HERE because rows are constructed in
+	// two places — the engine, from a check's own per-id declines, and
+	// the walk, at a single site its own suite guards — rather than at
+	// every emission point the way a finding's severity is.
+	Answered Outcome = iota
+	Declined
+)
+
+// DeclineKind decides what a decline COSTS. It is not a label: the two
+// kinds are shown differently and charged differently, and collapsing
+// them would mean picking one price for both.
+type DeclineKind int
+
+const (
+	// Environmental — something OUTSIDE the check stopped it looking. An
+	// unreadable package.json, a root that is not a directory. Something
+	// is wrong that the user can see and may be able to fix, so it joins
+	// the question the surface asks and refuses when there is nobody to
+	// ask. It is the zero value deliberately: an unset kind is then read
+	// at the higher price, which is the safe direction.
+	Environmental DeclineKind = iota
+
+	// ByDesign — the check LOOKED and chose not to answer, because
+	// answering would have meant guessing.
+	//
+	// It renders below advisory and asks nothing, and that is the
+	// standing criterion holding through the manifest: an advisory names
+	// something the user can act on or observe, or it does not fire. A
+	// check that declined because a config builds its value at run time
+	// is naming nothing anybody did and nothing anybody can change — it
+	// is a fact kept for a caller that asks for it, and shown by no
+	// surface by default.
+	ByDesign
+)
+
+// Decline is why and how a check did not answer one id.
+//
+// It is one type rather than a pair of fields on the producer's side and
+// another pair on the row's, because two homes for one fact diverge —
+// and this fact is read by a renderer that charges different prices for
+// its two values.
+type Decline struct {
+	Kind   DeclineKind
+	Reason string
 }
 
 // Manifest is ordered and complete: one row per check id the engine was
@@ -202,16 +267,33 @@ type Ran struct {
 // caller of this type wants and renders in a different order on every
 // run, and the report has to be byte-identical across two runs over one
 // project.
-type Manifest []Ran
+type Manifest []Status
 
-// NotRun returns the rows for checks that did not run. A renderer reads
-// not-run from HERE and never from the absence of a finding, which is
-// the one mistake this type exists to make impossible: under a
+// Declines returns every row that did not answer, in manifest order. A
+// renderer reads this from HERE and never from the absence of a finding,
+// which is the one mistake this type exists to make impossible: under a
 // findings-only stream the two look identical from the outside.
-func (m Manifest) NotRun() []Ran {
-	var out []Ran
+func (m Manifest) Declines() []Status {
+	var out []Status
 	for _, row := range m {
-		if !row.Ran {
+		if row.Outcome == Declined {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// DeclinesOfKind returns the declines of one kind, in manifest order.
+//
+// The split is here rather than at each surface so that what a decline
+// COSTS is decided once. A surface asking "which of these do I put in
+// front of somebody" is asking a question with one right answer, and two
+// surfaces answering it separately is how they come to disagree about
+// the same row.
+func (m Manifest) DeclinesOfKind(kind DeclineKind) []Status {
+	var out []Status
+	for _, row := range m {
+		if row.Outcome == Declined && row.Kind == kind {
 			out = append(out, row)
 		}
 	}

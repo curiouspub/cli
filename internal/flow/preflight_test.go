@@ -82,6 +82,19 @@ func warning(id, message string) check.Finding {
 	return check.Finding{CheckID: id, Severity: check.SeverityWarning, Message: message}
 }
 
+// environmental and byDesign build the two kinds of decline. Callers
+// build rows through these rather than by hand, because a hand-written
+// row that forgets its status reads as a TICK — and a check reported as
+// having answered when it did not is the lie this whole manifest exists
+// to prevent.
+func environmental(id, reason string) check.Status {
+	return check.Status{CheckID: id, Outcome: check.Declined, Kind: check.Environmental, Reason: reason}
+}
+
+func byDesign(id, reason string) check.Status {
+	return check.Status{CheckID: id, Outcome: check.Declined, Kind: check.ByDesign, Reason: reason}
+}
+
 // reportOf builds the validated article the renderer requires, THROUGH
 // THE REAL GATE. Every row in this file therefore renders something a
 // caller could actually have produced — a manifest covering the whole
@@ -89,9 +102,9 @@ func warning(id, message string) check.Finding {
 //
 // A helper that assembled a Report directly would be a second door, and
 // the whole point of the type is that there is one.
-func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Ran) check.Report {
+func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Status) check.Report {
 	t.Helper()
-	skipped := map[string]check.Ran{}
+	skipped := map[string]check.Status{}
 	for _, row := range notRun {
 		skipped[row.CheckID] = row
 	}
@@ -102,7 +115,7 @@ func reportOf(t *testing.T, findings []check.Finding, notRun ...check.Ran) check
 			m = append(m, row)
 			continue
 		}
-		m = append(m, check.Ran{CheckID: id, Ran: true})
+		m = append(m, check.Status{CheckID: id})
 	}
 
 	report, err := check.Combine(check.Results{Findings: findings, Manifest: m})
@@ -323,7 +336,7 @@ func TestPreflightRenderNamesChecksThatDidNotRun(t *testing.T) {
 	r := &recorder{answer: true}
 	report := reportOf(t, []check.Finding{
 		warning(check.IDPagesDir, "Couldn't find src/pages."),
-	}, check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"})
+	}, environmental(check.IDLockfile, "couldn't read package.json"))
 
 	err := RenderPreflight(r, report, 0)
 	if err != nil {
@@ -441,9 +454,14 @@ func TestPreflightRenderIsByteIdenticalAcrossRuns(t *testing.T) {
 		warning(check.IDBuildFormat, "build.format will not produce routable URLs."),
 		{CheckID: check.IDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
 	}
+	// The declines sit on ids that carry NO finding, which the gate now
+	// requires: a check that found something answered, so a finding and
+	// a decline about one id is a report contradicting itself. The
+	// fixture used to decline pages-dir while carrying a note under it,
+	// and the fifth enforcement refuses exactly that.
 	report := reportOf(t, findings,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"},
-		check.Ran{CheckID: check.IDPagesDir, Reason: "couldn't read astro.config"})
+		environmental(check.IDLockfile, "couldn't read package.json"),
+		environmental(check.IDSymlinks, "couldn't read the project directory"))
 
 	run := func() string {
 		r := &recorder{answer: true}
@@ -811,7 +829,7 @@ func TestPreflightRenderAsksAboutChecksThatDidNotRun(t *testing.T) {
 	r := &recorder{answer: true}
 
 	packed, err := gatedDeploy(r, reportOf(t, nil,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+		environmental(check.IDLockfile, "couldn't read package.json")), 0)
 
 	if err != nil {
 		t.Fatalf("error = %v, want nil after the user agreed", err)
@@ -832,7 +850,7 @@ func TestPreflightRenderDeclinedOnANotRunCheckStopsTheDeploy(t *testing.T) {
 	r := &recorder{answer: false}
 
 	packed, err := gatedDeploy(r, reportOf(t, nil,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+		environmental(check.IDLockfile, "couldn't read package.json")), 0)
 
 	if packed {
 		t.Error("the packer ran after the user declined")
@@ -853,7 +871,7 @@ func TestPreflightRenderNonInteractiveRefusesOnANotRunCheck(t *testing.T) {
 	r := &recorder{answerTo: ui.ErrNotInteractive}
 
 	packed, err := gatedDeploy(r, reportOf(t, nil,
-		check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}), 0)
+		environmental(check.IDLockfile, "couldn't read package.json")), 0)
 
 	if packed {
 		t.Error("the packer ran with a check nobody could be asked about")
@@ -867,7 +885,7 @@ func TestPreflightRenderNonInteractiveRefusesOnANotRunCheck(t *testing.T) {
 // a not-run check has to compose with the other two states rather than
 // have a rule of its own.
 func TestPreflightRenderNotRunPromptMatrix(t *testing.T) {
-	skipped := check.Ran{CheckID: check.IDLockfile, Reason: "couldn't read package.json"}
+	skipped := environmental(check.IDLockfile, "couldn't read package.json")
 	warn := warning(check.IDLocalhost, "A development URL is hard-coded.")
 	stop := hardStop(check.IDAstroDep, "This doesn't look like an Astro project.")
 
@@ -914,7 +932,7 @@ func TestPreflightRenderNotRunPromptMatrix(t *testing.T) {
 func TestPreflightRenderNotRunWithNoReasonSaysSomething(t *testing.T) {
 	r := &recorder{answer: true}
 
-	RenderPreflight(r, reportOf(t, nil, check.Ran{CheckID: check.IDAstroDep}), 0)
+	RenderPreflight(r, reportOf(t, nil, check.Status{CheckID: check.IDAstroDep, Outcome: check.Declined}), 0)
 
 	out := r.out.String()
 	if strings.Contains(out, ": \n") || strings.HasSuffix(strings.TrimRight(out, "\n"), ":") {
@@ -1117,5 +1135,105 @@ func TestPreflightRenderPrefersAnAuthoredHeadline(t *testing.T) {
 	out := r.out.String()
 	if !strings.Contains(out, warn.What) {
 		t.Errorf("output does not carry the authored headline %q:\n%s", warn.What, out)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The two kinds of decline cost different things
+// ---------------------------------------------------------------------
+
+// TestPreflightRenderKeepsAByDesignDeclineOutOfSight. A check that
+// looked and chose not to guess is naming nothing the user did and
+// nothing they can change, so it renders below advisory: shown by no
+// surface by default, asked about by nothing, and still present in the
+// structured result for a caller that wants it.
+//
+// That is the standing criterion holding through the manifest — an
+// advisory names something the user can act on or observe, or it does
+// not fire — and the alternative is a deploy that stops to ask about a
+// config containing a template literal.
+//
+// MUTATION (required): make ByDesign behave as Environmental. This row
+// reds on the prompt count and on the output. MUST NOT MOVE: every
+// environmental row below and above.
+func TestPreflightRenderKeepsAByDesignDeclineOutOfSight(t *testing.T) {
+	r := &recorder{answer: true}
+	report := reportOf(t, nil,
+		byDesign(check.IDBuildFormat, "the config builds this value at run time"))
+
+	packed, err := gatedDeploy(r, report, 0)
+
+	if err != nil || !packed {
+		t.Fatalf("packed = %v, err = %v, want the deploy to carry on", packed, err)
+	}
+	if len(r.prompts) != 0 {
+		t.Errorf("prompts = %v, want none — nothing here is anybody's decision", r.prompts)
+	}
+	if r.out.Len() != 0 {
+		t.Errorf("output = %q, want silence", r.out.String())
+	}
+
+	// Kept, not discarded: a caller that asks gets it.
+	found := false
+	for _, row := range report.Manifest() {
+		if row.CheckID == check.IDBuildFormat {
+			found = true
+			if row.Outcome != check.Declined || row.Kind != check.ByDesign {
+				t.Errorf("row = %+v, want a by-design decline", row)
+			}
+			if row.Reason == "" {
+				t.Error("the reason was dropped; the whole point of keeping the row is the reason")
+			}
+		}
+	}
+	if !found {
+		t.Error("the by-design row is not in the report at all")
+	}
+}
+
+// TestPreflightRenderNonInteractiveProceedsOnAByDesignDecline. The other
+// half of "no prompt": with nobody to ask, there is still nothing to
+// ask, so the deploy is not refused. An environmental decline in the
+// same position refuses, and the row below asserts the pair together.
+func TestPreflightRenderNonInteractiveProceedsOnAByDesignDecline(t *testing.T) {
+	r := &recorder{answerTo: ui.ErrNotInteractive}
+
+	packed, err := gatedDeploy(r, reportOf(t, nil,
+		byDesign(check.IDBuildFormat, "the config builds this value at run time")), 0)
+
+	if err != nil {
+		t.Errorf("error = %#v, want nil — there was no question to fail to ask", err)
+	}
+	if !packed {
+		t.Error("the deploy was refused over something nobody can act on")
+	}
+}
+
+// TestPreflightRenderChargesTheTwoKindsDifferently is the pair in one
+// report, which is the only place the distinction can be seen working
+// rather than asserted twice. One question, about the environmental one
+// only; the by-design one appears nowhere.
+func TestPreflightRenderChargesTheTwoKindsDifferently(t *testing.T) {
+	r := &recorder{answer: true}
+
+	err := RenderPreflight(r, reportOf(t, nil,
+		environmental(check.IDLockfile, "couldn't read package.json"),
+		byDesign(check.IDBuildFormat, "the config builds this value at run time")), 0)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(r.prompts) != 1 {
+		t.Fatalf("prompts = %d %v, want one, covering the environmental decline",
+			len(r.prompts), r.prompts)
+	}
+	out := r.out.String()
+	if !strings.Contains(out, check.IDLockfile) {
+		t.Errorf("output does not name the environmental decline:\n%s", out)
+	}
+	for _, hidden := range []string{check.IDBuildFormat, "builds this value at run time"} {
+		if strings.Contains(out, hidden) {
+			t.Errorf("output carries the by-design decline (%q):\n%s", hidden, out)
+		}
 	}
 }

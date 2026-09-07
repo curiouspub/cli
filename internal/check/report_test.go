@@ -13,7 +13,7 @@ import (
 func everyDeclaredID() Manifest {
 	var m Manifest
 	for _, id := range DeclaredOrder() {
-		m = append(m, Ran{CheckID: id, Ran: true})
+		m = append(m, Status{CheckID: id})
 	}
 	return m
 }
@@ -94,7 +94,7 @@ func TestCombineRefusesAnIncompleteUniverse(t *testing.T) {
 // list, which in practice is a mistyped id and reaches the user as the
 // name of a check they have never heard of.
 func TestCombineRefusesAnIDNobodyDeclared(t *testing.T) {
-	m := append(everyDeclaredID(), Ran{CheckID: "lockfle", Ran: true})
+	m := append(everyDeclaredID(), Status{CheckID: "lockfle"})
 
 	_, err := Combine(Results{Manifest: m})
 	var gap *CoverageError
@@ -222,19 +222,19 @@ func TestCombineDeepCopiesPaths(t *testing.T) {
 func TestCombineIsIndependentOfArgumentOrder(t *testing.T) {
 	early := Results{
 		Manifest: Manifest{
-			{CheckID: IDAstroDep, Ran: true},
-			{CheckID: IDLockfile, Ran: true},
-			{CheckID: IDPagesDir, Ran: true},
-			{CheckID: IDBuildFormat, Ran: true},
+			{CheckID: IDAstroDep},
+			{CheckID: IDLockfile},
+			{CheckID: IDPagesDir},
+			{CheckID: IDBuildFormat},
 		},
 		Findings: []Finding{{CheckID: IDAstroDep, Severity: SeverityWarning, Message: "from the engine"}},
 	}
 	late := Results{
 		Manifest: Manifest{
-			{CheckID: IDLocalhost, Ran: true},
-			{CheckID: IDSymlinks, Ran: true},
-			{CheckID: IDCaseCollision, Ran: true},
-			{CheckID: IDPathCharset, Ran: true},
+			{CheckID: IDLocalhost},
+			{CheckID: IDSymlinks},
+			{CheckID: IDCaseCollision},
+			{CheckID: IDPathCharset},
 		},
 		Findings: []Finding{{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "from the walk"}},
 	}
@@ -282,8 +282,91 @@ func TestReportAccessorsHandBackTheirOwnSlices(t *testing.T) {
 	}
 
 	rows := report.Manifest()
-	rows[0] = Ran{CheckID: "clobbered"}
+	rows[0] = Status{CheckID: "clobbered"}
 	if report.Manifest()[0].CheckID != IDAstroDep {
 		t.Errorf("a caller overwriting its copy changed the report: %v", ids(report.Manifest()))
+	}
+}
+
+// TestCombineRefusesAFindingUnderADeclinedID is the fifth enforcement,
+// and it closes a contradiction the other four permit by construction.
+//
+//	Skipped lockfile: couldn't read package.json
+//	lockfile is stale
+//
+// Two adjacent lines about one id, disagreeing about whether anybody
+// looked. Claimed-ids allows exactly this, because the id IS claimed —
+// the row is there, it simply says the check declined.
+//
+// A check that looked enough to find something ANSWERED. A check that
+// declined has nothing to report. There is no third case, and this is
+// where that becomes true rather than hoped.
+//
+// MUTATION: remove the enforcement. Reds here.
+// MUST NOT MOVE: the four rows above — a duplicate, a coverage gap, an
+// unclaimed finding and an undeclared severity each still red on their
+// own enforcement and on nothing else.
+func TestCombineRefusesAFindingUnderADeclinedID(t *testing.T) {
+	m := everyDeclaredID()
+	for i := range m {
+		if m[i].CheckID == IDLockfile {
+			m[i] = Status{
+				CheckID: IDLockfile,
+				Outcome: Declined,
+				Kind:    Environmental,
+				Reason:  "couldn't read package.json",
+			}
+		}
+	}
+
+	_, err := Combine(Results{
+		Manifest: m,
+		Findings: []Finding{
+			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "answered, fine"},
+			{CheckID: IDLockfile, Severity: SeverityWarning, Message: "lockfile is stale"},
+		},
+	})
+
+	var contradicted *ContradictedFindingError
+	if !errors.As(err, &contradicted) {
+		t.Fatalf("error = %#v, want a contradiction failure", err)
+	}
+	if !reflect.DeepEqual(contradicted.CheckIDs, []string{IDLockfile}) {
+		t.Errorf("CheckIDs = %v, want [%s]", contradicted.CheckIDs, IDLockfile)
+	}
+	if !strings.Contains(err.Error(), IDLockfile) {
+		t.Errorf("message = %q, want it to name the id", err.Error())
+	}
+}
+
+// TestCombineAllowsAFindingUnderAnAnsweredIDBesideOtherDeclines is the
+// floor. The rule is about the id a finding is ABOUT, not about whether
+// the report contains declines at all — without this the enforcement
+// could be "refuse any report with both findings and declines", which
+// would refuse most real reports.
+func TestCombineAllowsAFindingUnderAnAnsweredIDBesideOtherDeclines(t *testing.T) {
+	m := everyDeclaredID()
+	for i := range m {
+		if m[i].CheckID == IDBuildFormat {
+			m[i] = Status{
+				CheckID: IDBuildFormat,
+				Outcome: Declined,
+				Kind:    ByDesign,
+				Reason:  "the config builds this value at run time",
+			}
+		}
+	}
+
+	report, err := Combine(Results{
+		Manifest: m,
+		Findings: []Finding{
+			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "a development URL"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Combine: %v", err)
+	}
+	if len(report.Findings()) != 1 {
+		t.Errorf("findings = %+v, want the one under an answered id", report.Findings())
 	}
 }
