@@ -33,14 +33,19 @@
 * github.com/curiouspub/cli/internal/ui TestInterruptHelperProcess
 
 # Windows has no named pipe this repository's dependency policy can
-# reach, and no symbolic link an unprivileged account can create. Each of
-# these rows needs a real one on disk; every property they confirm is
-# asserted on all three platforms from a synthetic directory listing, so
-# what the skip costs is the confirmation and not the coverage.
+# reach. Each of these rows needs a real one on disk; every property they
+# confirm is asserted on all three platforms from a synthetic directory
+# listing, so what the skip costs is the confirmation and not the
+# coverage.
 windows github.com/curiouspub/cli/internal/pack TestWalkSkipsARealNamedPipe
 windows github.com/curiouspub/cli/internal/pack TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile
-windows github.com/curiouspub/cli/internal/pack TestWalkListsARealSymlink
-windows github.com/curiouspub/cli/internal/pack TestWalkEmitsItsFindingsFromOneTree
+#
+# THE SYMBOLIC-LINK ROWS ARE DELIBERATELY NOT LISTED, and their absence
+# is a measurement. They were expected to skip on Windows, where an
+# unprivileged account cannot create a link — and on the machine this
+# suite runs on they do not skip, because it can. Listing them would have
+# been a guess that happened to cost nothing; leaving them out means the
+# day that changes, somebody is told rather than left with a green tick.
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_FIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkToFIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkedConfigResolves
@@ -53,10 +58,20 @@ windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSi
 # Permission bits do not gate reads and stats on Windows the way these
 # rows need, and a process running as the superuser ignores them
 # everywhere — which a container commonly is. Both conditions produce the
-# same skip, so the rule covers every platform.
+# same skip, so the rules cover every platform.
+#
+# THE LAST THREE WERE FOUND BY THIS GATE, on its first run, and are worth
+# a sentence. They skip inside a SHARED HELPER rather than in their own
+# bodies, so the hand search that assembled the rest of this file — which
+# looked for the skip call inside each test function — did not see them.
+# A list built by reading the source cannot contain what the source does
+# not spell where the reader is looking; only running it can.
 * github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableConfigWarnsNotCrashes
 * github.com/curiouspub/cli/internal/preflight TestAdvisoriesSuppressesNotesAndNothingElse
 * github.com/curiouspub/cli/internal/config TestSaveIntoAnUnwritableDirectoryLeavesTheOriginalUntouched
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableSrcDirTargetSaysCouldntCheck
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UnreadableSrcPagesSaysCouldntCheck
+* github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_UncheckableCandidatesAreNotAbsence
 
 # Two names differing only in case cannot both exist on a case-folding
 # volume. The row is compiled only where they usually can, and checks the
