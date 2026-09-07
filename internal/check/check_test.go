@@ -158,44 +158,25 @@ func TestManifestKeepsDeclaredOrder(t *testing.T) {
 	}
 }
 
-// TestCheckIDsAreStableAndDistinct asserts the literal strings rather
-// than that the constants exist. They are read by a machine surface and
-// quoted in a support answer, so renaming one is a change to something
-// somebody outside this program is keying on — and the exact spelling
-// is the whole of what they get.
-func TestCheckIDsAreStableAndDistinct(t *testing.T) {
-	ids := map[string]string{
-		"IDAstroDep":      IDAstroDep,
-		"IDLockfile":      IDLockfile,
-		"IDPagesDir":      IDPagesDir,
-		"IDBuildFormat":   IDBuildFormat,
-		"IDLocalhost":     IDLocalhost,
-		"IDSymlinks":      IDSymlinks,
-		"IDCaseCollision": IDCaseCollision,
-		"IDPathCharset":   IDPathCharset,
-	}
-	want := map[string]string{
-		"IDAstroDep":      "astro-dep",
-		"IDLockfile":      "lockfile",
-		"IDPagesDir":      "pages-dir",
-		"IDBuildFormat":   "build-format",
-		"IDLocalhost":     "localhost",
-		"IDSymlinks":      "symlinks",
-		"IDCaseCollision": "case-collision",
-		"IDPathCharset":   "path-charset",
-	}
-	if !reflect.DeepEqual(ids, want) {
-		t.Errorf("check ids = %#v, want %#v", ids, want)
-	}
-
-	seen := make(map[string]string, len(ids))
-	for name, id := range ids {
-		if other, clash := seen[id]; clash {
-			t.Errorf("%s and %s share the id %q", name, other, id)
-		}
-		seen[id] = name
-	}
-}
+// THE CHECK-ID SET IS ASSERTED IN internal/guard, not here.
+//
+// A row stood in this place claiming to pin the ids. It compared a
+// hand-written map of the constants against a hand-written map of their
+// values — two transcriptions of one author's belief, which agree with
+// each other by construction. It could see a value change and nothing
+// else: a constant added and left out of both maps was invisible, and
+// neither map was ever compared against the declared universe, which is
+// the list the program actually uses. When a proposed check was retired
+// it caught nothing, and the declared-order rows did.
+//
+// Its replacement reads the constants out of the SOURCE with a type
+// checker and compares them against the compiled program's own declared
+// order — two mechanisms, so one edit cannot satisfy both by agreeing
+// with itself. It also asks a type question rather than a spelling one,
+// so an id named without the usual prefix is still seen.
+//
+// This note is here because a row removed with no pointer is
+// indistinguishable from a row nobody replaced.
 
 // TestManifestNotRunSelectsOnlyTheSkipped asserts the accessor a
 // renderer is meant to use, including that it reports nothing when every
