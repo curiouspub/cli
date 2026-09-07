@@ -833,6 +833,277 @@ func identifierTokens(line string) map[string]bool {
 // world-readable file discloses private paper, and every file here is
 // world-readable. A guard's scope follows its threat, not the scope of
 // whatever guard sits next to it in the file.
+// TestGeneratedManifestExemptionIsRealAndNarrow proves the go.sum
+// carve-out both ways, because an exemption is the one kind of change
+// that makes a guard quieter and therefore the one kind that must be
+// shown to have a floor.
+//
+// The hazard is measured, not supposed: the vendor check tokenises
+// identifiers, so a base64 module hash can spell a banned subword. Over
+// 200,000 random hashes against the real term list, 0.72% of lines trip.
+// A dependency bump would then red a file no author can edit, and the
+// only fast way out would be deleting a term from the vendor list — a
+// rule weakened by the thing that trips it.
+//
+// Both halves are asserted here. The exemption must APPLY to go.sum, and
+// it must NOT apply to the file sitting next to it: go.mod is authored,
+// every module path in it is somebody's choice, and a provider SDK
+// appearing there is the whole point of the dependency rule.
+//
+// REQUIRED MUTATION: make stripModuleHashes return the empty string. The
+// two path-column rows red — stripping the hash must not take the module
+// path with it.
+//
+// SECOND: restore the original carve-out by returning ("", false) for a
+// generated manifest. The same two rows red, which is the whole reason
+// this test was rewritten: that shape passed every row of the previous
+// table, and a reviewer found the hole by asking what the exemption
+// covered BEYOND what the rows asserted.
+//
+// THIRD: make moduleHashField match nothing, so the hash column is
+// scanned. The hash row reds — the original hazard is still live and the
+// exemption still has work to do.
+//
+// FOURTH: match on filepath.Base(relPath). The nested-go.sum row reds.
+//
+// All four run and observed red before this comment was committed; see
+// the report for the reds and the checksum-verified reverts.
+//
+// A FIFTH WAS TRIED AND DOES NOT RED, and saying so is worth more than
+// dropping it: adding go.mod to generatedManifestNames changes nothing.
+// Under the previous file-wide carve-out that mutation was the whole
+// defence against an over-broad exemption, and it reddened. Under this
+// one the "exemption" is only "strip checksum columns", and go.mod has
+// none — so the line comes through untouched and is scanned in full.
+// The failure mode is now unreachable by construction rather than
+// guarded against, which is the better outcome and the reason the row
+// below stays anyway: it is the floor that reds if this ever goes back to
+// excusing a file.
+//
+// Note what these are aimed at, because it is why this test has the shape
+// it does: NONE of them can be caught by the scan itself. The
+// repository's own go.sum contains no banned token today, so an exemption
+// deleted, widened, or drawn around the wrong column would leave the whole
+// suite green. An exemption is the one kind of change that makes a guard
+// quieter, and it has to be falsifiable somewhere other than in the guard
+// it quietens.
+func TestGeneratedManifestExemptionIsRealAndNarrow(t *testing.T) {
+	root := moduleRoot(t)
+	vendorTerms := loadVendorTerms(t, root)
+
+	// The fixtures are DERIVED from the real term list at run time rather
+	// than written down, and the reason is this guard itself: this file
+	// is authored text, the vendor check reads it, and a literal banned
+	// term here would red the scan. Carving this file out instead would
+	// be the guard loosened by the thing that trips it — on the file
+	// whose whole subject is a carve-out. Deriving them also keeps them
+	// true as the list changes, and sampling the tree's own go.sum would
+	// not work at all: that file is clean by luck, and a test resting on
+	// luck stops testing anything when the luck turns.
+	//
+	// THREE fixtures, because a go.sum line has two columns with opposite
+	// standing and the first version of this test only ever built one of
+	// them. A term inside a HASH is an accident of base64 and must not
+	// red; the same term inside a MODULE PATH is a person's choice and
+	// must.
+	var sample string
+	for _, term := range sortedKeys(vendorTerms) {
+		if len(term) >= 2 && len(term) <= 4 {
+			sample = term
+			break
+		}
+	}
+	if sample == "" {
+		t.Fatal("no short vendor term to splice into a fixture — this test cannot " +
+			"demonstrate the hazard it exists for, and skipping would say so to nobody " +
+			"because the suite runs without -v")
+	}
+	capitalised := strings.ToUpper(sample[:1]) + sample[1:]
+
+	// A checksum column carrying the term as a base64 accident.
+	hashField := "h1:qq" + capitalised + "Zz0000000000000000000000="
+	// A checksum column carrying nothing, for the rows where the term
+	// must come from somewhere else.
+	const cleanHash = "h1:0000000000000000000000000000000000000000000="
+	// A module path carrying the term deliberately, the way a provider's
+	// own module is spelled.
+	pathField := "example.com/" + sample + "/" + sample + "-sdk-go"
+
+	for name, fixture := range map[string]string{"hash": hashField, "path": pathField} {
+		var tripped []string
+		for token := range identifierTokens(fixture) {
+			if vendorTerms[token] {
+				tripped = append(tripped, token)
+			}
+		}
+		if len(tripped) == 0 {
+			t.Fatalf("the %s fixture %q no longer tokenises to any banned term, so the "+
+				"rows below cannot observe what they claim to", name, fixture)
+		}
+		t.Logf("%s fixture tokenises to banned terms: %v", name, tripped)
+	}
+	for token := range identifierTokens(cleanHash) {
+		if vendorTerms[token] {
+			t.Fatalf("the clean-hash fixture unexpectedly tokenises to %q, so the "+
+				"path-column rows would pass for the wrong reason", token)
+		}
+	}
+
+	cases := []struct {
+		name     string
+		relPath  string
+		line     string
+		ruleFile bool
+		wantRead bool // is the banned term in this line's scanned text?
+		why      string
+	}{
+		// The hazard the carve-out answers: a term inside the HASH.
+		{"a hash column is not read", "go.sum", "example.com/mod v1.2.3 " + hashField, false, false,
+			"a dependency bump would red the build on bytes nobody authored, and the " +
+				"only quick way out would be deleting a term from the vendor list"},
+
+		// THE FLOOR, and the reason this table was rewritten. The module
+		// PATH on the same line is somebody's choice, and go.sum keeps
+		// entries for modules no longer in the graph — which the
+		// dependency check cannot see either, since `go list -m all`
+		// omits a module nothing imports.
+		{"a path column IS read", "go.sum", pathField + " v1.2.3 " + cleanHash, false, true,
+			"a provider named in a module path is a human choice, and a stale go.sum " +
+				"entry is invisible to the dependency graph check"},
+		{"a path column is read even beside a hash", "go.sum", pathField + " v1.2.3 " + hashField, false, true,
+			"stripping the hash must not take the path with it"},
+
+		{"go.mod is read in full", "go.mod", pathField + " v1.2.3", false, true,
+			"go.mod is AUTHORED — a provider SDK named there is exactly what the " +
+				"dependency rule exists to catch"},
+		{"a nested go.sum is read in full", "internal/x/go.sum", "example.com/mod v1.2.3 " + hashField, false, true,
+			"the exemption is for this module's own manifest, not for every file that " +
+				"shares its name somewhere in the tree"},
+		{"an ordinary source file is read", "internal/api/client.go", hashField, false, true,
+			"the exemption must not leak to authored code"},
+		{"a rule file's data line stays exempt", "scripts/banned-dependencies.txt", pathField, true, false,
+			"a denylist cannot match a module path without spelling one"},
+		{"a rule file's comment is still read", "scripts/banned-dependencies.txt", "# " + pathField, true, true,
+			"the prose explaining a rule has no need to name what the rule forbids"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scanText, ok := vendorScanLine(tc.relPath, tc.line, tc.ruleFile)
+			var found []string
+			if ok {
+				for token := range identifierTokens(scanText) {
+					if vendorTerms[token] {
+						found = append(found, token)
+					}
+				}
+			}
+			if got := len(found) > 0; got != tc.wantRead {
+				t.Errorf("line %q under %q: banned term seen = %v, want %v (scanned %q) — %s",
+					tc.line, tc.relPath, got, tc.wantRead, scanText, tc.why)
+			}
+		})
+	}
+}
+
+// mustRel is filepath.Rel with the error turned into a test failure: a
+// path that came out of the tree walk is always under the root, so a
+// failure here means the walk changed rather than that a caller passed
+// something odd.
+func mustRel(t *testing.T, root, path string) string {
+	t.Helper()
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		t.Fatalf("relativising %s against %s: %v", path, root, err)
+	}
+	return rel
+}
+
+// sortedKeys gives a map's keys in a fixed order, so a test that picks
+// "the first" of something picks the same one on every run rather than
+// whichever the map iteration happened to yield.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// vendorScanLine returns the text of a line the vendor check should
+// read, and whether it should read anything at all. It is the whole of
+// that scoping decision, in one function, so the scan and its test
+// exercise the same code rather than two statements of one intention.
+//
+// It is a function rather than an inline condition because the
+// exemptions have NO observable effect on a clean tree: this
+// repository's own go.sum contains no banned token today, so a scan that
+// had lost its scoping entirely would still be green, and a mutation
+// aimed at the scan would prove nothing. Testing the decision directly is
+// what makes a carve-out falsifiable instead of merely present.
+//
+// relPath is slash-separated and relative to the module root, so a file
+// called go.sum nested somewhere inside the tree is not the module's own
+// manifest and gets no exemption.
+//
+// THE EXEMPTION IS A COLUMN, NOT A FILE, and that correction is the
+// point of this function's current shape. The first version excused the
+// whole of go.sum on the grounds that nobody chooses the bytes of a
+// hash. True — and the same line also carries a MODULE PATH, which is
+// somebody's choice, and go.sum keeps entries for modules no longer in
+// the graph until someone runs `go mod tidy`. So a provider SDK named in
+// a stale entry went unseen here, and the dependency graph check cannot
+// see it either, because `go list -m all` does not list a module nothing
+// imports. Two rules, one blind by construction and one blinded by a
+// carve-out drawn wider than its own argument. Found by a reviewer
+// probing what the exemption covered BEYOND what its tests asserted;
+// every one of those tests passed.
+func vendorScanLine(relPath, line string, isRuleFile bool) (string, bool) {
+	if isRuleFile && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+		return "", false
+	}
+	if generatedManifestNames()[relPath] {
+		return stripModuleHashes(line), true
+	}
+	return line, true
+}
+
+// moduleHashField matches a go.sum checksum column: an algorithm name, a
+// colon, and base64. A module path cannot match it — a path has no colon
+// — and neither can a version, which is why dropping fields by this
+// shape leaves exactly the human-chosen part of the line behind.
+var moduleHashField = regexp.MustCompile(`^[A-Za-z0-9]+:[A-Za-z0-9+/]*={0,2}$`)
+
+// stripModuleHashes removes the checksum columns from a go.sum line and
+// returns what a person actually wrote: the module path and the version.
+//
+// This is the narrow form of the go.sum carve-out. The hazard it answers
+// is real and measured — the vendor check reads subwords inside
+// identifiers, base64 produces capitalised fragments freely, and 0.72% of
+// random module hashes tokenise to a banned term, so a dependency bump
+// nobody chose the bytes of could red the build on a file no author can
+// edit. The hazard is entirely in the hash. Excusing the rest of the line
+// bought nothing and cost the only part of the file worth reading.
+func stripModuleHashes(line string) string {
+	fields := strings.Fields(line)
+	kept := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if moduleHashField.MatchString(f) {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	return strings.Join(kept, " ")
+}
+
+// generatedManifestNames is the exemption set,// generatedManifestNames is the exemption set, in one place so the scan
+// and the test above cannot disagree about what it contains. A test that
+// restated the list would pass while the scan used a different one.
+func generatedManifestNames() map[string]bool {
+	return map[string]bool{"go.sum": true}
+}
+
 func TestNoPrivateCitations(t *testing.T) {
 	root := moduleRoot(t)
 	patterns := loadCitationPatterns(t, root)
@@ -855,12 +1126,44 @@ func TestNoPrivateCitations(t *testing.T) {
 		filepath.Join(root, "scripts", "banned-dependencies.txt"): true,
 		filepath.Join(root, "scripts", "vendor-terms.txt"):        true,
 	}
+
+	// GENERATED MANIFESTS: files no human wrote, exempt from the VENDOR
+	// check by NAME and from nothing else. There is one, and the reason
+	// it exists is a measurement rather than a worry.
+	//
+	// The vendor check tokenises identifiers rather than matching words,
+	// which is what lets it see a provider name inside camelCase. A
+	// go.sum line is a module path followed by a base64 hash, and base64
+	// produces capitalised fragments freely — so a hash can contain a
+	// subword this check bans. Measured against the real term list over
+	// 200,000 random hashes: 0.72% of lines trip, most often on the
+	// shortest terms. Four lines is a 2.8% chance; twenty lines is 13.5%;
+	// fifty is nearly a third.
+	//
+	// The failure that matters is not the red itself but what a red would
+	// force. A dependency bump nobody chose the bytes of would break the
+	// build, on a file no author can edit, and the only quick way out
+	// would be deleting a term from the vendor list — which is the rule
+	// weakened by the thing that trips it, the exact dynamic the rule
+	// file carve-out above exists to prevent.
+	//
+	// go.mod is NOT here and that is deliberate. It is authored: a human
+	// chooses every module path in it, and a provider SDK appearing there
+	// is precisely what the dependency denylist is for. The line is
+	// GENERATED versus AUTHORED, not "manifest" — the two files sit
+	// beside each other and only one of them is written by a person.
+	//
+	// The exemption is by filename rather than by content shape because a
+	// content heuristic ("looks like base64") would also excuse an
+	// authored line that happened to look generated, and there would be
+	// no way to tell from the outside which had happened.
 	for _, path := range publishedTextFiles(t, root) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
 		}
 		isRuleFile := ruleFiles[path]
+		rel := filepath.ToSlash(mustRel(t, root, path))
 		for lineNum, line := range strings.Split(string(data), "\n") {
 			// A rule file's DATA line is exempt from the VENDOR check
 			// only — never from the patterns. That narrowness is the
@@ -872,9 +1175,8 @@ func TestNoPrivateCitations(t *testing.T) {
 			// waived. An exemption drawn file-wide would have let a
 			// private identifier ship on a data line, which was measured
 			// rather than argued.
-			isRuleData := isRuleFile && !strings.HasPrefix(strings.TrimSpace(line), "#")
-			if !isRuleData {
-				for token := range identifierTokens(line) {
+			if scanText, ok := vendorScanLine(rel, line, isRuleFile); ok {
+				for token := range identifierTokens(scanText) {
 					if vendorTerms[token] {
 						t.Errorf("%s:%d names infrastructure (%q) in authored text\n"+
 							"What serves the API is not a fact this repository carries. "+

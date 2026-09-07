@@ -230,6 +230,39 @@ prose, which is why nothing in any of them quotes an example — a rule
 file that quoted its own targets would be a leak shipping inside the file
 that hunts leaks.
 
+**A `go.sum` CHECKSUM COLUMN is exempt from the vendor check. Nothing
+else is** — not the rest of that line, and not `go.mod`. The line is
+GENERATED versus AUTHORED, not "manifest" and not even "file": a
+`go.sum` line carries a machine-chosen hash **and** a human-chosen module
+path, side by side, and only the first of them is an accident.
+
+That distinction was learned the expensive way. The first version of this
+rule excused the whole file on the grounds that nobody chooses the bytes
+of a hash — true of the hash, false of the path beside it. `go.sum`
+retains entries for modules no longer in the build graph until someone
+runs `go mod tidy`, so a provider SDK named in a stale entry became
+invisible here; and the dependency check could not see it either, since
+`go list -m all` omits a module nothing imports. Two rules, one blind by
+construction and one blinded by a carve-out drawn wider than its own
+argument.
+
+That distinction is load-bearing rather than tidy, because the vendor
+check reads subwords inside identifiers and base64 produces capitalised
+fragments freely. A module hash can therefore spell a banned term. Over
+200,000 random hashes against the real term list, **0.72% of lines trip**
+— four lines is a 2.8% chance, twenty is 13.5%, fifty is nearly a third.
+The damage is not the red but what it would force: a dependency bump
+nobody chose the bytes of breaking the build on a file no author can
+edit, whose only quick fix is deleting a term from the vendor list. That
+is the rule weakened by the thing that trips it, which is the same
+failure the carve-out above exists to prevent.
+
+The exemption is by FILENAME, not by content shape. A heuristic like
+"looks like base64" would also excuse an authored line that happened to
+look generated, and nothing from outside could tell which had happened.
+It is also scoped to the module's own manifest: a file called `go.sum`
+somewhere else in the tree is not exempt.
+
 **The vendor check TOKENISES rather than pattern-matches**, and that is
 not an optimisation. A word-boundary expression sees no boundary inside
 an identifier, so every camelCase and snake_case spelling walked past the
