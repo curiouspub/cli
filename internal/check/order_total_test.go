@@ -3,22 +3,30 @@ package check
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 // insertionSortThreshold is where Go's unstable sort stops being an
-// insertion sort and starts reordering equal elements. MEASURED on this
-// toolchain rather than assumed: ties are preserved at n of 3, 6 and 12
-// and reordered from 13 upward.
+// insertion sort and can start reordering equal elements.
 //
-// It is named here because it is the reason the fixtures below are the
-// size they are. A three-row fixture cannot tell a total comparison from
-// a stable sort, so a row built at that size passes whether or not the
-// property it claims to test exists.
+// MEASURED on this toolchain, and the measurement has TWO conditions,
+// which is the part that is easy to get wrong:
+//
+//	elements   distinct groups   arrival preserved
+//	3, 6, 12   any               yes
+//	13+        1                 yes  — nothing to swap them past
+//	13+        3                 NO
+//
+// So a fixture needs BOTH size and interleaving before it can observe
+// the loss of a total comparison. A row of fifteen findings all under
+// one id is the third-from-last cell and goes green under exactly the
+// mutation it was written to catch — which is what happened here, and
+// is why the table is written down rather than remembered.
 //
 // Thirteen is not a synthetic number for findings: the localhost check
 // emits one per hit, so a project with thirteen hard-coded development
-// URLs crosses it.
+// URLs across a few files crosses it.
 const insertionSortThreshold = 13
 
 // TestFindingComparatorIsTotal is the assertion the doc comment has been
@@ -89,45 +97,62 @@ func TestManifestComparatorIsTotal(t *testing.T) {
 }
 
 // TestSortFindingsKeepsArrivalOrderPastTheThreshold is the behavioural
-// half, built one element past the size at which an unstable sort starts
-// reordering ties. The three-row fixture beside it cannot catch the loss
-// of a total comparison; this one can.
+// half, and BOTH of its fixture's properties were measured rather than
+// assumed. An unstable sort reorders tied elements only when they are
+// INTERLEAVED with other groups and only past a size — with one group,
+// or below the size, it never moves anything:
+//
+//	elements   groups   arrival preserved under an unstable sort
+//	3, 6, 12   any      yes
+//	13+        1        yes  — nothing to swap them past
+//	13+        3        NO
+//
+// The first version of this row had fifteen findings under ONE id, which
+// is the "13+, one group" cell: it went green under the very mutation it
+// was written to catch. Three ids at one severity is also the realistic
+// shape — several checks each reporting a few files.
 //
 // MUTATION: drop the arrival key from lessPlacedFinding. Reds here.
 // MUST NOT MOVE: the three-row arrival row, which passes either way —
-// that is the whole point of this fixture existing separately.
+// that is why this fixture exists separately from it.
 func TestSortFindingsKeepsArrivalOrderPastTheThreshold(t *testing.T) {
-	n := insertionSortThreshold + 2
+	interleaved := []string{IDAstroDep, IDLockfile, IDLocalhost}
+	n := (insertionSortThreshold + 2) * len(interleaved)
 
 	var findings []Finding
-	var want []string
+	want := map[string][]string{}
 	for i := 0; i < n; i++ {
-		message := fmt.Sprintf("src/pages/page-%02d.astro has a development URL", i)
+		id := interleaved[i%len(interleaved)]
+		message := fmt.Sprintf("hit-%02d", i)
 		findings = append(findings, Finding{
-			CheckID: IDLocalhost, Severity: SeverityWarning, Message: message,
+			CheckID: id, Severity: SeverityWarning, Message: message,
 		})
-		want = append(want, message)
+		want[id] = append(want[id], message)
 	}
 
 	SortFindings(findings)
 
-	var got []string
+	got := map[string][]string{}
 	for _, f := range findings {
-		got = append(got, f.Message)
+		got[f.CheckID] = append(got[f.CheckID], f.Message)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("with %d tied findings the order changed:\ngot  %v\nwant %v", n, got, want)
+	for id, messages := range want {
+		if !reflect.DeepEqual(got[id], messages) {
+			t.Errorf("%s: findings were reordered within one check:\ngot  %v\nwant %v",
+				id, got[id], messages)
+		}
 	}
 }
 
-// TestSortManifestKeepsArrivalOrderPastTheThreshold. The ids are all
-// undeclared, which is what makes them tie: Rank gives every undeclared
-// id the same position, so their order among themselves is decided by
-// the comparison or by nothing.
+// TestSortManifestKeepsArrivalOrderPastTheThreshold. Ids nobody declared
+// all share one rank, so they tie — and they are interleaved here with
+// declared ids, which is the condition an unstable sort actually needs
+// before it will disturb them.
 //
-// A real manifest will not hold fifteen undeclared rows. The function is
+// A real manifest will not hold rows like these. The function is
 // exported and its contract is an order, so the contract is asserted at
-// a size that can actually observe it.
+// a shape that can observe it, and the comparator row above covers the
+// sizes a real manifest reaches.
 //
 // MUTATION: drop the arrival key from lessPlacedRan. Reds here.
 func TestSortManifestKeepsArrivalOrderPastTheThreshold(t *testing.T) {
@@ -136,18 +161,25 @@ func TestSortManifestKeepsArrivalOrderPastTheThreshold(t *testing.T) {
 	var m Manifest
 	var want []string
 	for i := 0; i < n; i++ {
-		id := fmt.Sprintf("undeclared-%02d", i)
-		m = append(m, Ran{CheckID: id, Ran: true})
-		want = append(want, id)
+		for _, id := range []string{
+			IDAstroDep,
+			fmt.Sprintf("undeclared-%02d", i),
+			IDLocalhost,
+		} {
+			m = append(m, Ran{CheckID: id, Ran: true})
+		}
+		want = append(want, fmt.Sprintf("undeclared-%02d", i))
 	}
 
 	SortManifest(m)
 
 	var got []string
 	for _, row := range m {
-		got = append(got, row.CheckID)
+		if strings.HasPrefix(row.CheckID, "undeclared-") {
+			got = append(got, row.CheckID)
+		}
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("with %d tied rows the order changed:\ngot  %v\nwant %v", n, got, want)
+		t.Errorf("tied rows were reordered:\ngot  %v\nwant %v", got, want)
 	}
 }

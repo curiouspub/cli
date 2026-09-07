@@ -80,11 +80,13 @@ func severityRank(s Severity) int {
 //
 // A stable sort HIDES that completely, which is why the key was worth
 // restoring rather than relying on. Measured on this toolchain, Go's
-// unstable sort preserves ties up to twelve elements and reorders from
-// thirteen, so a small fixture agrees with a broken comparison and a
-// project with thirteen hard-coded development URLs does not. Two runs
-// over one project have to produce byte-identical output, and that
-// guarantee should not depend on how many findings there happen to be.
+// unstable sort disturbs ties only past about a dozen elements AND only
+// when the tied ones are interleaved with other groups — so a small
+// project, or one where every finding comes from a single check, agrees
+// with a broken comparison, and a project with a dozen-odd hard-coded
+// development URLs across a few checks does not. Two runs over one
+// project have to produce byte-identical output, and that guarantee
+// should not depend on how many findings there happen to be.
 //
 // Because the comparison is now total, the sort need not be stable, and
 // an unstable one is used deliberately: it means the property is carried
