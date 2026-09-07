@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,20 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+// engineFixture names a real fixture tree. The engine stats its root
+// before it runs anything, so a row whose checks are meant to RUN has to
+// point at a directory that exists — a placeholder string now produces a
+// manifest of skipped checks, which is the new behaviour working rather
+// than the row failing.
+func engineFixture(t *testing.T, name string) string {
+	t.Helper()
+	root := filepath.Join("testdata", "engine", name)
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("fixture %s: %v", name, err)
+	}
+	return root
+}
+
 // ---------------------------------------------------------------------
 // Aggregate behaviour
 // ---------------------------------------------------------------------
@@ -186,7 +201,7 @@ func TestEngineReportsHardStopsBeforeWarnings(t *testing.T) {
 		}}}, check.IDLocalhost).check(),
 	}
 
-	findings := Run(checks, OSFileSystem{}, "irrelevant").Findings
+	findings := Run(checks, OSFileSystem{}, engineFixture(t, "clean")).Findings
 
 	want := []string{
 		check.IDAstroDep,    // hard stop, rank 0
@@ -222,7 +237,7 @@ func TestEngineOrderIsFixedRegardlessOfRegistrationOrder(t *testing.T) {
 		}}}, check.IDAstroDep).check(),
 	}
 
-	res := Run(backwards, OSFileSystem{}, "irrelevant")
+	res := Run(backwards, OSFileSystem{}, engineFixture(t, "clean"))
 	findings, manifest := res.Findings, res.Manifest
 
 	want := []string{check.IDAstroDep, check.IDLockfile, check.IDLocalhost}
@@ -390,7 +405,7 @@ func TestEngineKeepsWhatItWasNotExpecting(t *testing.T) {
 		}, check.IDLockfile).check(),
 	}
 
-	res := Run(checks, OSFileSystem{}, "irrelevant")
+	res := Run(checks, OSFileSystem{}, engineFixture(t, "clean"))
 	findings, manifest := res.Findings, res.Manifest
 
 	want := []string{check.IDLockfile, "some-check-nobody-declared"}
@@ -452,10 +467,10 @@ func TestEngineHandsEachCheckTheRootAndFilesystem(t *testing.T) {
 	fsys := &countingFS{}
 	s := newStub(&journal, Result{}, check.IDAstroDep)
 
-	Run([]Check{s.check()}, fsys, filepath.Join("some", "project"))
+	Run([]Check{s.check()}, fsys, engineFixture(t, "clean"))
 
-	if s.gotRoot != filepath.Join("some", "project") {
-		t.Errorf("root = %q, want %q", s.gotRoot, filepath.Join("some", "project"))
+	if s.gotRoot != engineFixture(t, "clean") {
+		t.Errorf("root = %q, want %q", s.gotRoot, engineFixture(t, "clean"))
 	}
 	if s.gotFS != FS(fsys) {
 		t.Errorf("filesystem = %#v, want the one the caller passed", s.gotFS)
@@ -608,7 +623,7 @@ func TestEngineManifestOrderSurvivesACheckDeclaringItsIDsBackwards(t *testing.T)
 		journal: &journal,
 	}
 
-	manifest := Run([]Check{backwards.check()}, OSFileSystem{}, "irrelevant").Manifest
+	manifest := Run([]Check{backwards.check()}, OSFileSystem{}, engineFixture(t, "clean")).Manifest
 
 	want := []string{check.IDPagesDir, check.IDBuildFormat}
 	if got := manifestIDs(manifest); !equalStrings(got, want) {
@@ -633,11 +648,194 @@ func TestCombineRefusesASecondProducerClaimingAnEngineCheck(t *testing.T) {
 	var journal []string
 	engineOutput := Run([]Check{
 		newStub(&journal, Result{}, check.IDAstroDep).check(),
-	}, OSFileSystem{}, "irrelevant")
+	}, OSFileSystem{}, engineFixture(t, "clean"))
 
 	imposter := check.Results{Manifest: check.Manifest{{CheckID: check.IDAstroDep, Ran: true}}}
 
 	if _, err := check.Combine(engineOutput, imposter); err == nil {
 		t.Fatal("a second producer claimed a check the engine had already run, and it was accepted")
 	}
+}
+
+// ---------------------------------------------------------------------
+// Wiring mistakes, and the root
+// ---------------------------------------------------------------------
+
+// TestEngineNilRunReportsThatItDidNotRun. The manifest exists to tell
+// FOUND NOTHING from NEVER LOOKED, and a check registered without a
+// function is the purest case of never looked there is — so it was the
+// one case the manifest got wrong. The engine tolerated the missing
+// function, computed Ran from a zero result whose reason is empty, and
+// reported a tick.
+//
+// The distinction the manifest was built to carry must not fail on the
+// wiring mistake it should be loudest about.
+//
+// MUTATION: report Ran: true for a nil function. Reds here.
+// MUTATION: change the reason to anything not naming the check. Reds
+// here. Both directions, because the branch was previously unpinned in
+// both — a reason could be added or removed with every suite green.
+// MUST NOT MOVE: every row whose checks have real functions.
+func TestEngineNilRunReportsThatItDidNotRun(t *testing.T) {
+	res := Run([]Check{{IDs: []string{check.IDAstroDep}}}, OSFileSystem{}, engineFixture(t, "clean"))
+
+	if len(res.Manifest) != 1 {
+		t.Fatalf("manifest = %v, want one row", manifestIDs(res.Manifest))
+	}
+	row := res.Manifest[0]
+	if row.Ran {
+		t.Errorf("%s: Ran = true, but nothing was executed", row.CheckID)
+	}
+	if !strings.Contains(row.Reason, check.IDAstroDep) {
+		t.Errorf("%s: Reason = %q, want it to name the check that was left unwired",
+			row.CheckID, row.Reason)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("findings = %+v, want none from a check that never ran", res.Findings)
+	}
+}
+
+// TestEngineStatsTheRootBeforeAnythingElse. Handed a directory that is
+// not there, the engine used to run every check against it and let each
+// one draw its own conclusion — which for the astro.config check is a
+// confident advisory that the pages directory is missing, under a
+// manifest saying every check ran.
+//
+// That is the worst available answer. Nothing was wrong with the
+// project; the caller was pointed at the wrong place, and the report
+// described a project that does not exist as though it had been read.
+//
+// MUTATION: drop the stat. Both rows here red on Ran.
+// MUST NOT MOVE: every row that passes a real fixture directory.
+func TestEngineStatsTheRootBeforeAnythingElse(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nothing-here")
+
+	notADirectory := filepath.Join(t.TempDir(), "package.json")
+	if err := os.WriteFile(notADirectory, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("writing the fixture: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		root string
+	}{
+		{"root does not exist", missing},
+		{"root is a file", notADirectory},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var journal []string
+			res := Run([]Check{
+				newStub(&journal, Result{Findings: []check.Finding{{
+					CheckID:  check.IDAstroDep,
+					Severity: check.SeverityHardStop,
+					Message:  "a check that should never have been asked",
+				}}}, check.IDAstroDep).check(),
+				astroConfigCheck(),
+			}, OSFileSystem{}, tc.root)
+
+			if len(journal) != 0 {
+				t.Errorf("checks ran against an unusable root: %v", journal)
+			}
+			if len(res.Findings) != 0 {
+				t.Errorf("findings = %+v, want none — nothing was read", res.Findings)
+			}
+
+			wantIDs := []string{check.IDAstroDep, check.IDPagesDir, check.IDBuildFormat}
+			if got := manifestIDs(res.Manifest); !equalStrings(got, wantIDs) {
+				t.Fatalf("manifest = %v, want a row per requested id %v", got, wantIDs)
+			}
+			for _, row := range res.Manifest {
+				if row.Ran {
+					t.Errorf("%s: Ran = true against an unusable root", row.CheckID)
+				}
+				if row.Reason == "" {
+					t.Errorf("%s: Reason is empty; a skipped check with no reason renders "+
+						"as a bare colon", row.CheckID)
+				}
+			}
+		})
+	}
+}
+
+// TestEngineStatsTheRootThroughTheFilesystemItWasGiven. The seam is the
+// whole reason the engine takes an FS, and a stat that went straight to
+// the operating system would be the one read this package does that a
+// caller cannot substitute.
+func TestEngineStatsTheRootThroughTheFilesystemItWasGiven(t *testing.T) {
+	fsys := &countingFS{}
+	var journal []string
+
+	res := Run([]Check{newStub(&journal, Result{}, check.IDAstroDep).check()},
+		fsys, engineFixture(t, "clean"))
+
+	if len(journal) != 1 {
+		t.Fatalf("the check did not run against a good root: %v", journal)
+	}
+	if len(res.Manifest) != 1 || !res.Manifest[0].Ran {
+		t.Errorf("manifest = %+v, want the check reported as having run", res.Manifest)
+	}
+}
+
+// TestRunProducesReportsTheGateRefuses covers the two shapes this engine
+// can legally emit that must never reach a renderer.
+//
+// NEITHER IS A DEFECT IN Run, and that is the point of putting them
+// here. An empty registration and a duplicated id are wiring mistakes
+// the engine has no way to distinguish from a deliberate choice, so it
+// reports what it was asked to do and the gate is what refuses the
+// result. Before the gate existed, both rendered: the empty one as a
+// clean project that let a deploy proceed, the duplicated one as three
+// skipped-check lines for one check with the deploy proceeding after.
+//
+// MUTATION: skip the coverage enforcement — the empty case reds.
+// MUTATION: skip the duplicate enforcement — the duplicate case reds.
+// MUST NOT MOVE: every row that registers each id exactly once.
+func TestRunProducesReportsTheGateRefuses(t *testing.T) {
+	root := engineFixture(t, "clean")
+
+	t.Run("no checks registered at all", func(t *testing.T) {
+		res := Run(nil, OSFileSystem{}, root)
+		if len(res.Findings) != 0 || len(res.Manifest) != 0 {
+			t.Fatalf("Run(nil) = %+v, want an empty result", res)
+		}
+
+		report, err := check.Combine(res)
+		if err == nil {
+			t.Fatal("an engine with no checks produced a usable report")
+		}
+		if report.Valid() {
+			t.Error("a refused Combine returned a validated report")
+		}
+		var gap *check.CoverageError
+		if !errors.As(err, &gap) {
+			t.Fatalf("error = %#v, want a coverage failure naming what nobody ran", err)
+		}
+		if len(gap.Missing) != len(check.DeclaredOrder()) {
+			t.Errorf("Missing = %v, want every declared check", gap.Missing)
+		}
+	})
+
+	t.Run("two legal registrations claiming one id", func(t *testing.T) {
+		var journal []string
+		res := Run([]Check{
+			newStub(&journal, Result{}, check.IDAstroDep, check.IDAstroDep).check(),
+			newStub(&journal, Result{}, check.IDAstroDep).check(),
+		}, OSFileSystem{}, root)
+
+		if len(res.Manifest) != 3 {
+			t.Fatalf("manifest = %v, want the three rows two registrations produce",
+				manifestIDs(res.Manifest))
+		}
+
+		_, err := check.Combine(res)
+		var dup *check.DuplicateCoverageError
+		if !errors.As(err, &dup) {
+			t.Fatalf("error = %#v, want a duplicate-claim failure", err)
+		}
+		if !equalStrings(dup.CheckIDs, []string{check.IDAstroDep}) {
+			t.Errorf("CheckIDs = %v, want [%s]", dup.CheckIDs, check.IDAstroDep)
+		}
+	})
 }

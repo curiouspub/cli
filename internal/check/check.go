@@ -41,6 +41,16 @@ const (
 	SeverityNote     Severity = "note"
 )
 
+// Declared reports whether s is one of the three constants above.
+//
+// THE ZERO VALUE IS WHY THIS EXISTS. A producer that forgets to set a
+// severity leaves the empty string, which is not a level anybody chose
+// — and left unchecked it counted as advisory, prompted a person to
+// decide about it, and sorted after the notes no surface shows.
+// Prompting on a field nobody set is the never-false-positive criterion
+// broken by an omission rather than by a judgement, so the gate refuses
+// it and this is where the question is asked.
+
 // The check ids, which are STABLE STRINGS rather than internal labels.
 // A machine-readable result keys on them and a support answer names one,
 // so the spelling is contract: changing one is changing something
@@ -81,6 +91,12 @@ type Finding struct {
 	// rendered into a result an agent may act on, and a separator that
 	// changes with the machine that produced it is a difference nobody
 	// asked for in a field meant to be compared.
+	//
+	// BUILD IT WITH NewPaths. A producer working from the standard
+	// library's relative-path helper gets the host's separator, and this
+	// struct accepts backslashes in silence — a documented contract with
+	// nothing enforcing it is a contract that holds until the first
+	// Windows user.
 	Paths []string
 
 	// What, Why and Next are OPTIONAL product copy: what happened, why
@@ -180,4 +196,13 @@ func (m Manifest) NotRun() []Ran {
 		}
 	}
 	return out
+}
+
+// Declared reports whether s is one of the three declared severities.
+func (s Severity) Declared() bool {
+	switch s {
+	case SeverityHardStop, SeverityWarning, SeverityNote:
+		return true
+	}
+	return false
 }

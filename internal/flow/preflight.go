@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,7 +51,18 @@ const slowPreflight = 2 * time.Second
 //   - the no-terminal sentinel — warnings pending with nobody to ask.
 //     Neither continue nor abort: both would be the program deciding
 //     something it was not asked to decide.
-func RenderPreflight(p Prompter, findings []check.Finding, manifest check.Manifest, elapsed time.Duration) error {
+func RenderPreflight(p Prompter, report check.Report, elapsed time.Duration) error {
+	// THE ONLY DOOR. A Report cannot be built outside the result
+	// package, so reaching this function means the gate ran: coverage,
+	// duplicates, claimed ids and declared severities were all checked
+	// by a type rather than by a caller remembering to ask. The zero
+	// value is the one thing a caller can still name, and it is a
+	// programming error rather than anything a user did.
+	if !report.Valid() {
+		return errors.New("pre-flight was handed a result that never passed the gate")
+	}
+	findings, manifest := report.Findings(), report.Manifest()
+
 	if elapsed > slowPreflight {
 		p.Step("Pre-flight took %s.", elapsed.Round(100*time.Millisecond))
 	}
@@ -60,8 +72,9 @@ func RenderPreflight(p Prompter, findings []check.Finding, manifest check.Manife
 	// when it could not look, so from out here those two are the same
 	// silence — and a skipped check rendered as a tick is a lie the user
 	// will act on.
-	for _, row := range manifest.NotRun() {
-		p.Step("Skipped %s: %s", row.CheckID, row.Reason)
+	notRun := manifest.NotRun()
+	for _, row := range notRun {
+		p.Step("%s", skipped(row))
 	}
 
 	var hardStops, warnings []check.Finding
@@ -74,6 +87,16 @@ func RenderPreflight(p Prompter, findings []check.Finding, manifest check.Manife
 		}
 	}
 
+	// WARNINGS ARE RENDERED WHETHER OR NOT A HARD STOP IS PRESENT, and
+	// this block's position is the whole of that fix. The rule was that
+	// a hard stop asks NO QUESTION; it was read as licence to drop the
+	// findings, so warnings were collected and never shown — and the
+	// user fixes the hard stop, re-runs, and only then meets them. That
+	// is the round-trip this program exists to prevent.
+	for _, f := range warnings {
+		p.Step("%s", advisoryLines(f))
+	}
+
 	if len(hardStops) > 0 {
 		// NO PROMPT, even with warnings also pending. There is nothing
 		// to decide, and a question whose only answer is "no" teaches
@@ -81,12 +104,15 @@ func RenderPreflight(p Prompter, findings []check.Finding, manifest check.Manife
 		return blockedFailure(hardStops)
 	}
 
-	if len(warnings) == 0 {
+	// A CHECK THAT DID NOT RUN IS PART OF THE DECISION, not a line that
+	// changes nothing. The manifest exists because a skipped check
+	// rendered as a tick is a lie the reader will act on — and printing
+	// it and then deciding exactly as if it were a tick is the same lie
+	// with a sentence in front of it. A project whose package.json could
+	// not be read would otherwise reach the packer with nobody having
+	// confirmed it has a lockfile.
+	if len(warnings) == 0 && len(notRun) == 0 {
 		return nil
-	}
-
-	for _, f := range warnings {
-		p.Step("%s", describe(f))
 	}
 
 	// ONE QUESTION FOR ALL OF THEM. Three hard-coded development URLs in
@@ -161,7 +187,11 @@ func ownCopy(f check.Finding) *ui.Failure {
 		why = strings.TrimPrefix(b.String(), "\n")
 	}
 
-	return ui.NewFailure(what, why, f.Next)
+	next := f.Next
+	if next == "" {
+		next = standingAction
+	}
+	return ui.NewFailure(what, why, next)
 }
 
 // synthesised builds one failure out of several summaries.
@@ -179,31 +209,81 @@ func synthesised(hardStops []check.Finding) *ui.Failure {
 	fmt.Fprintf(&b, "There %s %s to fix before this project will deploy:\n",
 		map[bool]string{true: "is", false: "are"}[len(hardStops) == 1], things)
 	for _, f := range hardStops {
-		fmt.Fprintf(&b, "\n%s\n", indent(describe(f), "  "))
+		fmt.Fprintf(&b, "\n%s\n", indent(summary(f), "  "))
 	}
 
 	return ui.NewFailure(
 		"curious can't deploy this project yet.",
 		strings.TrimRight(b.String(), "\n"),
-		"Fix what's listed above and run `curious deploy` again. Nothing has\n"+
-			"been uploaded.",
+		standingAction,
 	)
 }
 
-// describe renders one finding: its message, then the files it is about.
+// standingAction is the next step for a finding whose author did not
+// write one. THE ACTION IS NEVER ABSENT: copy is optional part by part,
+// and the part a reader can act on is the one a hard stop cannot do
+// without. Supplying a headline used to REMOVE this line, so adding copy
+// made the message worse than leaving it off.
+const standingAction = "Fix what's listed above and run `curious deploy` again. Nothing has" +
+	"\nbeen uploaded."
+
+// skipped renders one manifest row for a check that did not run.
+//
+// A row with no reason is a producer's omission rather than a fact about
+// the project, and it used to render as a bare trailing colon — which
+// reads as truncated output rather than as information.
+func skipped(row check.Ran) string {
+	if row.Reason == "" {
+		return fmt.Sprintf("Skipped %s: no reason was recorded.", row.CheckID)
+	}
+	return fmt.Sprintf("Skipped %s: %s", row.CheckID, row.Reason)
+}
+
+// summary renders one finding for a LIST of them: its headline, then the
+// files it is about, and nothing else.
 //
 // The paths are listed rather than folded into the sentence because that
 // is the entire reason they are a field. A check that named three files
 // in prose would leave the reader scanning a paragraph for the one they
 // have to open.
-func describe(f check.Finding) string {
+func summary(f check.Finding) string {
+	headline := f.What
+	if headline == "" {
+		headline = f.Message
+	}
 	if len(f.Paths) == 0 {
-		return f.Message
+		return headline
 	}
 	var b strings.Builder
-	b.WriteString(f.Message)
+	b.WriteString(headline)
 	for _, path := range f.Paths {
 		fmt.Fprintf(&b, "\n  %s", path)
+	}
+	return b.String()
+}
+
+// advisoryLines renders one warning in full: the summary, then whatever
+// copy its author wrote.
+//
+// WARNINGS RENDER COPY, and that they did not was two surfaces
+// disagreeing about one finding. This path showed the message and the
+// paths and dropped What, Why and Next — while the machine-readable
+// result carries them — even though the model documents copy with no
+// severity qualifier, and the question "does this finding have copy" is
+// asked in one place precisely so the two cannot diverge. For warnings
+// they diverged every time.
+//
+// No standing action is appended here. A warning is something a user may
+// knowingly proceed past and the question below IS the action; a hard
+// stop is a dead end, which is why the action is mandatory there and
+// offered here only when the author wrote one.
+func advisoryLines(f check.Finding) string {
+	var b strings.Builder
+	b.WriteString(summary(f))
+	for _, part := range []string{f.Why, f.Next} {
+		if part != "" {
+			fmt.Fprintf(&b, "\n%s", part)
+		}
 	}
 	return b.String()
 }

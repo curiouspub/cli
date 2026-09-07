@@ -72,30 +72,84 @@ func severityRank(s Severity) int {
 // SortFindings puts findings into report order, in place: severity
 // first, then the declared check order, then the order they arrived in.
 //
-// THE COMPARISON IS TOTAL rather than merely sorted, and the sort is
-// stable, because two runs over one project have to produce
-// byte-identical output — a comparison that leaves any pair unordered
-// hands that guarantee to whatever the sort happens to do with them.
+// THE COMPARISON IS TOTAL, and the arrival key is what makes that
+// sentence true rather than merely written down. Two keys leave every
+// pair from one check at one severity unordered — the commonest shape a
+// finding slice takes, since a check reports one finding per file — and
+// their order then comes from whatever the sort call happens to do.
+//
+// A stable sort HIDES that completely, which is why the key was worth
+// restoring rather than relying on. Measured on this toolchain, Go's
+// unstable sort disturbs ties only past about a dozen elements AND only
+// when the tied ones are interleaved with other groups — so a small
+// project, or one where every finding comes from a single check, agrees
+// with a broken comparison, and a project with a dozen-odd hard-coded
+// development URLs across a few checks does not. Two runs over one
+// project have to produce byte-identical output, and that guarantee
+// should not depend on how many findings there happen to be.
+//
+// Because the comparison is now total, the sort need not be stable, and
+// an unstable one is used deliberately: it means the property is carried
+// by the comparison a test can read, not by the call underneath it.
 //
 // It lives beside the list rather than inside a producer because the
 // engine is not the only producer, and two sorters would disagree the
 // first time one of them was changed.
-func SortFindings(findings []Finding) {
-	sort.SliceStable(findings, func(i, j int) bool {
-		a, b := findings[i], findings[j]
-		if sa, sb := severityRank(a.Severity), severityRank(b.Severity); sa != sb {
-			return sa < sb
-		}
-		return Rank(a.CheckID) < Rank(b.CheckID)
-	})
+type placedFinding struct {
+	finding Finding
+	arrival int
 }
 
-// SortManifest puts manifest rows into the declared order, in place. The
-// manifest is rendered, so its order is exactly as load-bearing as the
-// findings': a report that reorders between two runs over one project
-// cannot be diffed.
+func lessPlacedFinding(a, b placedFinding) bool {
+	if sa, sb := severityRank(a.finding.Severity), severityRank(b.finding.Severity); sa != sb {
+		return sa < sb
+	}
+	if ra, rb := Rank(a.finding.CheckID), Rank(b.finding.CheckID); ra != rb {
+		return ra < rb
+	}
+	return a.arrival < b.arrival
+}
+
+func SortFindings(findings []Finding) {
+	placed := make([]placedFinding, len(findings))
+	for i, f := range findings {
+		placed[i] = placedFinding{finding: f, arrival: i}
+	}
+	sort.Slice(placed, func(i, j int) bool { return lessPlacedFinding(placed[i], placed[j]) })
+	for i, p := range placed {
+		findings[i] = p.finding
+	}
+}
+
+// SortManifest puts manifest rows into the declared order, in place, and
+// then by arrival. The manifest is rendered, so its order is exactly as
+// load-bearing as the findings': a report that reorders between two runs
+// over one project cannot be diffed.
+//
+// The arrival key matters MORE here than in the findings, not less. A
+// realistic manifest holds fewer rows than the size at which an unstable
+// sort starts reordering ties, so a gap here could never be observed
+// through sorted output however the fixture was written — the comparison
+// has to be asserted directly.
+type placedRan struct {
+	row     Ran
+	arrival int
+}
+
+func lessPlacedRan(a, b placedRan) bool {
+	if ra, rb := Rank(a.row.CheckID), Rank(b.row.CheckID); ra != rb {
+		return ra < rb
+	}
+	return a.arrival < b.arrival
+}
+
 func SortManifest(m Manifest) {
-	sort.SliceStable(m, func(i, j int) bool {
-		return Rank(m[i].CheckID) < Rank(m[j].CheckID)
-	})
+	placed := make([]placedRan, len(m))
+	for i, row := range m {
+		placed[i] = placedRan{row: row, arrival: i}
+	}
+	sort.Slice(placed, func(i, j int) bool { return lessPlacedRan(placed[i], placed[j]) })
+	for i, p := range placed {
+		m[i] = p.row
+	}
 }
