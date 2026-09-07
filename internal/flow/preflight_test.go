@@ -106,13 +106,13 @@ func fullManifest(ids ...string) check.Manifest {
 func TestPreflightRenderReportsEveryHardStopAndNeverPrompts(t *testing.T) {
 	r := &recorder{answer: true}
 	findings := []check.Finding{
-		hardStop(check.CheckIDAstroDep, "This doesn't look like an Astro project."),
-		hardStop(check.CheckIDLockfile, "No lockfile found."),
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
+		hardStop(check.IDAstroDep, "This doesn't look like an Astro project."),
+		hardStop(check.IDLockfile, "No lockfile found."),
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
 	}
 
-	packed, err := gatedDeploy(r, findings, fullManifest(check.CheckIDAstroDep,
-		check.CheckIDLockfile, check.CheckIDLocalhost), 0)
+	packed, err := gatedDeploy(r, findings, fullManifest(check.IDAstroDep,
+		check.IDLockfile, check.IDLocalhost), 0)
 
 	if packed {
 		t.Error("the packer ran after a hard stop")
@@ -148,10 +148,10 @@ func TestPreflightRenderSaysHowManyProblems(t *testing.T) {
 		findings []check.Finding
 		want     string
 	}{
-		{"one", []check.Finding{hardStop(check.CheckIDAstroDep, "a")}, "1 thing"},
+		{"one", []check.Finding{hardStop(check.IDAstroDep, "a")}, "1 thing"},
 		{"two", []check.Finding{
-			hardStop(check.CheckIDAstroDep, "a"),
-			hardStop(check.CheckIDLockfile, "b"),
+			hardStop(check.IDAstroDep, "a"),
+			hardStop(check.IDLockfile, "b"),
 		}, "2 things"},
 	}
 
@@ -185,13 +185,13 @@ func TestPreflightRenderSaysHowManyProblems(t *testing.T) {
 func TestPreflightRenderAsksOnceForEveryWarning(t *testing.T) {
 	r := &recorder{answer: true}
 	findings := []check.Finding{
-		warning(check.CheckIDLocalhost, "src/pages/index.astro has a development URL."),
-		warning(check.CheckIDLocalhost, "src/lib/api.ts has a development URL."),
-		warning(check.CheckIDBuildFormat, "build.format will not produce routable URLs."),
+		warning(check.IDLocalhost, "src/pages/index.astro has a development URL."),
+		warning(check.IDLocalhost, "src/lib/api.ts has a development URL."),
+		warning(check.IDBuildFormat, "build.format will not produce routable URLs."),
 	}
 
-	packed, err := gatedDeploy(r, findings, fullManifest(check.CheckIDLocalhost,
-		check.CheckIDBuildFormat), 0)
+	packed, err := gatedDeploy(r, findings, fullManifest(check.IDLocalhost,
+		check.IDBuildFormat), 0)
 
 	if err != nil {
 		t.Fatalf("error = %v, want nil after the user agreed to continue", err)
@@ -225,8 +225,8 @@ func TestPreflightRenderDeclinedExitsZero(t *testing.T) {
 	r := &recorder{answer: false}
 
 	packed, err := gatedDeploy(r, []check.Finding{
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
-	}, fullManifest(check.CheckIDLocalhost), 0)
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+	}, fullManifest(check.IDLocalhost), 0)
 
 	if packed {
 		t.Error("the packer ran after the user declined")
@@ -250,8 +250,8 @@ func TestPreflightRenderNonInteractiveNeitherContinuesNorAborts(t *testing.T) {
 	r := &recorder{answerTo: ui.ErrNotInteractive}
 
 	packed, err := gatedDeploy(r, []check.Finding{
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
-	}, fullManifest(check.CheckIDLocalhost), 0)
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+	}, fullManifest(check.IDLocalhost), 0)
 
 	if packed {
 		t.Error("the packer ran with warnings nobody could be asked about")
@@ -270,9 +270,9 @@ func TestPreflightRenderNonInteractiveNeitherContinuesNorAborts(t *testing.T) {
 func TestPreflightRenderCleanProjectAsksNothing(t *testing.T) {
 	r := &recorder{}
 
-	packed, err := gatedDeploy(r, nil, fullManifest(check.CheckIDAstroDep,
-		check.CheckIDLockfile, check.CheckIDPagesDir, check.CheckIDBuildFormat,
-		check.CheckIDLocalhost), 0)
+	packed, err := gatedDeploy(r, nil, fullManifest(check.IDAstroDep,
+		check.IDLockfile, check.IDPagesDir, check.IDBuildFormat,
+		check.IDLocalhost), 0)
 
 	if err != nil || !packed {
 		t.Fatalf("packed = %v, err = %v, want the deploy to carry on", packed, err)
@@ -303,25 +303,25 @@ func TestPreflightRenderCleanProjectAsksNothing(t *testing.T) {
 func TestPreflightRenderNamesChecksThatDidNotRun(t *testing.T) {
 	r := &recorder{answer: true}
 	manifest := check.Manifest{
-		{CheckID: check.CheckIDAstroDep, Ran: true},
-		{CheckID: check.CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: check.CheckIDPagesDir, Ran: true},
+		{CheckID: check.IDAstroDep, Ran: true},
+		{CheckID: check.IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: check.IDPagesDir, Ran: true},
 	}
 
 	err := RenderPreflight(r, []check.Finding{
-		warning(check.CheckIDPagesDir, "Couldn't find src/pages."),
+		warning(check.IDPagesDir, "Couldn't find src/pages."),
 	}, manifest, 0)
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
 
 	out := r.out.String()
-	for _, want := range []string{check.CheckIDLockfile, "couldn't read package.json"} {
+	for _, want := range []string{check.IDLockfile, "couldn't read package.json"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not mention %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, check.CheckIDAstroDep) {
+	if strings.Contains(out, check.IDAstroDep) {
 		t.Errorf("output names a check that DID run, which turns the skipped list into "+
 			"noise nobody reads:\n%s", out)
 	}
@@ -337,10 +337,10 @@ func TestPreflightRenderKeepsNotesOutOfSight(t *testing.T) {
 	r := &recorder{answer: true}
 
 	err := RenderPreflight(r, []check.Finding{{
-		CheckID:  check.CheckIDBuildFormat,
+		CheckID:  check.IDBuildFormat,
 		Severity: check.SeverityNote,
 		Message:  "couldn't confirm build.format from this config",
-	}}, fullManifest(check.CheckIDBuildFormat), 0)
+	}}, fullManifest(check.IDBuildFormat), 0)
 
 	if err != nil {
 		t.Fatalf("error = %v, want nil — a note is not a warning", err)
@@ -362,11 +362,11 @@ func TestPreflightRenderNamesTheFilesAFindingIsAbout(t *testing.T) {
 	r := &recorder{answer: true}
 
 	err := RenderPreflight(r, []check.Finding{{
-		CheckID:  check.CheckIDLocalhost,
+		CheckID:  check.IDLocalhost,
 		Severity: check.SeverityWarning,
 		Message:  "A development URL is hard-coded.",
 		Paths:    []string{"src/pages/index.astro", "src/lib/api.ts"},
-	}}, fullManifest(check.CheckIDLocalhost), 0)
+	}}, fullManifest(check.IDLocalhost), 0)
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -405,7 +405,7 @@ func TestPreflightRenderReportsDurationOnlyWhenSlow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &recorder{}
-			if err := RenderPreflight(r, nil, fullManifest(check.CheckIDAstroDep), tc.elapsed); err != nil {
+			if err := RenderPreflight(r, nil, fullManifest(check.IDAstroDep), tc.elapsed); err != nil {
 				t.Fatalf("error = %v", err)
 			}
 			mentioned := strings.Contains(r.out.String(), "Pre-flight took")
@@ -422,15 +422,15 @@ func TestPreflightRenderReportsDurationOnlyWhenSlow(t *testing.T) {
 // something a person can diff and a test can pin.
 func TestPreflightRenderIsByteIdenticalAcrossRuns(t *testing.T) {
 	findings := []check.Finding{
-		warning(check.CheckIDLocalhost, "A development URL is hard-coded."),
-		warning(check.CheckIDBuildFormat, "build.format will not produce routable URLs."),
-		{CheckID: check.CheckIDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
+		warning(check.IDLocalhost, "A development URL is hard-coded."),
+		warning(check.IDBuildFormat, "build.format will not produce routable URLs."),
+		{CheckID: check.IDPagesDir, Severity: check.SeverityNote, Message: "unresolved"},
 	}
 	manifest := check.Manifest{
-		{CheckID: check.CheckIDAstroDep, Ran: true},
-		{CheckID: check.CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: check.CheckIDPagesDir, Ran: false, Reason: "couldn't read astro.config"},
-		{CheckID: check.CheckIDLocalhost, Ran: true},
+		{CheckID: check.IDAstroDep, Ran: true},
+		{CheckID: check.IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: check.IDPagesDir, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: check.IDLocalhost, Ran: true},
 	}
 
 	run := func() string {
@@ -465,17 +465,17 @@ func TestPreflightRenderExitCodes(t *testing.T) {
 		want     int
 	}{
 		{"clean", nil, true, nil, 0},
-		{"warning accepted", []check.Finding{warning(check.CheckIDLocalhost, "w")}, true, nil, 0},
-		{"warning declined", []check.Finding{warning(check.CheckIDLocalhost, "w")}, false, nil, 0},
-		{"hard stop", []check.Finding{hardStop(check.CheckIDAstroDep, "h")}, true, nil, 1},
-		{"no terminal", []check.Finding{warning(check.CheckIDLocalhost, "w")}, false,
+		{"warning accepted", []check.Finding{warning(check.IDLocalhost, "w")}, true, nil, 0},
+		{"warning declined", []check.Finding{warning(check.IDLocalhost, "w")}, false, nil, 0},
+		{"hard stop", []check.Finding{hardStop(check.IDAstroDep, "h")}, true, nil, 1},
+		{"no terminal", []check.Finding{warning(check.IDLocalhost, "w")}, false,
 			ui.ErrNotInteractive, 1},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &recorder{answer: tc.answer, answerTo: tc.answerTo}
-			err := RenderPreflight(r, tc.findings, fullManifest(check.CheckIDLocalhost), 0)
+			err := RenderPreflight(r, tc.findings, fullManifest(check.IDLocalhost), 0)
 			if code := exitCodeFor(t, err); code != tc.want {
 				t.Errorf("exit code = %d, want %d (error %#v)", code, tc.want, err)
 			}

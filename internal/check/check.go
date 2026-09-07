@@ -51,11 +51,11 @@ const (
 // not import the engine, and a renderer that has to name a check it did
 // not run needs the id without depending on whoever produces it.
 const (
-	CheckIDAstroDep    = "astro-dep"
-	CheckIDLockfile    = "lockfile"
-	CheckIDPagesDir    = "pages-dir"
-	CheckIDBuildFormat = "build-format"
-	CheckIDLocalhost   = "localhost"
+	IDAstroDep    = "astro-dep"
+	IDLockfile    = "lockfile"
+	IDPagesDir    = "pages-dir"
+	IDBuildFormat = "build-format"
+	IDLocalhost   = "localhost"
 )
 
 // Finding is one pre-flight check's result: which check produced it, how

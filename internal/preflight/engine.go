@@ -55,11 +55,11 @@ type Check struct {
 // the caller's rule, and a second caller assembling the same checks
 // differently would get a different report out of the same project.
 var declaredOrder = []string{
-	check.CheckIDAstroDep,
-	check.CheckIDLockfile,
-	check.CheckIDPagesDir,
-	check.CheckIDBuildFormat,
-	check.CheckIDLocalhost,
+	check.IDAstroDep,
+	check.IDLockfile,
+	check.IDPagesDir,
+	check.IDBuildFormat,
+	check.IDLocalhost,
 }
 
 // rank places a check id in the declared order. An id nobody declared

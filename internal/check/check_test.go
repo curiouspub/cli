@@ -45,7 +45,7 @@ func TestFindingRoundTrips(t *testing.T) {
 // none.
 func TestFindingCarriesPaths(t *testing.T) {
 	f := Finding{
-		CheckID:  CheckIDLocalhost,
+		CheckID:  IDLocalhost,
 		Severity: SeverityWarning,
 		Message:  "a development URL is hard-coded in these files",
 		Paths:    []string{"src/pages/index.astro", "src/lib/api.ts"},
@@ -56,7 +56,7 @@ func TestFindingCarriesPaths(t *testing.T) {
 	}
 
 	whole := Finding{
-		CheckID:  CheckIDLockfile,
+		CheckID:  IDLockfile,
 		Severity: SeverityHardStop,
 		Message:  "no lockfile found",
 	}
@@ -120,7 +120,7 @@ func TestAdvisoriesKeepsOrderAndDropsNotes(t *testing.T) {
 // the reason is the only thing standing between a reader and the
 // assumption that silence means a clean result.
 func TestRanRecordsWhyNot(t *testing.T) {
-	ran := Ran{CheckID: CheckIDPagesDir, Ran: true}
+	ran := Ran{CheckID: IDPagesDir, Ran: true}
 	if !ran.Ran {
 		t.Error("Ran = false on a row that ran")
 	}
@@ -128,7 +128,7 @@ func TestRanRecordsWhyNot(t *testing.T) {
 		t.Errorf("Reason = %q on a row that ran, want empty", ran.Reason)
 	}
 
-	skipped := Ran{CheckID: CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"}
+	skipped := Ran{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"}
 	if skipped.Ran {
 		t.Error("Ran = true on a row that did not run")
 	}
@@ -143,12 +143,12 @@ func TestRanRecordsWhyNot(t *testing.T) {
 // thing a deterministic report cannot have.
 func TestManifestKeepsDeclaredOrder(t *testing.T) {
 	m := Manifest{
-		{CheckID: CheckIDAstroDep, Ran: true},
-		{CheckID: CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: CheckIDPagesDir, Ran: true},
+		{CheckID: IDAstroDep, Ran: true},
+		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: IDPagesDir, Ran: true},
 	}
 
-	want := []string{CheckIDAstroDep, CheckIDLockfile, CheckIDPagesDir}
+	want := []string{IDAstroDep, IDLockfile, IDPagesDir}
 	var got []string
 	for _, row := range m {
 		got = append(got, row.CheckID)
@@ -165,18 +165,18 @@ func TestManifestKeepsDeclaredOrder(t *testing.T) {
 // is the whole of what they get.
 func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 	ids := map[string]string{
-		"CheckIDAstroDep":    CheckIDAstroDep,
-		"CheckIDLockfile":    CheckIDLockfile,
-		"CheckIDPagesDir":    CheckIDPagesDir,
-		"CheckIDBuildFormat": CheckIDBuildFormat,
-		"CheckIDLocalhost":   CheckIDLocalhost,
+		"IDAstroDep":    IDAstroDep,
+		"IDLockfile":    IDLockfile,
+		"IDPagesDir":    IDPagesDir,
+		"IDBuildFormat": IDBuildFormat,
+		"IDLocalhost":   IDLocalhost,
 	}
 	want := map[string]string{
-		"CheckIDAstroDep":    "astro-dep",
-		"CheckIDLockfile":    "lockfile",
-		"CheckIDPagesDir":    "pages-dir",
-		"CheckIDBuildFormat": "build-format",
-		"CheckIDLocalhost":   "localhost",
+		"IDAstroDep":    "astro-dep",
+		"IDLockfile":    "lockfile",
+		"IDPagesDir":    "pages-dir",
+		"IDBuildFormat": "build-format",
+		"IDLocalhost":   "localhost",
 	}
 	if !reflect.DeepEqual(ids, want) {
 		t.Errorf("check ids = %#v, want %#v", ids, want)
@@ -197,21 +197,21 @@ func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 // project nobody looked at.
 func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 	m := Manifest{
-		{CheckID: CheckIDAstroDep, Ran: true},
-		{CheckID: CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: CheckIDPagesDir, Ran: true},
-		{CheckID: CheckIDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: IDAstroDep, Ran: true},
+		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: IDPagesDir, Ran: true},
+		{CheckID: IDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
 	}
 
 	want := []Ran{
-		{CheckID: CheckIDLockfile, Ran: false, Reason: "couldn't read package.json"},
-		{CheckID: CheckIDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
+		{CheckID: IDLockfile, Ran: false, Reason: "couldn't read package.json"},
+		{CheckID: IDBuildFormat, Ran: false, Reason: "couldn't read astro.config"},
 	}
 	if got := m.NotRun(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NotRun() = %#v, want %#v", got, want)
 	}
 
-	full := Manifest{{CheckID: CheckIDAstroDep, Ran: true}, {CheckID: CheckIDLockfile, Ran: true}}
+	full := Manifest{{CheckID: IDAstroDep, Ran: true}, {CheckID: IDLockfile, Ran: true}}
 	if got := full.NotRun(); got != nil {
 		t.Errorf("NotRun() on a full manifest = %#v, want nil", got)
 	}
