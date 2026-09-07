@@ -370,3 +370,93 @@ func TestCombineAllowsAFindingUnderAnAnsweredIDBesideOtherDeclines(t *testing.T)
 		t.Errorf("findings = %+v, want the one under an answered id", report.Findings())
 	}
 }
+
+// TestCombineRefusesAFindingThatSaysNothing is the sixth enforcement,
+// and it closes a hole the other five could not see by construction.
+//
+// EVERY ONE OF THEM IS ABOUT A FINDING'S ADDRESS — who claimed the id,
+// whether the universe covers it, whether the severity is one that
+// exists, whether the id was answered. None is about its CONTENT. So a
+// warning carrying no message at all passed the gate, rendered as a
+// blank line, and still asked "Continue anyway?" — the user deciding
+// about nothing, and a "no" stopping their deploy.
+//
+// It is the criterion this project minted and has ruled on four times
+// since, finally asked at the gate: AN ADVISORY NAMES SOMETHING THE USER
+// CAN ACT ON OR OBSERVE, OR IT DOES NOT FIRE. A finding with no message
+// names nothing by construction.
+//
+// WHITESPACE COUNTS AS NOTHING, which is a decision rather than a
+// detail: " " renders as the same blank line "" does, and a rule that
+// refused one and passed the other would be a rule about the bytes
+// rather than about what a person can read.
+//
+// IT APPLIES TO NOTES TOO, and that is the other decision. A note is
+// shown by no surface, so it looks like the safe exception — but a note
+// is a fact kept for a caller that asks, and a note with no message
+// keeps nothing. A conditional gate is no gate.
+//
+// MUTATION: remove the enforcement. Reds here; the five existing
+// enforcement rows do not move, since none of their fixtures is silent.
+func TestCombineRefusesAFindingThatSaysNothing(t *testing.T) {
+	cases := []struct {
+		name     string
+		severity Severity
+		message  string
+	}{
+		{"a warning with no message", SeverityWarning, ""},
+		{"a hard stop with no message", SeverityHardStop, ""},
+		{"a note with no message", SeverityNote, ""},
+		{"a message of spaces", SeverityWarning, "   "},
+		{"a message of a newline", SeverityWarning, "\n"},
+		{"a message of a tab", SeverityWarning, "\t"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Combine(Results{
+				Manifest: everyDeclaredID(),
+				Findings: []Finding{{
+					CheckID:  IDLocalhost,
+					Severity: tc.severity,
+					Message:  tc.message,
+				}},
+			})
+
+			var silent *EmptyMessageError
+			if !errors.As(err, &silent) {
+				t.Fatalf("error = %#v, want a refusal: a finding that says nothing renders "+
+					"as a blank line and still asks the user to decide about it", err)
+			}
+			if !reflect.DeepEqual(silent.CheckIDs, []string{IDLocalhost}) {
+				t.Errorf("CheckIDs = %v, want [%s]", silent.CheckIDs, IDLocalhost)
+			}
+			if !strings.Contains(err.Error(), IDLocalhost) {
+				t.Errorf("message = %q, want it to name the check", err.Error())
+			}
+		})
+	}
+}
+
+// TestCombineAcceptsAFindingThatSaysSomething is the floor, and without
+// it the enforcement above could be satisfied by refusing everything —
+// which would pass every row in this file that only asserts a refusal.
+//
+// The message is deliberately unremarkable: one ordinary sentence, no
+// paths, no copy. The rule is that there IS something to read, not that
+// it is well written.
+func TestCombineAcceptsAFindingThatSaysSomething(t *testing.T) {
+	report, err := Combine(Results{
+		Manifest: everyDeclaredID(),
+		Findings: []Finding{
+			{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "A development URL is hard-coded."},
+			{CheckID: IDBuildFormat, Severity: SeverityNote, Message: "recorded, shown to nobody"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Combine refused a report whose findings both say something: %v", err)
+	}
+	if len(report.Findings()) != 2 {
+		t.Errorf("findings = %+v, want both", report.Findings())
+	}
+}

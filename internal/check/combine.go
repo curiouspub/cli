@@ -65,7 +65,7 @@ func (e *DuplicateCoverageError) Error() string {
 // promise below from a property of a call site into a property of a
 // type. See Report.
 //
-// FOUR ENFORCEMENTS, in this order:
+// THE ENFORCEMENTS BELOW, in this order:
 //
 //  1. Duplicate claims, first — a check claimed twice makes every later
 //     question ill-posed, so it is worth answering before them.
@@ -75,8 +75,15 @@ func (e *DuplicateCoverageError) Error() string {
 //  5. Findings under an id the manifest says DECLINED. A check that
 //     looked enough to find something answered; a check that declined
 //     has nothing to report.
+//  6. Findings that say nothing. The five above are every one about a
+//     finding's ADDRESS; this is the only one about its content.
 //
-// A caller gets the first failure rather than all four. They are not
+// Counted by the list rather than by a numeral in this sentence, which
+// said FOUR while five were written beneath it — in the one file whose
+// subject is completeness. A count in prose beside a list that grows is
+// a fact with an expiry date.
+//
+// A caller gets the first failure rather than all of them. They are not
 // independent — one wiring mistake usually trips several — and a reader
 // fixing the first will re-run anyway.
 func Combine(parts ...Results) (Report, error) {
@@ -109,6 +116,10 @@ func Combine(parts ...Results) (Report, error) {
 		return Report{}, &ContradictedFindingError{CheckIDs: contradicted}
 	}
 
+	if silent := silentIDs(findings); len(silent) > 0 {
+		return Report{}, &EmptyMessageError{CheckIDs: silent}
+	}
+
 	SortFindings(findings)
 	SortManifest(manifest)
 	return Report{findings: findings, manifest: manifest, validated: true}, nil
@@ -138,6 +149,26 @@ func unclaimedIDs(findings []Finding, m Manifest) []string {
 	var out []string
 	for _, f := range findings {
 		if !claimed[f.CheckID] && !seen[f.CheckID] {
+			seen[f.CheckID] = true
+			out = append(out, f.CheckID)
+		}
+	}
+	sortIDs(out)
+	return out
+}
+
+// silentIDs returns every check id with a finding that says nothing,
+// deterministically ordered.
+//
+// WHITESPACE IS NOTHING. A message of spaces renders as the same blank
+// line an empty one does, so a rule that refused one and passed the
+// other would be a rule about bytes rather than about what a person can
+// read.
+func silentIDs(findings []Finding) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range findings {
+		if strings.TrimSpace(f.Message) == "" && !seen[f.CheckID] {
 			seen[f.CheckID] = true
 			out = append(out, f.CheckID)
 		}

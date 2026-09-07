@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -638,5 +639,68 @@ func TestWalkRefusesARootItCannotRead(t *testing.T) {
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("error = %v, want it to wrap the not-exist error", err)
+	}
+}
+
+// TestWalkRefusesANestedDirectoryItCannotRead is the row one level in
+// from the one above, and the level is the point.
+//
+// A root that cannot be read fails obviously: nothing is scanned and the
+// caller gets an error instead of an empty tree. A directory DEEP in the
+// project is the interesting case, because by the time it is reached the
+// walk already holds a perfectly good list of files — so "return what we
+// have" is the change somebody makes one day while handling partial
+// trees, and it would reach the packer as a successful scan of a project
+// with a directory silently missing from it.
+//
+// The user's site would then publish without whatever was in there, and
+// nothing in the run would have said so. Every other unreadable shape
+// the walk meets is pinned — a symlink loop, a pipe, a non-regular
+// ignore file, an illegal name — and this one was not, so the change
+// above would have been discovered rather than caught.
+//
+// The row is a RUNTIME skip rather than a build tag, deliberately: it
+// compiles everywhere and only the environment decides, which is the
+// side of that line the skip manifest can still see. It is declared
+// there for both platforms it can legitimately give up on.
+//
+// MUTATION: in descend, return nil instead of the error for a
+// non-empty rel. Reds here and leaves the root row above green, since
+// that one never reaches this branch.
+func TestWalkRefusesANestedDirectoryItCannotRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits do not gate reads the same way on Windows, so " +
+			"the fixture this row needs cannot be built here")
+	}
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>hi</h1>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(root, "assets")
+	if err := os.MkdirAll(filepath.Join(locked, "img"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("this process ignores directory permission bits (running as root?)")
+	}
+
+	_, err := Walk(OSFileSystem{}, root)
+	if err == nil {
+		t.Fatal("a directory inside the project could not be read and the walk reported " +
+			"success — the site would publish without whatever was in it, and nothing " +
+			"in the run would have said so")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("error = %v, want it to wrap the permission error", err)
+	}
+	if !strings.Contains(err.Error(), "assets") {
+		t.Errorf("error = %v, want it to name the directory it could not read; the root "+
+			"is readable, so naming the project tells the reader nothing", err)
 	}
 }

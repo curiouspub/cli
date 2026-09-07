@@ -27,6 +27,29 @@
 # A line here is a claim that the skip is legitimate on the platforms it
 # names. Say why in a comment above it; the next reader is deciding
 # whether the claim still holds.
+#
+# WHAT THIS GATE CANNOT SEE, stated here rather than only in a review,
+# because here is where its reader is. It works by reading the skip
+# EVENTS a test run reports, so it sees a row that ran and gave up. It
+# cannot see a row that never ran at all:
+#
+#   - a row excluded by a build tag is not compiled into the binary, so
+#     nothing reports it;
+#   - a row behind a TestMain that returns without calling m.Run()
+#     likewise reports nothing.
+#
+# In both cases the run is green and the file below is silent, which
+# looks exactly like a row that passed. It is the same sentence the walk
+# reached from the other side: a row that does not exist cannot report
+# that it did not run.
+#
+# The consequence for whoever writes the next platform-dependent row: a
+# BUILD TAG is the right tool when the row cannot compile on a platform,
+# and it buys the compiler's own check that the file still builds on the
+# legs it does target — but it moves the row outside this gate's view, so
+# say in the file itself which platform it belongs to and why. A runtime
+# skip stays visible here and is the right tool when the row compiles
+# everywhere and only the environment decides.
 
 # The child half of a row that re-executes the test binary to watch it
 # die of a signal. It is a test only when the parent invokes it with the
@@ -89,3 +112,12 @@ windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSi
 # actual volume anyway, because the tag says what the platform generally
 # does and not what this mount does.
 linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollision
+
+# A directory the walk cannot read has to be built by taking away the
+# read bit, and two environments legitimately refuse to produce it:
+# Windows, where permission bits do not gate a directory read the same
+# way, and any account whose process ignores them — root in a container
+# being the ordinary case. The row checks that the fixture really is
+# unreadable before trusting it, so the skip means the environment said
+# no rather than the row guessing.
+* github.com/curiouspub/cli/internal/pack TestWalkRefusesANestedDirectoryItCannotRead

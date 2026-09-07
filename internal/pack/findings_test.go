@@ -411,3 +411,69 @@ func headline(f check.Finding) string {
 	}
 	return f.Message
 }
+
+// TestCharsetNamesTheMarkForEveryCombiningCategory. The mark detection
+// asked unicode.Mn alone, which is NONSPACING marks — one of the three
+// categories Unicode calls a mark. A spacing mark (Mc) or an enclosing
+// one (Me) fell through to the fallback and was refused by naming the
+// character: "its name contains "ः" (U+0903)".
+//
+// NEITHER PUBLISHES EITHER WAY, so this is not a missed refusal. What it
+// misses is the SENTENCE, and the sentence is the whole reason the
+// detection survived the warning that used to call it: the warning was
+// retired because it could never fire alone, on the argument that the
+// wording was the actionable half. A rule kept for its wording that
+// covers two thirds of its subject is that argument holding for two
+// thirds of its subject.
+//
+// Asserted structurally, like the row above it: all three categories
+// must give the SAME sentence as each other, and a character that is not
+// a mark must still give a different one — so the fix cannot be "call
+// everything a mark".
+//
+// MUTATION: drop Mc and Me from hasCombiningMark. The first comparison
+// reds. MUTATION: make hasCombiningMark return true always. The second
+// reds, and so does the row above.
+func TestCharsetNamesTheMarkForEveryCombiningCategory(t *testing.T) {
+	var (
+		nonspacing = "public/café.png" // Mn — a combining acute
+		spacing    = "public/kaः.png"   // Mc — Devanagari visarga
+		enclosing  = "public/x⃝.png"    // Me — combining enclosing circle
+		notAMark   = "public/naïve.png" // an ordinary non-ASCII letter
+	)
+
+	got := charsetFindings([]string{nonspacing, spacing, enclosing, notAMark})
+	if len(got) != 4 {
+		t.Fatalf("findings = %v, want one each — every one of these is outside the "+
+			"allowed set and must be refused", got)
+	}
+
+	reason := map[string]string{}
+	action := map[string]string{}
+	for i, name := range []string{nonspacing, spacing, enclosing, notAMark} {
+		if got[i].Severity != check.SeverityHardStop {
+			t.Errorf("[%d] Severity = %q, want a hard stop", i, got[i].Severity)
+		}
+		reason[name] = strings.Replace(headline(got[i]), name, "", 1)
+		action[name] = got[i].Next
+	}
+
+	for _, other := range []string{spacing, enclosing} {
+		if reason[other] != reason[nonspacing] {
+			t.Errorf("a spacing or enclosing mark is refused with a different sentence "+
+				"from a nonspacing one:\n  %q\n  %q\nall three are one character combining "+
+				"with its neighbour, which is the thing the reader cannot see",
+				reason[other], reason[nonspacing])
+		}
+		if action[other] != action[nonspacing] {
+			t.Errorf("a spacing or enclosing mark offers a different action from a "+
+				"nonspacing one:\n  %q\n  %q", action[other], action[nonspacing])
+		}
+	}
+
+	if reason[notAMark] == reason[nonspacing] {
+		t.Errorf("an ordinary non-ASCII letter is refused as though it carried a mark "+
+			"(%q) — it does not, and naming the character is right where the character "+
+			"IS the problem", reason[notAMark])
+	}
+}

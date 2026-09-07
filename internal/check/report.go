@@ -143,3 +143,27 @@ func (e *ContradictedFindingError) Error() string {
 	return fmt.Sprintf("a finding reports on %s, which the manifest says was declined; "+
 		"a check that found something answered", strings.Join(e.CheckIDs, ", "))
 }
+
+// EmptyMessageError is what Combine returns when a finding carries no
+// message a person could read.
+//
+// THE OTHER FIVE ENFORCEMENTS ARE ALL ABOUT A FINDING'S ADDRESS — who
+// claimed the id, whether the universe covers it, whether the severity
+// exists, whether the id was answered. None is about its CONTENT, so a
+// warning saying nothing at all passed the gate, rendered as a blank
+// line, and still asked the user whether to continue. They decided about
+// nothing, and a "no" stopped their deploy.
+//
+// This is the criterion this package's own Severity documents, finally
+// asked where it can be enforced: AN ADVISORY NAMES SOMETHING THE USER
+// CAN ACT ON OR OBSERVE, OR IT DOES NOT FIRE. A finding with no message
+// names nothing by construction, whatever its severity.
+type EmptyMessageError struct {
+	CheckIDs []string
+}
+
+func (e *EmptyMessageError) Error() string {
+	return fmt.Sprintf("a finding from %s carries no message; a finding that says nothing "+
+		"renders as a blank line and still asks the reader to decide about it",
+		strings.Join(e.CheckIDs, ", "))
+}
