@@ -204,10 +204,14 @@ what passes locally and what passes in CI cannot diverge.
 
 ## The guards
 
-Six rules the repo states about itself are tests, so a violation fails
-when it is introduced rather than at review. Five live in
-`internal/guard`; the sixth lives beside the value it checks, for the
-reason given under it.
+The rules the repo states about itself are tests, so a violation fails
+when it is introduced rather than at review. They live in
+`internal/guard`, except the last, which lives beside the value it checks
+for the reason given under it.
+
+Counted by the list rather than by a numeral here. A count in prose
+beside a list that grows is a fact with an expiry date, and this
+sentence has already carried a stale one.
 
 1. **No provider SDK, no telemetry dependency, no auto-updater** —
    checked against the module's real dependency graph, both the package
@@ -258,8 +262,8 @@ reason given under it.
 Each guard fails loudly if it scanned nothing, so none of them can pass
 by looking at an empty set.
 
-**Three of the four manifests are RULE FILES, and they get exactly one
-narrow carve-out.** `scripts/citation-patterns.txt`,
+**The manifests that are RULE FILES get exactly one narrow carve-out,
+and the skip manifest is not one of them.** `scripts/citation-patterns.txt`,
 `scripts/banned-dependencies.txt` and `scripts/vendor-terms.txt` have to
 spell the things they forbid — you cannot match a module path without
 writing one down — so their **data** lines are exempt **from the vendor
