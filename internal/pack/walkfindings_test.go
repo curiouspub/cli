@@ -18,13 +18,13 @@ import (
 // several kinds of trouble, and every one of them reported in the one
 // answer the surfaces will render.
 //
-// ONE FILE WEARS TWO OF THE HATS, and that is a fact about the checks
-// rather than a shortcut in the fixture. A combining mark is by
-// definition outside ASCII, so a name carrying one is always also
-// outside the key charset — there is no tree in which the mark warning
-// fires and the charset hard stop does not. The fixture therefore holds
-// a skipped link and one decomposed name, and expects three findings:
-// the link, the mark, and the charset stop the mark implies.
+// TWO FINDINGS, AND THE COUNT IS A RULING RATHER THAN A FIXTURE. A
+// combining mark is by definition outside ASCII, so a name carrying one
+// is always also outside the key charset — there was no tree in which
+// the mark warning fired and the charset hard stop did not, which is why
+// the warning was retired and its detection folded into the hard stop's
+// wording. The fixture holds a skipped link and one decomposed name, and
+// expects the link's warning and the charset stop.
 //
 // THE COLLISION IS ABSENT ON TWO OF THE THREE PLATFORMS, and the helper
 // that would add it says so. Writing two names that differ only in case
@@ -44,14 +44,9 @@ func TestWalkEmitsItsFindingsFromOneTree(t *testing.T) {
 		t.Fatalf("creating the symlink fixture: %v", err)
 	}
 
-	want := []string{check.IDPathCharset, check.IDSymlinks, check.IDUnicodeMarks}
+	want := []string{check.IDPathCharset, check.IDSymlinks}
 	if addCaseCollision(t, root) {
-		want = []string{
-			check.IDPathCharset,
-			check.IDSymlinks,
-			check.IDCaseCollision,
-			check.IDUnicodeMarks,
-		}
+		want = []string{check.IDPathCharset, check.IDSymlinks, check.IDCaseCollision}
 	}
 
 	res := mustWalk(t, OSFileSystem{}, root).Results
@@ -68,7 +63,7 @@ func TestWalkEmitsItsFindingsFromOneTree(t *testing.T) {
 //
 // IT EXISTS BECAUSE THE ROW ABOVE SKIPS. That one needs a real symbolic
 // link, and a Windows account without the privilege to create one skips
-// it — which would leave the property that all four findings arrive
+// it — which would leave the property that every finding arrives
 // together, in report order, from a single walk untested on exactly the
 // platform whose file names are least like everybody else's. A synthetic
 // directory listing holds every state at once: a link, two names
@@ -94,7 +89,6 @@ func TestWalkEmitsEveryFindingFromOneListing(t *testing.T) {
 		check.IDPathCharset,
 		check.IDSymlinks,
 		check.IDCaseCollision,
-		check.IDUnicodeMarks,
 	}
 	if got := idsOf(res); !reflect.DeepEqual(got, want) {
 		t.Errorf("findings = %v, want %v — the hard stop first, then the declared order", got, want)
@@ -145,7 +139,7 @@ func TestWalkStopsOnAnAssetNameTheServerWouldRefuse(t *testing.T) {
 //
 // IT IS A GUARD RATHER THAN A CONVENTION because the row's shape is
 // expected to change, and a change that has one site is mechanical while
-// the same change spread over four is an invitation to update three of
+// the same change spread over three is an invitation to update two of
 // them. Nothing in the compiler notices a second literal appearing, and
 // nothing in the behaviour differs until the shape moves.
 //

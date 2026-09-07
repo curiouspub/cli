@@ -12,7 +12,7 @@ import (
 // What the walk has to say about a project, and the row that says it
 // looked.
 //
-// ALL FOUR ARE COMPUTED FROM THE PATH LIST ALONE — no file is opened, no
+// ALL THREE ARE COMPUTED FROM THE PATH LIST ALONE — no file is opened, no
 // byte of anybody's content is read — which is why they can be produced
 // by the scan rather than by the packer. That timing is the whole point
 // of putting them here: a warning discovered while writing the archive
@@ -30,7 +30,6 @@ import (
 var walkIDs = []string{
 	check.IDSymlinks,
 	check.IDCaseCollision,
-	check.IDUnicodeMarks,
 	check.IDPathCharset,
 }
 
@@ -39,8 +38,8 @@ var walkIDs = []string{
 //
 // The row's shape is expected to change — a per-check status carrying a
 // reason and a kind, rather than a flag and a string — and a change with
-// one site is mechanical while the same change spread over four is an
-// invitation to update three of them. Nothing in the compiler notices a
+// one site is mechanical while the same change spread over three is an
+// invitation to update two of them. Nothing in the compiler notices a
 // second literal appearing, so a guard in this package's own suite reads
 // the source and asserts there is one.
 //
@@ -73,7 +72,6 @@ func results(files []File, symlinks []string) check.Results {
 	var findings []check.Finding
 	findings = append(findings, symlinkFindings(symlinks)...)
 	findings = append(findings, collisionFindings(paths)...)
-	findings = append(findings, markFindings(paths)...)
 	findings = append(findings, charsetFindings(paths)...)
 
 	// Sorted here as well as in the combiner, so this producer's own
@@ -146,34 +144,15 @@ func collisionFindings(paths []string) []check.Finding {
 	return out
 }
 
-// markFindings reports names written with combining marks.
+// hasCombiningMark reports whether any part of p carries a combining
+// mark — a letter and its accent written as two characters rather than
+// one.
 //
-// The same visible name has two byte spellings — one character, or a
-// letter followed by an accent — and tools disagree about which they
-// produce. A link written in one spelling then fails to find a file
-// stored in the other.
-func markFindings(paths []string) []check.Finding {
-	var marked []string
-	for _, p := range paths {
-		if hasCombiningMark(p) {
-			marked = append(marked, p)
-		}
-	}
-	if len(marked) == 0 {
-		return nil
-	}
-	return []check.Finding{{
-		CheckID:  check.IDUnicodeMarks,
-		Severity: check.SeverityWarning,
-		Message: fmt.Sprintf(
-			"%s written with combining accent marks, which different tools spell differently:",
-			countOf(len(marked), "file name is", "file names are")),
-		Paths: check.NewPaths(marked...),
-		Next: "Renaming these using plain unaccented letters is the reliable fix; the same " +
-			"name can otherwise be stored one way and linked to another.",
-	}}
-}
-
+// IT SURVIVED THE WARNING THAT USED TO CALL IT. That warning was retired
+// because it could never fire alone; the detection is still worth having,
+// because it decides which sentence the hard stop uses, and a name whose
+// accent is a separate character is the refusal a person is least able
+// to see for themselves in a file listing.
 func hasCombiningMark(p string) bool {
 	for _, r := range p {
 		if unicode.Is(unicode.Mn, r) {
@@ -221,8 +200,7 @@ func charsetFindings(paths []string) []check.Finding {
 			Why: fmt.Sprintf("Every part of a published path may use only letters, digits, "+
 				"and the characters . _ ~ and - , with at most %d bytes in any one part "+
 				"and %d bytes in the whole path.", pathSegmentLimit, pathTotalLimit),
-			Next: "Rename it to something inside that set, update whatever links to it, and " +
-				"run `curious deploy` again.",
+			Next: nextFor(p),
 		})
 	}
 	return out
@@ -235,6 +213,16 @@ func charsetFindings(paths []string) []check.Finding {
 // because naming the offending character is the most useful thing this
 // message can do.
 func charsetProblem(p string) string {
+	// THE MARK IS ASKED ABOUT FIRST, and over the whole path rather than
+	// up to the first other offence. It is the refusal a reader cannot
+	// see: two spellings of one visible name look identical in a file
+	// listing, where a space does not. A name breaking both rules is
+	// better described by the one its owner would never have found.
+	if hasCombiningMark(p) {
+		return "its name is written with a combining accent mark — the accent is a " +
+			"separate character from the letter it sits on, so the name is two " +
+			"characters where it looks like one"
+	}
 	for _, r := range p {
 		if r == '/' || allowedInPath(r) {
 			continue
@@ -278,4 +266,23 @@ func countOf(n int, one, many string) string {
 		return "1 " + one
 	}
 	return fmt.Sprintf("%d %s", n, many)
+}
+
+// nextFor is the action, and a name carrying a combining mark gets a
+// different one.
+//
+// RETYPING IS NOT THE FIX THERE, which is the trap this sentence exists
+// to keep somebody out of. Typing the accented letter again usually
+// produces the OTHER spelling — one character instead of two — and that
+// spelling is outside the allowed set as well, so the rename looks like
+// it worked and the deploy fails the same way. The accent has to leave
+// the name.
+func nextFor(p string) string {
+	if hasCombiningMark(p) {
+		return "Rename it using plain unaccented letters — retyping the accented letter " +
+			"gives you its other spelling, which this platform cannot serve either — " +
+			"then update whatever links to it and run `curious deploy` again."
+	}
+	return "Rename it to something inside that set, update whatever links to it, and " +
+		"run `curious deploy` again."
 }

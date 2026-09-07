@@ -237,7 +237,6 @@ func TestCombineIsIndependentOfArgumentOrder(t *testing.T) {
 			{CheckID: IDLocalhost, Ran: true},
 			{CheckID: IDSymlinks, Ran: true},
 			{CheckID: IDCaseCollision, Ran: true},
-			{CheckID: IDUnicodeMarks, Ran: true},
 			{CheckID: IDPathCharset, Ran: true},
 		},
 		Findings: []Finding{{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "from the walk"}},

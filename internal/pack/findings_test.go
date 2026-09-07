@@ -8,7 +8,7 @@ import (
 	"github.com/curiouspub/cli/internal/check"
 )
 
-// The four detectors are PURE FUNCTIONS OF A PATH LIST, and this file
+// The three detectors are PURE FUNCTIONS OF A PATH LIST, and this file
 // drives them from injected lists on every platform.
 //
 // That is not a convenience. One of the states a detector has to
@@ -128,49 +128,6 @@ func TestCaseCollisionComparesTheWholePath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Combining marks
-// ---------------------------------------------------------------------
-
-// TestCombiningMarkDetectionUsesTheDecomposedBytes.
-//
-// THE ESCAPE IS THE ASSERTION. Typing an accented character into this
-// file would leave the byte sequence to whatever the editor chose, and
-// the two spellings of that name are exactly what the row is about — so
-// the composed and decomposed forms are both written as escapes, and the
-// row can then state which one fires and which does not.
-//
-// MUTATION: test the composed rune for the mark category instead of
-// iterating the name's runes. Both halves red.
-func TestCombiningMarkDetectionUsesTheDecomposedBytes(t *testing.T) {
-	decomposed := "public/cafe\u0301.png" // "e" then U+0301 COMBINING ACUTE ACCENT
-	composed := "public/caf\u00e9.png"    // U+00E9 LATIN SMALL LETTER E WITH ACUTE
-
-	got := markFindings([]string{decomposed, composed, "public/plain.png"})
-	if len(got) != 1 {
-		t.Fatalf("findings = %d, want one — only the decomposed spelling carries a mark: %v",
-			len(got), got)
-	}
-	if got[0].CheckID != check.IDUnicodeMarks {
-		t.Errorf("CheckID = %q, want %q", got[0].CheckID, check.IDUnicodeMarks)
-	}
-	if got[0].Severity != check.SeverityWarning {
-		t.Errorf("Severity = %q, want a warning", got[0].Severity)
-	}
-	if !reflect.DeepEqual(got[0].Paths, []string{decomposed}) {
-		t.Errorf("Paths = %v, want only the decomposed name", got[0].Paths)
-	}
-}
-
-// TestCombiningMarkDetectionLooksAtEverySegment. A mark in a directory
-// component is the same hazard as one in a file name: the key the site
-// is served by carries both.
-func TestCombiningMarkDetectionLooksAtEverySegment(t *testing.T) {
-	if got := markFindings([]string{"cafe\u0301/index.astro"}); len(got) != 1 {
-		t.Errorf("findings = %v, want one for a mark in a directory name", got)
-	}
-}
-
-// ---------------------------------------------------------------------
 // The key charset — the hard stop
 // ---------------------------------------------------------------------
 
@@ -262,19 +219,131 @@ func TestCharsetRejectsAnOverlongSegmentAndAnOverlongKey(t *testing.T) {
 	}
 }
 
-// TestCharsetRejectsEveryCombiningMarkToo records a fact about the two
-// checks rather than about one of them: a combining mark is by
-// definition outside ASCII, so a name that fires the mark warning always
-// fires this hard stop as well. Nothing in the tree can trip one without
-// the other, and a row that assumed otherwise would be asserting an
-// impossible state.
-func TestCharsetRejectsEveryCombiningMarkToo(t *testing.T) {
-	name := "public/cafe\u0301.png"
-	if got := markFindings([]string{name}); len(got) != 1 {
-		t.Fatalf("mark findings = %v, want one", got)
+// TestCharsetTellsACombiningMarkFromEveryOtherRefusal is where the
+// retired warning's detection went, and the sentence is the whole of
+// what it bought.
+//
+// THE WARNING COULD NEVER FIRE ALONE. Every combining mark is outside
+// ASCII and therefore outside the allowed set, so a name that tripped it
+// always tripped this hard stop on the same file — an advisory that has
+// never once been the thing a reader could act on is not an advisory,
+// and it was retired rather than reworded. What a reader CAN act on is
+// knowing which refusal they met: a letter with an accent written as two
+// characters is a different problem from a space, and the fix is a
+// different fix.
+//
+// The wording is not asserted, because these are product sentences and
+// the next person to improve them should not have to edit a test. What
+// is asserted is the SHAPE the sentences have to have — and the first
+// draft of this row got that wrong, which is worth recording because a
+// mutation is what found it.
+//
+// It asserted only that the reasons DIFFER. Dropping the mark branch
+// entirely leaves them differing, because the fallback names the
+// offending character and the two spellings offend with different
+// characters — so a row written to catch that mutation sailed past it.
+// A property satisfied for the wrong reason is not weaker evidence, it
+// is none.
+//
+// What separates the two mechanisms is that the mark case is ONE
+// problem: an accent written as a separate character, whichever accent
+// it is. So two different marks must give the SAME sentence, where two
+// different ordinary characters must not — and no fallback that names
+// the character can satisfy both halves.
+//
+// MUTATION: drop the mark branch and let a mark fall through to the
+// generic wording. Reds here. MUTATION: make the action the same
+// whatever the refusal was. Reds here. MUST NOT MOVE: the allowed-set
+// row, the over-length rows.
+func TestCharsetTellsACombiningMarkFromEveryOtherRefusal(t *testing.T) {
+	decomposed := "public/cafe\u0301.png"   // "e" then U+0301 COMBINING ACUTE ACCENT
+	otherMark := "public/u\u0308ber.png"    // "u" then U+0308 COMBINING DIAERESIS
+	composed := "public/caf\u00e9.png"      // U+00E9 LATIN SMALL LETTER E WITH ACUTE
+	otherComposed := "public/\u00fcber.png" // U+00FC LATIN SMALL LETTER U WITH DIAERESIS
+	space := "public/my photo.png"
+
+	got := charsetFindings([]string{
+		decomposed, otherMark, composed, otherComposed, space, "public/plain.png",
+	})
+	if len(got) != 5 {
+		t.Fatalf("findings = %d, want one for each of the five bad names: %v", len(got), got)
 	}
-	if got := charsetFindings([]string{name}); len(got) != 1 {
-		t.Errorf("charset findings = %v, want one — a combining mark is never inside the allowed set", got)
+
+	reasons := map[string]string{}
+	for i, name := range []string{decomposed, otherMark, composed, otherComposed, space} {
+		if got[i].Severity != check.SeverityHardStop {
+			t.Errorf("[%d] Severity = %q, want a hard stop", i, got[i].Severity)
+		}
+		if !reflect.DeepEqual(got[i].Paths, []string{name}) {
+			t.Errorf("[%d] Paths = %v, want [%s]", i, got[i].Paths, name)
+		}
+		if !strings.Contains(headline(got[i]), name) {
+			t.Errorf("[%d] the message %q does not name the file", i, headline(got[i]))
+		}
+		reasons[name] = strings.Replace(headline(got[i]), name, "", 1)
+	}
+
+	// One problem, one sentence: which accent it is changes nothing about
+	// what happened or what to do. A fallback that names the offending
+	// character cannot satisfy this.
+	if reasons[decomposed] != reasons[otherMark] {
+		t.Errorf("two names carrying different combining marks are refused with different "+
+			"sentences (%q vs %q) — the problem is the same one either way, and a message "+
+			"that varies with the accent is naming the character rather than the problem",
+			reasons[decomposed], reasons[otherMark])
+	}
+	// And the other way, so the row cannot be satisfied by one sentence
+	// covering everything: a message naming the character is right where
+	// the character IS the problem.
+	if reasons[composed] == reasons[otherComposed] {
+		t.Errorf("two different characters outside the allowed set are refused with the "+
+			"same sentence (%q) — the reader is not told which one they have",
+			reasons[composed])
+	}
+	if reasons[decomposed] == reasons[composed] {
+		t.Errorf("the decomposed and precomposed spellings are refused with the same "+
+			"sentence (%q) — the two-character spelling is the one a reader has to be "+
+			"told about", reasons[decomposed])
+	}
+	if reasons[decomposed] == reasons[space] || reasons[composed] == reasons[space] {
+		t.Errorf("a space and a character outside ASCII are refused with the same "+
+			"sentence: %q / %q / %q", reasons[decomposed], reasons[composed], reasons[space])
+	}
+	if got[0].Next == got[4].Next {
+		t.Errorf("a name carrying a combining mark offers the same action as one with a "+
+			"space (%q) — retyping the accented letter gives its other spelling, which "+
+			"this platform cannot serve either, and that is the sentence being bought",
+			got[0].Next)
+	}
+}
+
+// TestCharsetNamesTheMarkEvenWhenSomethingElseIsAlsoWrong. A name can
+// break more than one rule, and the mark is the one the reader cannot
+// SEE — two spellings of the same visible name is not a thing a person
+// notices in a file listing, and a space is. So the mark takes
+// precedence over every other refusal in the wording.
+func TestCharsetNamesTheMarkEvenWhenSomethingElseIsAlsoWrong(t *testing.T) {
+	both := "public/my photo\u0301.png"
+	spaceOnly := "public/my photo.png"
+
+	got := charsetFindings([]string{both, spaceOnly})
+	if len(got) != 2 {
+		t.Fatalf("findings = %v, want one each", got)
+	}
+	withMark := strings.Replace(headline(got[0]), both, "", 1)
+	withoutMark := strings.Replace(headline(got[1]), spaceOnly, "", 1)
+	if withMark == withoutMark {
+		t.Errorf("a name with a space AND a combining mark is refused as though it only "+
+			"had the space: %q", withMark)
+	}
+}
+
+// TestCharsetLooksAtEverySegment. A mark in a directory component is the
+// same hazard as one in a file name: the address a site is served at
+// carries both.
+func TestCharsetLooksAtEverySegment(t *testing.T) {
+	if got := charsetFindings([]string{"cafe\u0301/index.astro"}); len(got) != 1 {
+		t.Errorf("findings = %v, want one for a mark in a directory name", got)
 	}
 }
 
@@ -282,15 +351,14 @@ func TestCharsetRejectsEveryCombiningMarkToo(t *testing.T) {
 // The walk's coverage claim
 // ---------------------------------------------------------------------
 
-// TestWalkClaimsExactlyItsFourChecks. Where a package answers a set of
+// TestWalkClaimsExactlyItsThreeChecks. Where a package answers a set of
 // questions, the set is asserted: a fifth id added without a detector,
 // or a detector added without an id, is a gap nothing else in this
 // package can see.
-func TestWalkClaimsExactlyItsFourChecks(t *testing.T) {
+func TestWalkClaimsExactlyItsThreeChecks(t *testing.T) {
 	want := []string{
 		check.IDSymlinks,
 		check.IDCaseCollision,
-		check.IDUnicodeMarks,
 		check.IDPathCharset,
 	}
 	if !reflect.DeepEqual(walkIDs, want) {
@@ -322,7 +390,7 @@ func TestWalkManifestAnswersEveryIDItClaims(t *testing.T) {
 }
 
 // TestCleanTreeStillProducesAFullManifest. A project with nothing wrong
-// with it produces no findings and four rows, which is the distinction
+// with it produces no findings and three rows, which is the distinction
 // the manifest exists for: silence from a check that looked and silence
 // from a check nobody wired up are the same silence without it.
 func TestCleanTreeStillProducesAFullManifest(t *testing.T) {

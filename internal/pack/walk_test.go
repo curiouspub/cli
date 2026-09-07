@@ -430,7 +430,7 @@ func TestWalkSkipsARealNamedPipe(t *testing.T) {
 
 // TestWalkReadsNamesNotBytes, with its own positive control.
 //
-// The four findings are computed from the path list alone, so a tree
+// The findings are computed from the path list alone, so a tree
 // with no ignore file is walked without a single content read. The
 // control immediately below is what makes that zero mean anything: the
 // same wrapper is asked to open a file the walk found, and the count has

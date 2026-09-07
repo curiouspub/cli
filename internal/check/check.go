@@ -57,7 +57,7 @@ const (
 // outside this program is keying on.
 //
 // They live here, in the leaf, because they are not all emitted from one
-// place. The file walk emits four of its own from a package that must
+// place. The file walk emits three of its own from a package that must
 // not import the engine, and a renderer that has to name a check it did
 // not run needs the id without depending on whoever produces it.
 const (
@@ -67,14 +67,24 @@ const (
 	IDBuildFormat = "build-format"
 	IDLocalhost   = "localhost"
 
-	// The four the file walk owns. They are stated here with the rest
+	// The three the file walk owns. They are stated here with the rest
 	// rather than in the package that produces them for the same reason
 	// the others are: the set has to be enumerable from ONE place, and a
 	// renderer naming a check it did not run needs the id without
 	// depending on whoever produced it.
+	//
+	// THERE WAS A FOURTH, and it is worth a line so nobody re-adds it. A
+	// warning for names carrying combining accent marks was retired
+	// before it ever shipped: every combining mark is outside ASCII and
+	// the charset check admits only a small ASCII set, so a name that
+	// fired the warning ALWAYS fired the hard stop on the same file.
+	// There was no project in which the warning was the thing anybody
+	// could act on. The detection did not go with it — it decides which
+	// sentence the hard stop uses, because "a letter with an accent
+	// written as two characters" and "a space" are different problems
+	// with different fixes.
 	IDSymlinks      = "symlinks"
 	IDCaseCollision = "case-collision"
-	IDUnicodeMarks  = "unicode-marks"
 	IDPathCharset   = "path-charset"
 )
 

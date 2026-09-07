@@ -56,7 +56,7 @@ func gitCommand(t *testing.T) string {
 // Unix spelling neutralises nothing on the one platform nobody develops
 // on, and the leg that neutralises nothing is then the leg that reports
 // green. A missing configuration file is treated by git as an empty one,
-// so a path that does not exist needs no platform branch, and all four
+// so a path that does not exist needs no platform branch, and all the
 // home variables are set rather than the one this platform happens to
 // use.
 //

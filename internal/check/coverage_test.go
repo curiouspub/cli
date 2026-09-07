@@ -45,7 +45,7 @@ func standIn(ids ...string) preflight.Check {
 // reaches a user as the name of a check they have never heard of.
 //
 // THERE ARE NOW TWO PRODUCERS, which is what this row was shaped for.
-// The file walk arrived as one more argument and four more entries in
+// The file walk arrived as one more argument and three more entries in
 // the declared list, and the shape held: the row combines rather than
 // reading one manifest, so nothing here had to learn that a second
 // producer exists beyond being handed it.

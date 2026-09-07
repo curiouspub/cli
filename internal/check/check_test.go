@@ -172,7 +172,6 @@ func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 		"IDLocalhost":     IDLocalhost,
 		"IDSymlinks":      IDSymlinks,
 		"IDCaseCollision": IDCaseCollision,
-		"IDUnicodeMarks":  IDUnicodeMarks,
 		"IDPathCharset":   IDPathCharset,
 	}
 	want := map[string]string{
@@ -183,7 +182,6 @@ func TestCheckIDsAreStableAndDistinct(t *testing.T) {
 		"IDLocalhost":     "localhost",
 		"IDSymlinks":      "symlinks",
 		"IDCaseCollision": "case-collision",
-		"IDUnicodeMarks":  "unicode-marks",
 		"IDPathCharset":   "path-charset",
 	}
 	if !reflect.DeepEqual(ids, want) {
@@ -241,7 +239,7 @@ func TestManifestNotRunSelectsOnlyTheSkipped(t *testing.T) {
 func TestDeclaredOrderIsTheCompleteUniverseInReportOrder(t *testing.T) {
 	want := []string{
 		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
-		IDSymlinks, IDCaseCollision, IDUnicodeMarks, IDPathCharset,
+		IDSymlinks, IDCaseCollision, IDPathCharset,
 	}
 	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("DeclaredOrder() = %v, want %v", got, want)
@@ -262,7 +260,7 @@ func TestDeclaredOrderHandsBackACopy(t *testing.T) {
 	}
 	want := []string{
 		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
-		IDSymlinks, IDCaseCollision, IDUnicodeMarks, IDPathCharset,
+		IDSymlinks, IDCaseCollision, IDPathCharset,
 	}
 	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("after a caller overwrote what it was given, DeclaredOrder() = %v, want %v",
