@@ -113,6 +113,27 @@ windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSi
 # does and not what this mount does.
 linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollision
 
+# The row that asks the release tool to validate the release
+# configuration. That tool is not a build dependency of this module and
+# is not installed by `go` — a contributor who has never cut a release
+# has no reason to have it, and the skip is honest on their machine.
+#
+# WHAT THE SKIP COSTS, because a line here is a claim and not a note.
+# This is the only row that asks the tool itself whether the
+# configuration is still one it accepts: a renamed key, a deprecated
+# block, a schema that moved under a version bump. Every other property
+# of that file — what it builds, for which platforms, with which flags,
+# signed how, published where — is asserted by rows that need no tool and
+# run on all three platforms. And the workflow that builds a snapshot on
+# every change installs the tool at an exact pinned version and runs the
+# same configuration through a real build, so what the skip loses is
+# local signal rather than the check.
+#
+# It is a RUNTIME skip and not a build tag on purpose. A tagged row never
+# enters the test binary, so nothing reports it and this gate cannot see
+# it at all — which looks exactly like a row that passed.
+* github.com/curiouspub/cli/internal/guard TestReleaseConfigIsAcceptedByTheReleaseTool
+
 # A directory the walk cannot read has to be built by taking away the
 # read bit, and two environments legitimately refuse to produce it:
 # Windows, where permission bits do not gate a directory read the same

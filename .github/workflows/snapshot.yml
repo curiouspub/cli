@@ -1,0 +1,49 @@
+name: Snapshot
+
+# THE POINT OF THIS WORKFLOW is that the release pipeline being broken is
+# a pull-request failure rather than a discovery made while cutting a
+# release. It runs the whole build matrix, produces every archive and the
+# checksum file, and uploads nothing: no credential is available to it,
+# and none is needed.
+#
+# Signing and the tap write are skipped in a snapshot build by the tool
+# itself, so this workflow needs neither an identity nor a token.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: build every artefact and publish none of them
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The snapshot version is derived from the most recent tag, and
+          # a shallow checkout has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      # install-only, at the SAME exact version the release workflow
+      # uses. A pull-request check that proves a different tool works has
+      # proved nothing about the one that will publish.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.1
+          install-only: true
+
+      # Through the Makefile rather than through the action's own args,
+      # so the command this workflow runs is the command a person runs.
+      # A check somebody cannot reproduce locally is a check they cannot
+      # act on when it fails.
+      - name: make snapshot
+        shell: bash
+        run: make snapshot
