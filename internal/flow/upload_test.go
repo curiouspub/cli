@@ -1053,6 +1053,24 @@ func bulkyProject(t *testing.T) string {
 // report, so a paced drain of a bufferful would look like a stall the
 // client did not cause.
 //
+// WHERE THE MEASUREMENT WAS TAKEN, and where it was not. The 88-110 ms
+// worst gap and the 4 MiB the client hands over before it blocks were
+// measured on ONE environment: local macOS on arm64. That is not even
+// one of the three legs this project's gate runs — those are Linux,
+// macOS and Windows runners, and the macOS one is different hardware.
+//
+// So the margin is measured on one environment and CARRIED UNMEASURED to
+// three. Socket buffer sizes and their autotuning are a property of the
+// kernel and the runner, and Windows in particular has neither the same
+// defaults nor the same behaviour, so there is no reason the numbers
+// transfer. This is the same shape as the defect that produced this
+// round — a value measured at one site and reused at another without
+// asking what the new site does — one artefact along, and it is written
+// here rather than left implicit because the alternative is a margin
+// nobody knows the size of on two thirds of the gate. Twenty runs per
+// leg with this row's own instrumentation is what would settle it; a
+// follow-up carries that.
+//
 // REQUIRED MUTATION: stop resetting the watchdog on progress.
 func TestASlowUploadIsNotAStalledOne(t *testing.T) {
 	const stall = 600 * time.Millisecond
