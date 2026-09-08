@@ -119,6 +119,24 @@ var noAnswerFailure = &Failure{
 		"stop here.",
 }
 
+// serverClosedFailure is the standing copy for a closed-door stop whose
+// caller offered none of its own.
+//
+// It exists for the same reason noAnswerFailure does: without it, a
+// sentinel this package exports falls through to the internal-fault
+// copy, which tells a person that something is broken and invites a bug
+// report — when what actually happened is that a server said no for a
+// while. Nothing is broken, and nothing here is theirs to fix.
+//
+// It names no time to come back, because this sentinel carries none. A
+// caller that knows one says so in the Failure it wraps.
+var serverClosedFailure = &Failure{
+	What: "curious.pub isn't taking this right now.",
+	Why: "The server is closed to this run — not because of anything wrong with\n" +
+		"your project, and not because of anything you did.",
+	Next: "Try again a little later. Nothing has been uploaded.",
+}
+
 // Fail writes a Failure to stderr — never stdout, because a failure is
 // prose for a person and stdout is for output a program will read.
 func (u *UI) Fail(f *Failure) {
@@ -247,7 +265,27 @@ func (u *UI) ExitCode(err error) int {
 	// that produced it, so it renders as itself rather than as an
 	// internal fault.
 	var f *Failure
-	if errors.As(err, &f) {
+	hasCopy := errors.As(err, &f)
+
+	// THE MARK DECIDES THE COST, THE COPY DECIDES THE WORDS, and this is
+	// the one branch where those two answers come from different places.
+	// A closed-door stop is marked by whoever met the condition and
+	// worded by whoever owns the message — often not the same code — so
+	// this reads the mark for the number and the wrapped Failure for the
+	// text, and falls back to the standing copy only when there is none.
+	//
+	// It sits AFTER the errors.As above and BEFORE the ordinary Failure
+	// branch, because a marked Failure satisfies both and only one of
+	// them may answer.
+	if errors.Is(err, ErrServerClosed) {
+		if !hasCopy {
+			f = serverClosedFailure
+		}
+		u.Fail(f)
+		return ExitServerClosed
+	}
+
+	if hasCopy {
 		u.Fail(f)
 		return 1
 	}

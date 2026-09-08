@@ -888,6 +888,19 @@ func createConfigDir(dir string) error {
 //     the reason the endpoint is an ARGUMENT rather than a field this
 //     call reads.
 //
+// # LOAD FIRST, THEN SAVE — the caller's half of the contract
+//
+// This is a method on the value Load returned, and that is deliberate:
+// the unknown-field map lives on it, so a Config built fresh carries a
+// nil one and writing it DROPS every field a newer build wrote. The
+// warning above is about reusing the loaded value's ENDPOINT, not about
+// reusing the value — the endpoint is an argument precisely so the two
+// can be told apart. Load, set nothing, call Save with the pair.
+//
+// The two hazards point in opposite directions, which is why both are
+// stated: reuse the old endpoint and every later run mismatches; build a
+// fresh Config and a future release's field is silently gone.
+//
 // Both endpoint mistakes are hard errors here, and the asymmetry Load
 // draws does not apply: on the read side an empty stored endpoint can
 // only be a caller's bug while an unparseable one most likely came from

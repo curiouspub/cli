@@ -2,6 +2,36 @@
 // non-interactive modes share — starting with Secret, the type any
 // sensitive value must be stored as so it can never accidentally reach a
 // terminal, a log line or a JSON blob.
+//
+// # What the process reports, and what each number MEANS
+//
+// ExitCode is the single place that decides what a failure costs, so the
+// answer cannot differ between commands. There are three answers, and
+// the third one needs a sentence rather than a number:
+//
+//   - 0 — the run did what was asked, INCLUDING a cancellation. Somebody
+//     who pressed Ctrl-D asked for the run to stop and it stopped; a
+//     non-zero code there would make every wrapper script treat a
+//     deliberate act as a fault.
+//   - 1 — the run could not finish. Something is wrong with the project,
+//     the request, the environment, or this program.
+//   - 3 — THE SERVER IS CLOSED TO THIS RUN RIGHT NOW. Nothing is wrong
+//     with the project and nothing is wrong with this program: the door
+//     is shut, and it will open again without anybody changing anything.
+//
+// The third is worth its own code because it is the one failure a script
+// should handle differently — wait and retry, rather than surface an
+// error to whoever ran it — and it is the one a message cannot convey to
+// something that is not reading messages. A caller marks a stop with
+// ServerClosed rather than choosing the number, so the scope is decided
+// here, once, instead of at every surface that meets the condition.
+//
+// WHAT IS DELIBERATELY NOT IN IT: being told to slow down. That is about
+// PACE rather than access — the server says when to come back, the door
+// is not shut, and a caller that treated the two alike would sleep
+// through a limit it was being invited to wait out. The distinction is
+// the whole value of scoping the code, so it is written here rather than
+// left for each caller to draw again.
 package ui
 
 import (
