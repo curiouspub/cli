@@ -171,11 +171,18 @@ func goldenCases() []goldenCase {
 			newEmpty: func() any { return &DeployCreateRequest{} },
 		},
 		{
+			// ExpiresAt joined 2026-09-08. It is the one vocabulary in
+			// which "the link timed out" and "the body was the wrong
+			// length" can be told apart by a client that must not read
+			// the object store's own error body — both arrive as 403.
+			// The fixture's value is fifteen minutes after a plausible
+			// signing, which is the window the server signs today.
 			name:    "DeployCreateResponse",
 			fixture: "deploy_create_response.json",
 			value: &DeployCreateResponse{
 				DeployID:  "5f2a9c3b1e7d",
 				UploadURL: "https://uploads.example.com/deploys/5f2a9c3b1e7d/source.tar.gz?sig=example-value",
+				ExpiresAt: time.Date(2026, 9, 8, 11, 15, 0, 0, time.UTC),
 			},
 			newEmpty: func() any { return &DeployCreateResponse{} },
 		},

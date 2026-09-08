@@ -272,12 +272,51 @@ type DeployCreateRequest struct {
 // the worst kind to freeze into an additive-only contract: adding one later
 // is always allowed, removing one never is.
 //
-// UploadURL also carries no expiry field: the client learns the URL has
+// ~~UploadURL also carries no expiry field: the client learns the URL has
 // expired by the PUT failing, which it must handle regardless, and a
-// second representation of the same fact is a second thing to keep true.
+// second representation of the same fact is a second thing to keep
+// true.~~ CORRECTED 2026-09-08, and kept struck because the reasoning was
+// half right and the half that was wrong is the interesting one.
+//
+// The client does learn by the PUT failing. What it does NOT learn is
+// WHICH failure it had. The server signs this URL with an exact
+// Content-Length (see DeployCreateRequest.Bytes), so an object store
+// answers 403 both for a link whose window has closed and for a body
+// whose length does not match the signature — one is "wait and try
+// again", the other is a client bug that will reproduce forever. A
+// client holding only the status renders one of them and is right half
+// the time; rendering "the upload link expired, run it again" at a size
+// mismatch is worse than saying nothing, because it names the one cause
+// that has been ruled out and sends a person round a loop with no exit.
+//
+// The alternative was to read the store's error body. That is rejected:
+// the response is the substrate's, not this contract's, and a public
+// client that switches on a specific object store's error vocabulary has
+// made the substrate part of the contract by accident. ExpiresAt is the
+// same fact expressed in the one vocabulary both ends already share.
+//
+// Like DeployPublishResponse.ExpiresAt, this is carried because a client
+// CANNOT derive it: the window is measured from a signing the client
+// never sees, and nothing it holds determines it.
+//
+// # It selects a SENTENCE, not an action
+//
+// This package's rule is that no client behaviour may depend on the
+// contents of a success body, and this field is inside it rather than an
+// exception to it. Every value leads to the identical protocol action:
+// PUT the tarball. What it decides is which sentence a person reads
+// AFTER a failure the client was going to handle either way — the rule
+// governs what a client DOES, not what it SAYS.
+//
+// A client built before this field existed decodes the zero value and
+// renders the honest ambiguous copy ("the store refused the upload"),
+// which is what makes the addition additive in fact and not only in
+// form. A zero ExpiresAt therefore means "not told", never "already
+// expired", and a client must not read it as a deadline in the past.
 type DeployCreateResponse struct {
-	DeployID  string `json:"deploy_id"`
-	UploadURL string `json:"upload_url"`
+	DeployID  string    `json:"deploy_id"`
+	UploadURL string    `json:"upload_url"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // DeployStartResponse is the success body of POST /v1/deploys/{id}/start.

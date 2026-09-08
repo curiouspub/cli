@@ -1,4 +1,5 @@
 {
   "deploy_id": "5f2a9c3b1e7d",
-  "upload_url": "https://uploads.example.com/deploys/5f2a9c3b1e7d/source.tar.gz?sig=example-value"
+  "upload_url": "https://uploads.example.com/deploys/5f2a9c3b1e7d/source.tar.gz?sig=example-value",
+  "expires_at": "2026-09-08T11:15:00Z"
 }
