@@ -17,14 +17,20 @@ import (
 // ---------------------------------------------------------------------
 // Test doubles
 //
-// THREE OF THE FIVE CHECKS DO NOT EXIST YET and are not this change's to
-// write. The engine's job is ordering, aggregation and the manifest, so
-// every row below drives the absent checks with a stand-in whose result
-// the row states outright, and the two that DO exist — pages-dir and
-// build-format, both produced by the astro.config check — run for real
-// against a fixture tree. A stand-in here is a statement about what the
-// engine does with a check's answer, never a guess at what that check's
-// answer will be.
+// THE STAND-INS STAYED WHEN THE REAL CHECKS ARRIVED, and that is a
+// decision rather than a leftover. The engine's job is ordering,
+// aggregation and the manifest, so every row below wants a check whose
+// answer the row STATES — driving them with the real astro-dep and
+// lockfile checks would make each row depend on a fixture tree producing
+// exactly the verdict the row needs, and a change to either check's
+// judgement would then red a test about sorting. A stand-in here is a
+// statement about what the engine does with a check's answer, never a
+// guess at what that check's answer will be.
+//
+// The one real check kept in these rows is the astro.config one, because
+// its registration is production wiring this file is the only caller of
+// — see AstroConfigCheck. What the four checks themselves do lives in
+// their own files beside them.
 // ---------------------------------------------------------------------
 
 // stub is a check whose answer the caller dictates. It records the
@@ -55,19 +61,6 @@ func (s *stub) check() Check {
 // sharing one journal.
 func newStub(journal *[]string, result Result, ids ...string) *stub {
 	return &stub{ids: ids, result: result, journal: journal}
-}
-
-// astroConfigCheck wraps the real astro.config check in the shape the
-// engine registers. It is the one adapter this file needs, and its
-// existence is the argument that the engine's seam fits a check that was
-// written before the engine was.
-func astroConfigCheck() Check {
-	return Check{
-		IDs: []string{check.IDPagesDir, check.IDBuildFormat},
-		Run: func(fsys FS, root string) Result {
-			return CheckAstroConfig(fsys, root)
-		},
-	}
 }
 
 // render turns a run's whole output into bytes, which is what the
@@ -281,7 +274,7 @@ func TestEngineCleanProjectYieldsNoFindingsAndAFullManifest(t *testing.T) {
 	checks := []Check{
 		newStub(&journal, Result{}, check.IDAstroDep).check(),
 		newStub(&journal, Result{}, check.IDLockfile).check(),
-		astroConfigCheck(),
+		AstroConfigCheck(),
 		newStub(&journal, Result{}, check.IDLocalhost).check(),
 	}
 
@@ -379,7 +372,7 @@ func TestEngineManifestCarriesWhyACheckDidNotRun(t *testing.T) {
 // MUTATION: emit one row per check rather than per id. Reds on length.
 func TestEngineManifestRowPerDeclaredID(t *testing.T) {
 	var journal []string
-	checks := []Check{astroConfigCheck(), newStub(&journal, Result{}, check.IDLocalhost).check()}
+	checks := []Check{AstroConfigCheck(), newStub(&journal, Result{}, check.IDLocalhost).check()}
 
 	manifest := Run(checks, OSFileSystem{}, filepath.Join("testdata", "engine", "clean")).Manifest
 
@@ -451,7 +444,7 @@ func TestEngineOutputIsByteIdenticalAcrossRuns(t *testing.T) {
 				{CheckID: check.IDAstroDep, Severity: check.SeverityWarning, Message: "third"},
 			}}, check.IDAstroDep).check(),
 			newStub(&journal, declining(check.IDLockfile, "nothing to read"), check.IDLockfile).check(),
-			astroConfigCheck(),
+			AstroConfigCheck(),
 			newStub(&journal, Result{}, check.IDLocalhost).check(),
 		}
 	}
@@ -525,7 +518,7 @@ func TestEngineMakesNoNetworkCalls(t *testing.T) {
 	var journal []string
 	real := []Check{
 		newStub(&journal, Result{}, check.IDAstroDep).check(),
-		astroConfigCheck(),
+		AstroConfigCheck(),
 		newStub(&journal, Result{}, check.IDLocalhost).check(),
 	}
 	root := filepath.Join("testdata", "engine", "no-pages-dir")
@@ -591,7 +584,7 @@ func TestEngineWritesNothing(t *testing.T) {
 	var journal []string
 	Run([]Check{
 		newStub(&journal, Result{}, check.IDAstroDep).check(),
-		astroConfigCheck(),
+		AstroConfigCheck(),
 	}, OSFileSystem{}, root)
 
 	after := snapshot()
@@ -741,7 +734,7 @@ func TestEngineStatsTheRootBeforeAnythingElse(t *testing.T) {
 					Severity: check.SeverityHardStop,
 					Message:  "a check that should never have been asked",
 				}}}, check.IDAstroDep).check(),
-				astroConfigCheck(),
+				AstroConfigCheck(),
 			}, OSFileSystem{}, tc.root)
 
 			if len(journal) != 0 {
