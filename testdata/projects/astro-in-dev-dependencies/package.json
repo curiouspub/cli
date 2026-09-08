@@ -1,0 +1,7 @@
+{
+  "name": "dev-dependency-fixture",
+  "private": true,
+  "devDependencies": {
+    "astro": "^5.0.0"
+  }
+}

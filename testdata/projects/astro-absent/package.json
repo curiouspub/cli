@@ -1,0 +1,7 @@
+{
+  "name": "no-astro-fixture",
+  "private": true,
+  "dependencies": {
+    "vite": "^7.0.0"
+  }
+}
