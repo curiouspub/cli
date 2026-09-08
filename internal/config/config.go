@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/curiouspub/cli/internal/api"
 	"github.com/curiouspub/cli/internal/ui"
@@ -81,32 +82,64 @@ func stripKnownKeys(raw map[string]json.RawMessage) {
 	}
 }
 
-// ambiguousSpellings reports the spellings of ONE known field that a
-// file carries more than one of, or nil when it carries at most one of
-// each.
+// ambiguousSpellings reports a set of top-level keys the file format
+// treats as ONE field but the file spells more than once, or nil when
+// every key in the file is distinct under that relation.
 //
-// There is deliberately no merge and no precedence rule. Two spellings
-// of one field is a file nobody can read the intent of: the format says
-// they are the same field, the person who wrote them plainly meant
-// something, and no rule this package could pick would be more than a
-// guess about which. Picking one silently is exactly how the stale-token
-// failure happened — the run kept saving a fresh token under one
-// spelling and kept sending an old one from the other.
+// # It asks about every key, not only the ones this build knows
 //
-// The result is sorted so the report is the same on every run; a map's
-// iteration order is not something a user should see change underneath
-// them while they are trying to fix their file.
+// The narrow version — checking only the fields this build understands —
+// leaves the identical trap sitting in the file for whichever release
+// learns a fourth. That release ships, meets a file carrying two
+// fold-equal spellings of its new field, fills the struct from one and
+// preserves the other, and is back to a value that is used AND written
+// back. Nothing in the binaries already released could have warned
+// anybody, because they are already released. So the question is asked
+// of every key, and the cost is accepted and stated: a file this build
+// could have round-tripped faithfully is refused. Two keys the format
+// folds together are ambiguous to any decoder that knows the field, so
+// this refuses early rather than wrongly.
+//
+// # An EXACT duplicate is not this, and cannot be
+//
+// A file spelling one key twice byte for byte — two "token" entries —
+// is invisible here, and to any check written at this level. Both the
+// struct decoder and the map decoder take the LAST occurrence, so by the
+// time either result exists the multiplicity is gone: the map holds one
+// entry and the struct holds one value, and they agree. Seeing it would
+// mean re-tokenising the file's bytes rather than reading its decoded
+// form. Accepted with this note, and the consequence is mild by
+// comparison — the two decoders cannot DISAGREE about an exact
+// duplicate, which is the failure this whole check exists for.
+//
+// # Why the comparison is pairwise rather than bucketed by a key
+//
+// Grouping would need a canonical fold form, and any such form is a
+// second implementation of the relation that can drift from it. A
+// pairwise strings.EqualFold cannot drift, because it IS the relation. A
+// config file's top-level fields number in the handful, so the quadratic
+// shape costs nothing worth naming.
+//
+// The keys are sorted first and the first group found is returned, so
+// the report is the same on every run; a map's iteration order is not
+// something a user should see change underneath them while they are
+// trying to fix their file.
 func ambiguousSpellings(raw map[string]json.RawMessage) []string {
-	for _, known := range knownKeys {
-		var found []string
-		for key := range raw {
-			if strings.EqualFold(key, known) {
-				found = append(found, key)
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	for i, key := range keys {
+		group := []string{key}
+		for _, other := range keys[i+1:] {
+			if strings.EqualFold(key, other) {
+				group = append(group, other)
 			}
 		}
-		if len(found) > 1 {
-			slices.Sort(found)
-			return found
+		if len(group) > 1 {
+			return group
 		}
 	}
 	return nil
@@ -206,6 +239,17 @@ type Config struct {
 	// ordinary `if err != nil { return err }` would then abort a
 	// perfectly recoverable run — the whole point of these cases is that
 	// the flow continues into a login.
+	//
+	// THE CONTRACT, because the next caller needs it before it writes a
+	// branch: this value is FOR A PERSON TO READ. A caller that has to
+	// behave differently for different causes branches on a FIELD — Token
+	// being empty, PermissionsChecked, Version — and never on this
+	// error's identity. It does not wrap: the wrapped forms quoted a
+	// stored URL a second time, which is how a password in an api_url
+	// reached one message twice, so the cause is rendered into the text
+	// and errors.Is has nothing here to find. If a flow ever genuinely
+	// needs to distinguish two causes programmatically, the answer is a
+	// new field on this struct, not a sentinel behind this one.
 	NoTokenReason error
 
 	// PermissionsChecked reports whether this platform could check who
@@ -399,29 +443,47 @@ func (cfg *Config) read(path, effectiveAPIURL string) bool {
 	// default.
 	holdsToken := strings.TrimSpace(fc.Token) != ""
 
-	if fc.Version != 0 {
-		cfg.Version = fc.Version
-	}
-
-	// THE VERSION GATE COMES FIRST, before anything else this function
-	// might complain about. A file from a release this build does not
-	// know is a file whose every other property this build is not
-	// entitled to have an opinion about — including how its field names
-	// are spelled. It also used to be reported as corrupted, which the
-	// code already knew was wrong: the map decode had succeeded and the
-	// version had been read before the sentence was printed.
-	if cfg.Version != SchemaVersion {
-		cfg.NoTokenReason = versionError(path, cfg.Version)
-		return holdsToken
-	}
-
-	// Before anything is read OUT of the file, whether it can be read at
-	// all. Nothing below this point — not the endpoint, not the
-	// preserved unknown fields — is taken from a file whose own field
-	// names disagree about what it says.
+	// AMBIGUITY FIRST, and the order is forced rather than chosen: you
+	// cannot say what version a file claims until you know its keys are
+	// unambiguous, because the version field itself is one of the keys
+	// two spellings could disagree about. Nothing below this point — not
+	// the version, not the endpoint, not the preserved unknown fields —
+	// is taken from a file whose own field names disagree about what it
+	// says.
 	if spellings := ambiguousSpellings(raw); spellings != nil {
 		cfg.NoTokenReason = ambiguousError(path, spellings)
 		return true
+	}
+
+	// ABSENT, ZERO AND NULL ARE THREE DIFFERENT THINGS, and assigning
+	// the decoded value only when it was non-zero made them one. Absent
+	// is a field that says nothing and is read as this build's own
+	// schema. Present-and-null is a field that says nothing while
+	// claiming to say something. Present-and-zero is a real number that
+	// no release has ever written. The last two are refused: a file
+	// claiming a schema that does not exist is not one to guess about,
+	// and guessing means reading a stranger's format as though it were
+	// ours.
+	//
+	// The lookup is fold-aware because the decoder's is, and it is safe
+	// to take the first match because the ambiguity check above has
+	// already refused a file with more than one.
+	if encoded, present := rawField(raw, keyVersion); present {
+		if fc.Version == 0 {
+			cfg.NoTokenReason = malformedVersionError(path, encoded)
+			return holdsToken
+		}
+		cfg.Version = fc.Version
+	}
+
+	// A file from a release this build does not know is a file whose
+	// every other property this build is not entitled to have an opinion
+	// about. It used to be reported as corrupted, which the code already
+	// knew was wrong: the map decode had succeeded and the version had
+	// been read before the sentence was printed.
+	if cfg.Version != SchemaVersion {
+		cfg.NoTokenReason = versionError(path, cfg.Version)
+		return holdsToken
 	}
 
 	cfg.APIURL = fc.APIURL
@@ -481,6 +543,39 @@ func versionError(path string, version int) error {
 			"curious has ever written (this build reads version %d) — delete the file "+
 			"and run this command again to log in from scratch",
 		path, version, SchemaVersion)
+}
+
+// rawField finds a top-level field by the same fold relation the JSON
+// decoder matches struct tags with, so this and the decoder cannot
+// disagree about whether a file carries a field.
+//
+// It returns the FIRST match, which is unambiguous only because
+// ambiguousSpellings has already refused any file carrying more than
+// one. Calling it before that check would be reading one of two
+// spellings and calling it the answer.
+func rawField(raw map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	for name, value := range raw {
+		if strings.EqualFold(name, key) {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+// malformedVersionError is for a version field that is PRESENT and is
+// not a version: a literal null, or a zero no release has written.
+//
+// It quotes the literal back rather than describing it, because the two
+// cases suggest different things about how the file got that way — a
+// null is usually a serialiser writing an absent value, a zero is
+// usually a struct that was never filled in — and the person looking at
+// the file can tell those apart when they can see which they have.
+func malformedVersionError(path string, encoded json.RawMessage) error {
+	return fmt.Errorf(
+		"the config file at %s records its schema version as %s, which is not a "+
+			"version any release of curious has written — the file looks corrupted, "+
+			"so delete it and run this command again to log in from scratch",
+		path, encoded)
 }
 
 // endpointMismatch reports why a stored token must not be used against
@@ -634,49 +729,87 @@ func endsAuthority(r rune) bool {
 // claim about it that no test can reach is a claim nobody has checked.
 var renameFile = os.Rename
 
-// The modes the two kinds of directory get, and they are different on
-// purpose — see createConfigDir.
+// The modes the two kinds of directory are created with, and they are
+// treated differently on purpose — see createConfigDir.
+//
+// ownDirMode is SET, after creation, so the umask cannot widen or narrow
+// it. sharedDirMode is only what a level above ours is created with: the
+// umask then governs, and nothing here corrects the result, because that
+// directory is the user's rather than this command's.
 const (
 	ownDirMode    = 0o700
 	sharedDirMode = 0o755
 )
 
-// createConfigDir creates every missing level of dir, and corrects the
-// mode of each level it created — ONLY of those.
+// unusableParentError explains the one failure this design accepts in
+// exchange for not touching a directory it does not own.
+//
+// A umask that strips the owner's execute or write bit makes every
+// directory that user creates unusable to them. When this call had to
+// create the level above ours, that mask applied to it, and nothing here
+// puts the bits back. The operating system reports only "permission
+// denied" on the inner mkdir, which points at the wrong directory and
+// names no cause — so this names the parent, the mode it actually has,
+// and the three things that fix it.
+func unusableParentError(parent, child string, err error) error {
+	mode := "unknown"
+	if fi, statErr := os.Stat(parent); statErr == nil {
+		mode = fmt.Sprintf("%04o", fi.Mode().Perm())
+	}
+	return fmt.Errorf(
+		"could not create the config directory %s: %w — this command had to create "+
+			"%s on the way there, the process umask took permissions off it as it "+
+			"was created (it is now %s), and widening a directory shared with your "+
+			"other tools is not this command's decision to make. Create %s yourself "+
+			"with the permissions you want, or run this command with a less "+
+			"restrictive umask, or set %s to a full path somewhere writable",
+		child, err, parent, mode, parent, envConfigPath)
+}
+
+// createConfigDir creates every missing level of dir, and sets the mode
+// of the LEAF only.
+//
+// # Nothing above the leaf is chmodded, and that is the rule
+//
+// The leaf is ours and it holds a bearer token, so it is pinned to 0700
+// whatever the umask: a directory anyone can list is a token anyone can
+// find. Every level ABOVE it is shared — other tools keep their own
+// configuration there — and it belongs to the user, not to this command.
+// So those levels are created with the conventional mode and the UMASK
+// GOVERNS what that becomes.
+//
+// An earlier version of this pinned created ancestors to 0755 so that a
+// first run would succeed under every mask. It bought that by WIDENING a
+// directory a careful user's umask would have made 0700, which is a tool
+// repairing its environment by deciding it knows better than the umask.
+// Costing a user a message they can act on is the better trade than
+// silently loosening a directory they share with everything else they
+// run.
+//
+// # What that costs, and it is real
+//
+// A umask that strips the owner's execute or write bit makes every
+// directory that user creates unusable to them — everywhere, not only
+// here. So when the shared root does not exist yet AND the mask is one
+// of those, this cannot create the level below it, and says so with the
+// mode it actually found rather than passing the operating system's bare
+// permission error up. The failure is the umask's and the message names
+// it; see the mask table in the row that measures this.
 //
 // # Why this is not one MkdirAll
 //
-// The config file's platform default is two levels deep: a config root
-// shared with every other tool, and this tool's own directory inside it.
-// On an account where nothing has used the shared root yet, both are
-// missing, and the mode a directory is CREATED with is masked by the
-// process umask exactly as a file's is. MkdirAll applies that mask to
-// every level it makes, so under a mask that removes the owner's execute
-// or write bit the outer level comes out unusable — and then the inner
-// mkdir fails outright with a permission error. Correcting the leaf
-// afterwards cannot help: the leaf is what could not be created. So each
-// level is corrected as soon as it exists, which a single MkdirAll gives
-// no place to do.
-//
-// # Why the levels get different modes
-//
-// The leaf is ours and it holds a bearer token, so 0700: a directory
-// anyone can list is a token anyone can find. Every level ABOVE it is
-// shared — other tools keep their own configuration there — and
-// narrowing a directory this tool does not own is changing something
-// that was not its business. A level created here therefore gets the
-// mode creating it by hand under an ordinary mask would have produced.
+// MkdirAll gives no place to set the leaf's mode as soon as the leaf
+// exists, and no way to tell which levels it created. Both matter here:
+// the first because the leaf's mode is not negotiable, the second
+// because a level that was already there is somebody else's.
 //
 // # A level that was already there is never touched
 //
 // Which levels exist is noted BEFORE anything is created, because
 // afterwards there is no way to tell a directory this code made from one
-// that was already there — and that difference is the whole of whose
-// mode it is to set. A stat that fails for any reason OTHER than "not
-// there" leaves the question unanswered rather than answered "absent",
-// and an unanswered question is refused: guessing here means either
-// re-permissioning a stranger's directory or failing to permission our
-// own.
+// that was already there. A stat that fails for any reason OTHER than
+// "not there" leaves the question unanswered rather than answered
+// "absent", and an unanswered question is refused rather than guessed.
 func createConfigDir(dir string) error {
 	var missing []string
 	for level := dir; ; {
@@ -699,26 +832,30 @@ func createConfigDir(dir string) error {
 		level = parent
 	}
 
-	// Shallowest first, so the correction to one level lands before the
-	// mkdir that needs it. missing[0] is the leaf.
+	// Shallowest first. missing[0] is the leaf.
 	for i := len(missing) - 1; i >= 0; i-- {
 		level := missing[i]
-		mode := os.FileMode(sharedDirMode)
-		if i == 0 {
-			mode = ownDirMode
-		}
-		if err := os.Mkdir(level, mode); err != nil {
+		if err := os.Mkdir(level, sharedDirMode); err != nil {
 			// Somebody else created it between the survey above and
-			// here. It is then not ours, so its mode is not ours to set
-			// either, and the loop carries on into it.
+			// here. It is then not ours, and the loop carries on into
+			// it.
 			if errors.Is(err, fs.ErrExist) {
 				continue
 			}
+			// A level this call created one step earlier is the likely
+			// culprit, and the operating system's own error does not
+			// say so.
+			if i+1 < len(missing) && errors.Is(err, fs.ErrPermission) {
+				return unusableParentError(missing[i+1], level, err)
+			}
 			return fmt.Errorf("could not create the config directory %s: %w", level, err)
 		}
-		if err := os.Chmod(level, mode); err != nil {
-			return fmt.Errorf(
-				"could not set the permissions of the config directory %s: %w", level, err)
+		if i == 0 {
+			if err := os.Chmod(level, ownDirMode); err != nil {
+				return fmt.Errorf(
+					"could not restrict the config directory %s to its owner: %w",
+					level, err)
+			}
 		}
 	}
 	return nil
@@ -977,10 +1114,29 @@ func fileModeFor(path string) os.FileMode {
 }
 
 // tempPattern is the name the temp file is created under, and the
-// pattern the sweep looks for. One constant, because a sweep that
-// searched for a shape the writer had stopped using would find nothing
-// and report success.
-const tempPattern = ".config-*.json"
+// pattern the sweep looks for. One constant, because a sweep searching
+// for a shape the writer had stopped using would find nothing and report
+// success for ever.
+//
+// THE PREFIX IS DISTINCTIVE ON PURPOSE, and the first version of this
+// was not. It swept ".config-*.json" — the pattern the temp files
+// happened to use — so nothing separated a file this process created
+// from one that merely matched. Measured after a single save:
+// .config-backup.json and .config-2024.json were both deleted. Backing a
+// config up under an obvious name beside it is the most natural thing a
+// person can do with this file, and they would have found out on the
+// login after the one that destroyed it.
+const tempPattern = ".curious-config-tmp-*"
+
+// tempLitterMaxAge is how long a file matching tempPattern is left alone
+// before the sweep treats it as litter.
+//
+// It exists for the concurrent writer. A second process saving its own
+// config at this instant has an in-flight temp file in this directory,
+// and removing it costs that process its save. An hour is far longer
+// than any write here takes and far shorter than a leaked token should
+// be allowed to sit on disk.
+const tempLitterMaxAge = time.Hour
 
 // sweepTempLitter removes this package's own leftover temp files from
 // dir. BEST EFFORT: it never reports, and it never fails a save.
@@ -993,34 +1149,39 @@ const tempPattern = ".config-*.json"
 // name nothing ever looks at again, so it outlives every later rotation
 // of the credential inside it.
 //
+// # Three things it will not touch, and why each
+//
+// A file that does not carry this package's own temp prefix: it is
+// somebody's, and a name that merely resembles ours is not evidence that
+// we made it. A file younger than tempLitterMaxAge: it may be another
+// process's write in progress. A directory: removing one takes a
+// different call and would be a different kind of mistake.
+//
 // # The residue, stated rather than implied
 //
 // A crash DURING the sweep leaves litter, and this makes no attempt to
 // be atomic about tidying. A failed remove is ignored, because the file
 // being written is worth more than the files being tidied and there is
-// nothing useful to tell a user about either.
-//
-// It also runs after the rename rather than before it, which is the
-// deliberate half of a real trade: a second process writing its own
-// config at the same instant has a temp file in this directory, and this
-// would remove it. That costs the other process a failed save and
-// nothing else — its rename fails, its own original is untouched — where
-// sweeping first would risk the same thing while ALSO leaving this
-// call's litter behind if it went on to fail.
+// nothing useful to tell a user about either. Litter younger than the
+// gate waits for a later save rather than being collected now.
 func sweepTempLitter(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
-		// A directory whose name matches is not litter this made, and
-		// removing one needs a different call anyway.
 		if entry.IsDir() {
 			continue
 		}
-		if matched, err := filepath.Match(tempPattern, entry.Name()); err == nil && matched {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		matched, err := filepath.Match(tempPattern, entry.Name())
+		if err != nil || !matched {
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil || time.Since(info.ModTime()) < tempLitterMaxAge {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, entry.Name()))
 	}
 }
 

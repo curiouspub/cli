@@ -59,11 +59,15 @@ import (
 // not masked by the umask, only a create is, so a mode set explicitly
 // after creation is exactly what it says whatever the mask.
 //
-// THIRD REQUIRED MUTATION (directory mode): in Save (config.go), disable
-// the os.Chmod(dir, 0o700) call. The 0177 and 0277 legs red, and they
-// red at Save() with a permission error rather than at the mode
-// assertion: the temp file cannot be created inside the directory at
-// all.
+// THIRD REQUIRED MUTATION (directory mode): in createConfigDir
+// (config.go), disable the chmod of the leaf. THREE legs red, and the
+// count moved when the creating mode did — the leaf is now created with
+// the conventional directory mode and pinned to 0700 afterwards, so
+// under umask 0000 it stays 0755 and reds on the mode assertion, while
+// 0177 and 0277 red at Save() with a permission error because the temp
+// file cannot be created inside the directory at all. Umask 0077 stays
+// GREEN, because there the mask happens to produce 0700 by itself —
+// which is precisely why a table of one mask proves nothing here.
 func TestUmaskDoesNotWidenTheConfigFile(t *testing.T) {
 	// The umask this process started with, read the only way the API
 	// allows — by setting it and putting it straight back.
