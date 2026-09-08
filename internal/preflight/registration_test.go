@@ -33,11 +33,12 @@ func engineChecks(files []string) []Check {
 // claims is a silent hole in the report, and an id claimed twice is two
 // producers answering one question.
 //
-// THE REMAINING THREE ARE ASSERTED AS MISSING, on purpose. They belong
-// to the file walk, which reports from a package that must never import
-// this one, so "this package covers exactly its own five" is only
-// checkable by naming what it does NOT cover. A row asserting no gaps at
-// all would either be false or be quietly asking the wrong question.
+// THE REMAINING SEVEN ARE ASSERTED AS MISSING, on purpose. They belong
+// to the file walk and to the local limits, which report from a package
+// that must never import this one, so "this package covers exactly its
+// own five" is only checkable by naming what it does NOT cover. A row
+// asserting no gaps at all would either be false or be quietly asking
+// the wrong question.
 //
 // REQUIRED MUTATION: drop LockfileCheck() from engineChecks above. The
 // manifest loses a row and the missing set gains lockfile; both halves
@@ -58,9 +59,12 @@ func TestTheRegisteredChecksClaimExactlyThisPackagesIDs(t *testing.T) {
 	}
 
 	missing, unexpected := check.CoverageGaps(res.Manifest)
-	wantMissing := []string{check.IDSymlinks, check.IDCaseCollision, check.IDPathCharset}
+	wantMissing := []string{
+		check.IDSymlinks, check.IDCaseCollision, check.IDPathCharset,
+		check.IDLimitFiles, check.IDLimitFileSize, check.IDLimitTotal, check.IDLimitPacked,
+	}
 	if !equalStrings(missing, wantMissing) {
-		t.Errorf("missing = %v, want exactly the ids the file walk owns %v",
+		t.Errorf("missing = %v, want exactly the ids the file walk and the limits own %v",
 			missing, wantMissing)
 	}
 	if len(unexpected) != 0 {

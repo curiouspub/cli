@@ -86,6 +86,30 @@ const (
 	IDSymlinks      = "symlinks"
 	IDCaseCollision = "case-collision"
 	IDPathCharset   = "path-charset"
+
+	// The four the local limits own: how many files there are, how big
+	// the largest is, how big they are together, and how big the archive
+	// turned out once they were packed.
+	//
+	// THEY ARE IN THE UNIVERSE RATHER THAN OUTSIDE IT, and that was a
+	// decision with a real alternative. Leaving them out would work —
+	// nothing obliges a producer to answer a question nobody declared —
+	// and it would put the one set of findings an agent most needs to act
+	// on outside the manifest that exists so an agent can act on
+	// findings. The structure would have been inverted to avoid paying
+	// for it.
+	//
+	// WHAT IT COSTS, stated where the cost is incurred: every combined
+	// report has to carry a row for each of these, because the combiner
+	// refuses a coverage gap in either direction. That is why the limits
+	// are measured on runs whose verdict nobody will read — a report
+	// with no limit rows cannot be built at all, so a legitimate hard
+	// stop found before them would be a hard stop the program could not
+	// render.
+	IDLimitFiles    = "limit-files"
+	IDLimitFileSize = "limit-file-size"
+	IDLimitTotal    = "limit-total"
+	IDLimitPacked   = "limit-packed"
 )
 
 // Finding is one pre-flight check's result: which check produced it, how

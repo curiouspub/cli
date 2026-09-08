@@ -116,7 +116,7 @@ debugging a deploy.
 
 - `cmd/curious/` — entrypoint and subcommand dispatch only, no logic.
 - `internal/` — `ui`, `config`, `api`, `preflight`, `pack`, `check`,
-  `flow`, `mcp`, `guard`.
+  `flow`, `mcp`, `units`, `guard`.
 - `pkg/wire/` — **the public wire contract**, and the reason this
   repository is a Go module anyone can import.
 
@@ -358,14 +358,32 @@ names the convention itself splits.
 ## Limits, and where they are enforced
 
 A project is refused locally when it exceeds **3,000 files**, **5 MB for
-any single file**, or **30 MB in total**. Packing always excludes
-`node_modules/`, `dist/`, `.git/`, `.astro/` and `.env*`, and otherwise
-respects `.gitignore`.
+any single file**, or **30 MB in total**, and once more after packing if
+the archive itself comes out over 30 MB. Packing always excludes
+`node_modules/`, `.git/`, `.DS_Store`, `Thumbs.db`, a root `dist/` or
+`.astro/`, and anything starting `.env`; otherwise it respects
+`.gitignore`.
+
+**MB here means 1,000,000 bytes and not 1,048,576.** Client and server
+must not each pick their own reading of the same number: the 5%
+difference between them surfaces nowhere except at the boundary, as a
+refusal whose numbers nobody can make agree.
+
+The fourth limit is the one you can hit having passed the other three,
+and it is not a contradiction. Compression helps the file data; the
+archive adds bytes of its own for every entry it holds, so a great many
+small files that do not compress can weigh more packed than they do on
+disk. The message says so, and names the files worth removing.
 
 These are stated here because they are useful to know before you try. The
 client checks them so you get a fast, local, specific answer instead of a
 failed upload — but **the client is not the boundary.** Every one of them
 is re-validated server-side, and that copy is the one that counts.
+
+The list above is prose for a reader; the program renders the excluded
+set from the walk's own rules, so a message about it cannot drift from
+what was actually excluded. This paragraph can, which is why the code
+does not read it.
 
 ## Releases
 

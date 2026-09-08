@@ -209,12 +209,76 @@ func displayDir(rel string) string {
 // A rule with an exception is a rule somebody finds the wrong edge of,
 // and the cost of the exception — a sample file the build never reads is
 // absent — is nothing beside the cost of the mistake.
-func forcedExclude(name string, atRoot bool) bool {
-	switch name {
-	case "node_modules", ".git", ".DS_Store", "Thumbs.db":
-		return true
-	case "dist", ".astro":
-		return atRoot
+//
+// IT IS DATA RATHER THAN A SWITCH BECAUSE THERE ARE TWO READERS. The
+// walk applies the set; the limits have to NAME it, because the first
+// thing anybody told their project has too many files does is wonder
+// whether the dependency directory was counted. A message that spelled
+// the names out again would be a second copy of this list, and the day
+// somebody adds an entry here the message goes on naming the old ones —
+// with no test able to see the difference, because both lists would
+// still be internally consistent.
+var forcedExcludes = []forcedRule{
+	{name: "node_modules"},
+	{name: ".git"},
+	{name: ".DS_Store"},
+	{name: "Thumbs.db"},
+	{name: "dist", rootOnly: true},
+	{name: ".astro", rootOnly: true},
+	{name: ".env", prefix: true},
+}
+
+// forcedRule is one absolute exclusion: what it matches, and where.
+type forcedRule struct {
+	name string
+
+	// prefix means the rule matches any name STARTING with name, which
+	// is how the environment-file rule takes in its suffixed variants.
+	prefix bool
+
+	// rootOnly means the rule applies only to an entry of the project
+	// root, because a directory of the same name further down is
+	// somebody's own source rather than a build artefact.
+	rootOnly bool
+}
+
+func (r forcedRule) matches(name string, atRoot bool) bool {
+	if r.rootOnly && !atRoot {
+		return false
 	}
-	return strings.HasPrefix(name, ".env")
+	if r.prefix {
+		return strings.HasPrefix(name, r.name)
+	}
+	return name == r.name
+}
+
+// display is how a message names this rule. A prefix rule gets the
+// asterisk a reader already reads as "and whatever follows"; nothing
+// else is decorated, because these rules match on the NAME and not on
+// whether a directory or a file happens to be wearing it, and a trailing
+// slash would claim otherwise.
+func (r forcedRule) display() string {
+	if r.prefix {
+		return r.name + "*"
+	}
+	return r.name
+}
+
+func forcedExclude(name string, atRoot bool) bool {
+	for _, rule := range forcedExcludes {
+		if rule.matches(name, atRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+// forcedExcludeNames is the set as a message says it, in the order it is
+// declared above. It is the ONLY way a message learns these names.
+func forcedExcludeNames() []string {
+	out := make([]string, 0, len(forcedExcludes))
+	for _, rule := range forcedExcludes {
+		out = append(out, rule.display())
+	}
+	return out
 }

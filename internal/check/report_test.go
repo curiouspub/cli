@@ -235,6 +235,10 @@ func TestCombineIsIndependentOfArgumentOrder(t *testing.T) {
 			{CheckID: IDSymlinks},
 			{CheckID: IDCaseCollision},
 			{CheckID: IDPathCharset},
+			{CheckID: IDLimitFiles},
+			{CheckID: IDLimitFileSize},
+			{CheckID: IDLimitTotal},
+			{CheckID: IDLimitPacked},
 		},
 		Findings: []Finding{{CheckID: IDLocalhost, Severity: SeverityWarning, Message: "from the walk"}},
 	}
