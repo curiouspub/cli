@@ -2,6 +2,7 @@ package flow
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -285,7 +286,17 @@ type offerCapture struct {
 	called   int
 	email    string
 	resetsAt time.Time
+
+	// ctxCarried reports whether the offer was handed the run's OWN
+	// context rather than a fresh one. A seam that CAN carry a context
+	// is not a seam that DOES, and an offer given a background context
+	// keeps working right up until somebody presses Ctrl-C and the call
+	// it makes carries on regardless.
+	ctxCarried bool
 }
+
+// ctxMarker is how a row tells the run's context apart from any other.
+type ctxMarker struct{}
 
 // fixedNow is the clock every row that renders a time runs against, so a
 // wall-clock assertion is about the arithmetic rather than about when
@@ -354,10 +365,12 @@ func newLoginRun(t *testing.T) *loginRun {
 			run.savedToken, run.savedEndpoint = token, issuedAgainst
 			return run.saveErr
 		},
-		Offer: func(email string, resetsAt time.Time) error {
+		Offer: func(ctx context.Context, email string, resetsAt time.Time) error {
 			run.offer.called++
 			run.offer.email = email
 			run.offer.resetsAt = resetsAt
+			carried, _ := ctx.Value(ctxMarker{}).(string)
+			run.offer.ctxCarried = carried == "carried"
 			return ui.NewFailure("Capacity is closed.", "stub", "stub")
 		},
 	}
@@ -366,7 +379,7 @@ func newLoginRun(t *testing.T) *loginRun {
 
 func (r *loginRun) run(t *testing.T) error {
 	t.Helper()
-	return Login(t.Context(), r.deps)
+	return Login(context.WithValue(t.Context(), ctxMarker{}, "carried"), r.deps)
 }
 
 // output is everything the run put in front of a person.
@@ -1341,6 +1354,10 @@ func TestCapacityClosedHandsOffThroughTheSeam(t *testing.T) {
 			"the server sent is what lets the offer name a return time",
 			res.offer.resetsAt, want)
 	}
+	if !res.offer.ctxCarried {
+		t.Error("the seam was handed a context that is not the run's own, so a " +
+			"cancelled run would not cancel the call the offer makes")
+	}
 	if res.err == nil {
 		t.Error("the run continued past a closed capacity, want a stop")
 	}
@@ -1355,7 +1372,7 @@ func TestCapacityClosedStopsEvenIfTheOfferReportsNothing(t *testing.T) {
 	run.prompt.emails = []answer{says("someone@example.com")}
 	run.prompt.lines = []answer{says("111111")}
 	run.prompt.confirms = []answer{no()}
-	run.deps.Offer = func(string, time.Time) error { return nil }
+	run.deps.Offer = func(context.Context, string, time.Time) error { return nil }
 	run.script.verifyOutcomes = []outcome{
 		fails(http.StatusServiceUnavailable, wire.CodeCapacityClosed, "full").after("900"),
 	}

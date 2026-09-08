@@ -45,9 +45,15 @@ type Authenticator interface {
 // it is in hand here: an offer that had to ask a second time would be
 // making a call to learn something it was already told.
 //
+// It takes the run's context because an offer joins a waitlist, and
+// joining one is a call. Giving it the context now costs a parameter;
+// giving it later means changing a signature inside the change that
+// wires the real offer up, which is the change least able to afford an
+// unrelated edit.
+//
 // It returns the error that ends the run. What the offer SAYS is not
 // this flow's business; that it stops is.
-type WaitlistOffer func(email string, resetsAt time.Time) error
+type WaitlistOffer func(ctx context.Context, email string, resetsAt time.Time) error
 
 // TokenWriter stores the token together with the endpoint it was issued
 // against. The pair is validated together by whoever implements this, so
@@ -341,7 +347,7 @@ func Login(ctx context.Context, deps LoginDeps) error {
 		case stateStart:
 			_, err := deps.Auth.AuthStart(ctx, wire.AuthStartRequest{Email: email})
 			if err != nil {
-				route, message, stop := classify(err, deps, email, now())
+				route, message, stop := classify(ctx, err, deps, email, now())
 				if route == routeStop {
 					return stop
 				}
@@ -395,7 +401,7 @@ func Login(ctx context.Context, deps LoginDeps) error {
 				state = stateSave
 				continue
 			}
-			route, message, stop := classify(err, deps, email, now())
+			route, message, stop := classify(ctx, err, deps, email, now())
 			if route == routeStop {
 				return stop
 			}
@@ -458,7 +464,7 @@ func trackRefusal(err error, consecutive int) int {
 // It returns the route, the message to RENDER inside the retry loop, and
 // — for a stop — the failure that ends the run. Only one of the last two
 // is ever meaningful, and which one is decided by the first.
-func classify(err error, deps LoginDeps, email string, now time.Time) (verifyRoute, string, error) {
+func classify(ctx context.Context, err error, deps LoginDeps, email string, now time.Time) (verifyRoute, string, error) {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		// A transport failure: no envelope, no code, nothing the server
@@ -478,11 +484,11 @@ func classify(err error, deps LoginDeps, email string, now time.Time) (verifyRou
 	if route == routeRecover {
 		return routeRecover, apiErr.Message, nil
 	}
-	return routeStop, "", stopFailure(apiErr, deps, email, now)
+	return routeStop, "", stopFailure(ctx, apiErr, deps, email, now)
 }
 
 // stopFailure is the copy for each code that ends the run.
-func stopFailure(apiErr *api.APIError, deps LoginDeps, email string, now time.Time) error {
+func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, email string, now time.Time) error {
 	switch apiErr.Code {
 	case wire.CodeBadRequest:
 		return ui.NewFailure(
@@ -501,7 +507,7 @@ func stopFailure(apiErr *api.APIError, deps LoginDeps, email string, now time.Ti
 	case wire.CodeCapacityClosed:
 		resetsAt := now.Add(apiErr.RetryAfter)
 		if deps.Offer != nil {
-			if err := deps.Offer(email, resetsAt); err != nil {
+			if err := deps.Offer(ctx, email, resetsAt); err != nil {
 				return err
 			}
 		}
