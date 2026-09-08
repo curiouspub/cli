@@ -552,3 +552,107 @@ func TestCombineDeepCopiesSizes(t *testing.T) {
 		t.Errorf("the producer's own Sizes were reached through the report: %v", got)
 	}
 }
+
+// TestSupersedeReplacesADeclineWithTheAnswerThatArrivedLater is the
+// primitive's whole reason: a check that could not answer when the report
+// was built, answering once the thing it measures exists.
+//
+// The packed-size limit is the case. Before anything is packed there is
+// no archive, so the honest row declines; the archive is then written,
+// the check runs for real, and without this the validated report still
+// says nothing was ever packed — a human reading the refusal sees the
+// real numbers while an agent reading the manifest is told the opposite.
+// **The human surface being right is what makes it easy to miss.**
+//
+// REQUIRED MUTATIONS, BOTH RUN:
+//   - drop the same-id check so any id may be superseded: the
+//     unknown-id subtest reds;
+//   - drop the declined check so an answered row may be overwritten: the
+//     already-answered subtest reds.
+func TestSupersedeReplacesADeclineWithTheAnswerThatArrivedLater(t *testing.T) {
+	base := func(t *testing.T) Report {
+		t.Helper()
+		manifest := Manifest{}
+		for _, id := range DeclaredOrder() {
+			row := Status{CheckID: id}
+			if id == IDLimitPacked {
+				row = Status{
+					CheckID: id, Outcome: Declined, Kind: ByDesign,
+					Reason: "nothing has been packed yet",
+				}
+			}
+			manifest = append(manifest, row)
+		}
+		report, err := Combine(Results{Manifest: manifest})
+		if err != nil {
+			t.Fatalf("Combine: %v", err)
+		}
+		return report
+	}
+
+	t.Run("the decline becomes the measurement", func(t *testing.T) {
+		report := base(t)
+
+		// The control: before superseding, the report says the opposite
+		// of what the run went on to learn.
+		for _, row := range report.Manifest() {
+			if row.CheckID == IDLimitPacked && row.Outcome != Declined {
+				t.Fatalf("the fixture does not start from a decline: %+v", row)
+			}
+		}
+
+		got, err := report.Supersede(Results{
+			Manifest: Manifest{{CheckID: IDLimitPacked}},
+			Findings: []Finding{{
+				CheckID:  IDLimitPacked,
+				Severity: SeverityHardStop,
+				Message:  "the packed archive is over the cap",
+			}},
+		})
+		if err != nil {
+			t.Fatalf("Supersede: %v", err)
+		}
+
+		var packed Status
+		for _, row := range got.Manifest() {
+			if row.CheckID == IDLimitPacked {
+				packed = row
+			}
+		}
+		if packed.Outcome != Answered {
+			t.Errorf("%s = %+v, want the answer that arrived later — an agent "+
+				"reading this is otherwise told nothing was ever packed",
+				IDLimitPacked, packed)
+		}
+		if len(got.Findings()) != 1 {
+			t.Errorf("findings = %v, want the later producer's own", got.Findings())
+		}
+	})
+
+	t.Run("an id the report does not claim is refused", func(t *testing.T) {
+		_, err := base(t).Supersede(Results{
+			Manifest: Manifest{{CheckID: "invented-id"}},
+		})
+		var refused *SupersedeError
+		if !errors.As(err, &refused) {
+			t.Fatalf("err = %v, want a refusal", err)
+		}
+		if !reflect.DeepEqual(refused.Unknown, []string{"invented-id"}) {
+			t.Errorf("Unknown = %v, want the id nobody claimed", refused.Unknown)
+		}
+	})
+
+	t.Run("a row that already answered is refused", func(t *testing.T) {
+		_, err := base(t).Supersede(Results{
+			Manifest: Manifest{{CheckID: IDAstroDep}},
+		})
+		var refused *SupersedeError
+		if !errors.As(err, &refused) {
+			t.Fatalf("err = %v, want a refusal", err)
+		}
+		if !reflect.DeepEqual(refused.NotDeclined, []string{IDAstroDep}) {
+			t.Errorf("NotDeclined = %v, want the id that had already answered — an "+
+				"answer is not a later producer's to overwrite", refused.NotDeclined)
+		}
+	})
+}

@@ -805,12 +805,12 @@ func TestAProjectThatFailsPreFlightStillCarriesAllFourLimitRows(t *testing.T) {
 // a claim about a directory, and asking about one file it might have
 // been called cannot see the one it was.
 //
-// REQUIRED MUTATION, run 2026-09-08: in Prepare, pack before measuring
-// the source limits. The refused half reds on the leftover archive —
-// "the temporary directory holds [curious-….tar.gz], want nothing" —
-// while the positive control stays green. The handed-back archive stays
-// empty under that mutation, which is why the directory is read rather
-// than the return value trusted.
+// REQUIRED MUTATION, run 2026-09-08: delete the findings refusal from
+// Prepare. The refused half reds on the leftover archive — "the
+// temporary directory holds [curious-….tar.gz], want nothing" — while
+// the positive control stays green. The handed-back archive stays empty
+// under that mutation, which is why the directory is read rather than
+// the return value trusted.
 func TestARefusedRunPacksNothingAndUploadsNothing(t *testing.T) {
 	var uploads uploadSentinel
 
@@ -820,7 +820,7 @@ func TestARefusedRunPacksNothingAndUploadsNothing(t *testing.T) {
 	dir := t.TempDir()
 	tree := mustWalk(t, OSFileSystem{}, root)
 
-	prepared, res, err := Prepare(OSFileSystem{}, root, dir, tree.Files)
+	prepared, res, err := Prepare(OSFileSystem{}, root, dir, tree.Files, Limits(tree.Files))
 	if err != nil {
 		t.Fatalf("Prepare on an ordinary project: %v", err)
 	}
@@ -841,19 +841,31 @@ func TestARefusedRunPacksNothingAndUploadsNothing(t *testing.T) {
 	// THE OVER-LIMIT FIXTURE IS REAL ENOUGH TO PACK, served from memory
 	// rather than named on disk. That is what makes the mutation
 	// meaningful: a fixture of paths nothing can open fails Prepare with
-	// an I/O error the moment anything tries to pack it, so a packer
-	// moved above the limits would red for the wrong reason and the
-	// leftover archive — the thing this row is about — would never
-	// exist. Measured: written the other way, the mutation reds on
-	// "no such file or directory".
+	// an I/O error the moment anything tries to pack it, so a packer that
+	// ignored the verdict would red for the wrong reason and the leftover
+	// archive — the thing this row is about — would never exist.
+	// Measured: written the other way, the mutation reds on "no such file
+	// or directory".
 	refusedFS, refusedFiles := manyTinyFiles(wire.MaxSourceFiles + 1)
 	refusedDir := t.TempDir()
-	prepared, res, err = Prepare(refusedFS, "root", refusedDir, refusedFiles)
-	if err != nil {
-		t.Fatalf("Prepare on an over-limit project: %v", err)
+	refusedLimits := Limits(refusedFiles)
+	if len(findingsFor(refusedLimits, check.IDLimitFiles)) == 0 {
+		t.Fatalf("the fixture is not over the count limit, so this half measures nothing: %v",
+			refusedLimits.Findings)
 	}
+
+	prepared, _, err = Prepare(refusedFS, "root", refusedDir, refusedFiles, refusedLimits)
 	uploads.after(prepared)
 
+	// THE REFUSAL IS NAMED, not merely counted. A negative row satisfied
+	// by any old failure is satisfied by an I/O error, a missing fixture
+	// or a typo'd root — every one of which also packs nothing.
+	if err == nil {
+		t.Fatalf("Prepare packed a project the limits had already refused")
+	}
+	if !strings.Contains(err.Error(), check.IDLimitFiles) {
+		t.Errorf("the refusal %q does not name the limit that refused the project", err)
+	}
 	if uploads.n != 1 {
 		t.Errorf("the sentinel read %d, want 1 — a refused run must not upload", uploads.n)
 	}
@@ -866,23 +878,82 @@ func TestARefusedRunPacksNothingAndUploadsNothing(t *testing.T) {
 	if left := readDir(t, refusedDir); len(left) != 0 {
 		t.Errorf("the temporary directory holds %v, want nothing", left)
 	}
-	if len(findingsFor(res, check.IDLimitFiles)) == 0 {
-		t.Errorf("the refused run said nothing about the limit it broke: %v", res.Findings)
+}
+
+// TestAVerdictThatNeverMeasuredAnythingIsRefused is the other half of
+// the argument-shaped gate, and it is the half an obvious reading omits.
+//
+// "The report carries no finding" is true of a zero check.Results, so a
+// caller that measured nothing at all would pack — the order-by-memory
+// the argument replaced, wearing a parameter. Prepare therefore asks
+// whether the three source limits were ANSWERED, and a declined row is
+// not an answer.
+//
+// The clean report packs in the same function, because every assertion
+// here is about a refusal and a Prepare that refused everything would
+// satisfy all of them.
+//
+// REQUIRED MUTATION, run 2026-09-08: delete the unansweredSourceLimits
+// refusal from Prepare. The first two subtests red; the control stays
+// green.
+func TestAVerdictThatNeverMeasuredAnythingIsRefused(t *testing.T) {
+	root := writeTree(t, []entry{{path: "index.html", body: "<html>"}})
+	tree := mustWalk(t, OSFileSystem{}, root)
+
+	declinedEverything := check.Results{Manifest: check.Manifest{
+		declined(check.IDLimitFiles, check.Environmental, "the file list could not be read"),
+		declined(check.IDLimitFileSize, check.Environmental, "the file list could not be read"),
+		declined(check.IDLimitTotal, check.Environmental, "the file list could not be read"),
+	}}
+
+	for _, tc := range []struct {
+		name    string
+		limits  check.Results
+		wantErr bool
+	}{
+		{"nothing was measured at all", check.Results{}, true},
+		{"every source limit declined", declinedEverything, true},
+		{"control: a real verdict packs", Limits(tree.Files), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			prepared, _, err := Prepare(OSFileSystem{}, root, dir, tree.Files, tc.limits)
+			t.Cleanup(func() { _ = prepared.Archive.Remove() })
+
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatal("Prepare packed against a report that answered nothing")
+			case tc.wantErr:
+				for _, id := range []string{
+					check.IDLimitFiles, check.IDLimitFileSize, check.IDLimitTotal,
+				} {
+					if !strings.Contains(err.Error(), id) {
+						t.Errorf("the refusal %q does not name the unanswered limit %s", err, id)
+					}
+				}
+				if left := readDir(t, dir); len(left) != 0 {
+					t.Errorf("the temporary directory holds %v, want nothing", left)
+				}
+			case err != nil:
+				t.Fatalf("Prepare refused a measured, clean verdict: %v", err)
+			case prepared.Archive.Path == "":
+				t.Error("the control packed nothing, so every refusal above may be a " +
+					"Prepare that refuses everything")
+			}
+		})
 	}
 }
 
-// TestAnUnpackedRefusalStillReportsAllFourRows. The report a refused run
-// produces has to pass the same gate as any other, and the packed row it
-// cannot answer says so rather than being absent.
+// TestARunThatNeverPacksStillReportsAllFourRows. The report a refused
+// run produces has to pass the same gate as any other, and the packed
+// row nothing can answer yet says so rather than being absent. That is
+// Limits's row to carry, and it carries it on every run — including the
+// ones that stop before a packer is ever reached.
 //
-// REQUIRED MUTATION, run 2026-09-08: return before appending the packed
-// row on Prepare's refusal path. Reds here on the row count.
-func TestAnUnpackedRefusalStillReportsAllFourRows(t *testing.T) {
-	root := writeTree(t, []entry{{path: "index.html", body: "<html>"}})
-	_, res, err := Prepare(OSFileSystem{}, root, t.TempDir(), generatedFiles("public", 3_400, 1))
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
+// REQUIRED MUTATION, run 2026-09-08: drop the declined packed row from
+// Limits. Reds here on the row count.
+func TestARunThatNeverPacksStillReportsAllFourRows(t *testing.T) {
+	res := Limits(generatedFiles("public", 3_400, 1))
 
 	var got []string
 	for _, row := range res.Manifest {
@@ -893,6 +964,9 @@ func TestAnUnpackedRefusalStillReportsAllFourRows(t *testing.T) {
 	}
 	if row := rowFor(t, res, check.IDLimitPacked); row.Outcome != check.Declined {
 		t.Errorf("the packed row says it answered, and nothing was packed")
+	}
+	if len(findingsFor(res, check.IDLimitFiles)) == 0 {
+		t.Errorf("the refused run said nothing about the limit it broke: %v", res.Findings)
 	}
 }
 
@@ -911,7 +985,7 @@ func TestTheSuccessReceiptNamesFilesSourceAndArchive(t *testing.T) {
 	})
 	tree := mustWalk(t, OSFileSystem{}, root)
 
-	prepared, _, err := Prepare(OSFileSystem{}, root, t.TempDir(), tree.Files)
+	prepared, _, err := Prepare(OSFileSystem{}, root, t.TempDir(), tree.Files, Limits(tree.Files))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -968,7 +1042,7 @@ func TestAnArchiveOverTheCapIsRefusedWithNoReceiptAboveIt(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	prepared, res, err := Prepare(fsys, "root", dir, list)
+	prepared, res, err := Prepare(fsys, "root", dir, list, Limits(list))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -1123,7 +1197,7 @@ func TestAnOrdinaryProjectHasNothingToSay(t *testing.T) {
 func TestAFourFigureCountIsGroupedWhereverAMessagePrintsOne(t *testing.T) {
 	fsys, files := manyTinyFiles(1_200)
 
-	prepared, _, err := Prepare(fsys, "root", t.TempDir(), files)
+	prepared, _, err := Prepare(fsys, "root", t.TempDir(), files, Limits(files))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

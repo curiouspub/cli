@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,15 +39,72 @@ func TestRunVersionOverridden(t *testing.T) {
 	}
 }
 
-func TestRunDeployStub(t *testing.T) {
-	var out, errOut bytes.Buffer
-	code := run([]string{"deploy"}, emptyStdin(), &out, &errOut)
-	if code == 0 {
-		t.Fatal("exit code = 0, want non-zero for a stub that isn't built yet")
+// TestDeployIsDispatchedToTheRealSequence drives the subcommand the way
+// a person does and is the row that proves dispatch reaches the sequence
+// rather than reaching a name. It is the analogue of the server row at
+// the bottom of this file, and it exists for the same reason: every
+// other `deploy` row here exits during flag parsing, so a subcommand
+// that parsed correctly and then did nothing would satisfy all of them.
+//
+// IT NAMES A DIRECTORY THAT IS NOT THERE, deliberately. That is the
+// earliest stop the sequence has — before the config file is read and
+// long before anything is dialled — so this row needs no endpoint, no
+// stored login and no fixture, and it still cannot pass without the real
+// sequence having run.
+//
+// The process's own stderr is redirected, because the run's output goes
+// through the terminal type rather than through the writers dispatch was
+// handed, and a row that ignored that would print its diagnostic into
+// the suite's output.
+//
+// REQUIRED MUTATION, run 2026-09-08: return 0 from runDeploy without
+// calling flow.Deploy. This reds; the flag rows above stay green.
+func TestDeployIsDispatchedToTheRealSequence(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-project")
+
+	var out bytes.Buffer
+	text, code := withCapturedStderr(t, func() int {
+		return run([]string{"deploy", missing}, emptyStdin(), &out, io.Discard)
+	})
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 for a directory that is not there", code)
 	}
-	if !strings.Contains(errOut.String(), "not implemented") {
-		t.Errorf("stderr %q does not say the command is not implemented", errOut.String())
+	if !strings.Contains(text, missing) {
+		t.Errorf("the run did not name the path it could not find:\n%s", text)
 	}
+	if out.Len() != 0 {
+		t.Errorf("a failure leaked to stdout: %q", out.String())
+	}
+}
+
+// withCapturedStderr runs fn with the process's stderr pointed at a file
+// and returns what was written to it, plus fn's own result.
+//
+// Redirected rather than captured, because the terminal type writes to
+// the streams it was built from and this is the only portable way to
+// hand it one a test can read back.
+func withCapturedStderr(t *testing.T, fn func() int) (string, int) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stderr")
+	sink, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating the capture file: %v", err)
+	}
+
+	real := os.Stderr
+	os.Stderr = sink
+	code := fn()
+	os.Stderr = real
+
+	if err := sink.Close(); err != nil {
+		t.Fatalf("closing the capture file: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the capture file: %v", err)
+	}
+	return string(data), code
 }
 
 func TestRunUnknownCommand(t *testing.T) {
@@ -120,7 +180,6 @@ func TestArgumentErrorsAreAnswered(t *testing.T) {
 		{"deploy help", []string{"deploy", "-h"}, 0, true, false, ""},
 		{"mcp help", []string{"mcp", "-h"}, 0, true, false, ""},
 		{"top-level help", []string{"-h"}, 0, true, false, ""},
-		{"deploy one operand is legal", []string{"deploy", "dir"}, 1, false, true, "not implemented"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

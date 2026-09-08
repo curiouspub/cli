@@ -112,47 +112,71 @@ func Limits(files []File) check.Results {
 	return check.Results{Findings: findings, Manifest: manifest}
 }
 
-// Prepare is the whole local gate between a walked project and an
-// upload: the three source limits, then — only if they passed — the
-// archive, then the packed-size limit, then the receipt.
+// Prepare packs a project the source limits have already cleared, then
+// answers the one limit whose subject does not exist until they have:
+// the size of the archive itself. It emits the packed row, and only that
+// row.
 //
-// IT IS ONE FUNCTION RATHER THAN AN ORDER A CALLER IS TRUSTED TO KEEP,
-// and the order is the reason. Both the packed-size check and the
-// receipt happen after packing; written the other way round a refused
-// run prints a receipt for an upload that will not happen, directly
-// above the refusal — a transcript contradicting itself in two
-// consecutive lines. With both inside one function the receipt cannot be
-// reached without the check having already passed, so the rule is a
-// property of the type rather than a sentence somebody has to remember.
+// # Why the measuring moved out
 //
-// NOTHING IS LEFT ON DISK BY A REFUSAL. A run stopped by a source limit
-// never creates the archive; a run stopped by the packed size removes
-// the one it made. A caller that got a zero Prepared has nothing to
-// clean up, which is the same promise Pack makes about its own failures.
+// This used to run the three source limits ITSELF and pack only if they
+// came back clean — one function, so a caller could not get the order
+// wrong. That shape cannot serve the deploy sequence, where the login
+// sits between the limits and the pack, and the reason is not merely the
+// distance:
 //
-// The error return is for I/O alone — a file that vanished, a disk that
-// filled. A project that is simply too large is not an error here: it is
-// a finding, and the caller renders it with everything else.
-func Prepare(fsys FS, root, dir string, files []File) (Prepared, check.Results, error) {
-	findings := sourceFindings(files)
-	manifest := check.Manifest{
-		answered(check.IDLimitFiles),
-		answered(check.IDLimitFileSize),
-		answered(check.IDLimitTotal),
+//   - the source limits would be measured TWICE, at two call sites, one
+//     of them invisible from outside. A guard reachable from two call
+//     sites is a guard whose deletion mutation lies — delete the copy in
+//     here and nothing goes red, because the earlier measurement already
+//     refused the same project;
+//   - and the two answers could not be combined at all. Both would build
+//     manifest rows for the same limit ids, and a report claiming one
+//     check twice is a duplicate-coverage refusal.
+//
+// # What replaced it, and what it still guarantees
+//
+// The verdict arrives as an ARGUMENT. This refuses to pack unless the
+// report it is handed both COVERS the three source limits and carries no
+// finding — so the rule the one-function shape existed to protect is
+// still a property of the type rather than of a caller's memory: nothing
+// is packed that the limits refused, and no receipt is printed above a
+// refusal. A caller has to produce the verdict to get a pack at all.
+//
+// COVERAGE IS CHECKED AS WELL AS CONTENT, and that is the half an
+// argument-shaped gate needs to be a gate. "Carries no finding" is true
+// of a zero check.Results, so without the coverage question a caller
+// that never measured anything would pack — which is precisely the
+// order-by-memory this is supposed to replace, wearing a parameter.
+//
+// NOTHING IS LEFT ON DISK BY A REFUSAL. A refused report never creates
+// the archive; a run stopped by the packed size removes the one it made.
+// A caller that got a zero Prepared has nothing to clean up, which is
+// the same promise Pack makes about its own failures.
+//
+// The error return covers I/O — a file that vanished, a disk that filled
+// — and the two refusals above, which are wiring mistakes rather than
+// anything a user did. A project that is simply too large to send is not
+// an error here: it is a finding, and the caller renders it.
+func Prepare(fsys FS, root, dir string, files []File, limits check.Results) (Prepared, check.Results, error) {
+	if unanswered := unansweredSourceLimits(limits.Manifest); len(unanswered) > 0 {
+		return Prepared{}, check.Results{}, fmt.Errorf(
+			"refusing to pack: the source limits %s were never answered, so this "+
+				"report is not a verdict on the project — measure them first and hand "+
+				"the result over", strings.Join(unanswered, ", "))
 	}
-
-	if len(findings) > 0 {
-		manifest = append(manifest, declined(check.IDLimitPacked, check.ByDesign,
-			"the project was not packed, because it is over a limit above"))
-		check.SortFindings(findings)
-		return Prepared{}, check.Results{Findings: findings, Manifest: manifest}, nil
+	if len(limits.Findings) > 0 {
+		return Prepared{}, check.Results{}, fmt.Errorf(
+			"refusing to pack: the source limits refused this project (%s), and a "+
+				"project that cannot be sent must not be compressed first",
+			strings.Join(findingIDs(limits.Findings), ", "))
 	}
 
 	archive, err := Pack(fsys, root, dir, files)
 	if err != nil {
 		return Prepared{}, check.Results{}, err
 	}
-	manifest = append(manifest, answered(check.IDLimitPacked))
+	manifest := check.Manifest{answered(check.IDLimitPacked)}
 
 	if archive.Size > wire.MaxPackedBytes {
 		// THE ARCHIVE GOES BEFORE THE MESSAGE IS BUILT, so a failure to
@@ -161,13 +185,58 @@ func Prepare(fsys FS, root, dir string, files []File) (Prepared, check.Results, 
 		if removeErr := archive.Remove(); removeErr != nil {
 			return Prepared{}, check.Results{}, removeErr
 		}
-		findings = append(findings, packedFinding(fsys, root, files, archive))
-		check.SortFindings(findings)
-		return Prepared{}, check.Results{Findings: findings, Manifest: manifest}, nil
+		return Prepared{}, check.Results{
+			Findings: []check.Finding{packedFinding(fsys, root, files, archive)},
+			Manifest: manifest,
+		}, nil
 	}
 
 	return Prepared{Archive: archive, Receipt: receipt(files, archive)},
 		check.Results{Manifest: manifest}, nil
+}
+
+// unansweredSourceLimits names the source limits a report does not
+// record an answer for, in declared order.
+//
+// A DECLINED ROW COUNTS AS UNANSWERED, which is the whole point of the
+// distinction it reads: a producer that could not look has not cleared
+// the project, and treating "I gave up" as "nothing found" is the one
+// mistake the manifest exists to make impossible.
+func unansweredSourceLimits(m check.Manifest) []string {
+	answeredIDs := make(map[string]bool, len(m))
+	for _, row := range m {
+		if row.Outcome == check.Answered {
+			answeredIDs[row.CheckID] = true
+		}
+	}
+
+	var out []string
+	for _, id := range limitIDs {
+		if id == check.IDLimitPacked {
+			// Not a source limit: it is this function's caller's own row,
+			// and nothing has packed yet when the verdict is handed over.
+			continue
+		}
+		if !answeredIDs[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// findingIDs names the checks a set of findings came from, once each and
+// in arrival order, for a message about who refused.
+func findingIDs(findings []check.Finding) []string {
+	seen := make(map[string]bool, len(findings))
+	var out []string
+	for _, f := range findings {
+		if seen[f.CheckID] {
+			continue
+		}
+		seen[f.CheckID] = true
+		out = append(out, f.CheckID)
+	}
+	return out
 }
 
 // declined builds a manifest row for a check that did not answer.

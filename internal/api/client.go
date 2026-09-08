@@ -103,13 +103,18 @@ var insecureLoopbackHosts = map[string]bool{
 func validateBaseURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("invalid API base URL %q: %w", raw, err)
+		// THE VALUE IS NOT ECHOED HERE, and it is the one refusal that
+		// cannot redact: redaction needs a parsed URL, and this is the
+		// branch where parsing failed. A string malformed enough to
+		// defeat url.Parse is a string nothing can safely reason about,
+		// so the refusal names the setting rather than its content.
+		return "", fmt.Errorf("the API base URL could not be parsed: %w", err)
 	}
 
 	if u.Opaque != "" {
 		return "", fmt.Errorf(
 			"refusing API base %q: not a URL with a scheme and a host — use a base "+
-				"URL naming a server, with the https scheme, such as api.example.com", raw)
+				"URL naming a server, with the https scheme, such as api.example.com", u.Redacted())
 	}
 
 	host := strings.ToLower(u.Hostname())
@@ -118,23 +123,23 @@ func validateBaseURL(raw string) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf(
 			"refusing API base %q: missing a host — the base URL must name the "+
-				"server to talk to, such as api.example.com over https", raw)
+				"server to talk to, such as api.example.com over https", u.Redacted())
 	}
 
 	if u.User != nil {
 		return "", fmt.Errorf(
 			"refusing API base %q: a base URL must not carry a username or "+
-				"password — remove the \"user:pass@\" segment from the host", raw)
+				"password — remove the \"user:pass@\" segment from the host", u.Redacted())
 	}
 
 	if u.RawQuery != "" || u.ForceQuery {
 		return "", fmt.Errorf(
-			"refusing API base %q: a base URL must not carry a query string", raw)
+			"refusing API base %q: a base URL must not carry a query string", u.Redacted())
 	}
 
 	if u.Fragment != "" {
 		return "", fmt.Errorf(
-			"refusing API base %q: a base URL must not carry a fragment", raw)
+			"refusing API base %q: a base URL must not carry a fragment", u.Redacted())
 	}
 
 	switch strings.ToLower(u.Scheme) {
@@ -147,12 +152,12 @@ func validateBaseURL(raw string) (string, error) {
 				"refusing plaintext API base %q: http is only allowed to a loopback "+
 					"host (localhost, 127.0.0.1, or [::1]) for local development — "+
 					"use a base URL with the https scheme instead, or point "+
-					"CURIOUS_API_URL at one of those hosts", raw)
+					"CURIOUS_API_URL at one of those hosts", u.Redacted())
 		}
 	default:
 		return "", fmt.Errorf(
 			"refusing API base %q: the scheme must be https, or http to a loopback "+
-				"host for local development", raw)
+				"host for local development", u.Redacted())
 	}
 
 	return strings.TrimRight(u.String(), "/"), nil

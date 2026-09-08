@@ -23,11 +23,16 @@ The platform is not yet open. What exists here today:
   it completes a handshake, lists tools and calls them. It registers no
   tools yet, so a client that connects today finds an empty list. Written
   against the standard library alone — no SDK, no new dependency.
+- **`curious deploy`** — the local half: it checks your project, logs
+  you in if it has to, and packs the archive. It stops there and says
+  so, because the upload is not built yet. Everything it can answer
+  without the network it answers first, so a project that cannot deploy
+  never sends a byte.
 
 What lands here next:
 
-- **`curious deploy`** — pack an Astro project, upload it, watch the
-  build logs stream live, get a `*.curiously.dev` URL.
+- **The rest of `curious deploy`** — upload the archive, watch the build
+  logs stream live, get a `*.curiously.dev` URL.
 - **The MCP tools** — the same flow through `curious mcp`, so Claude
   Code, Claude Desktop, and other MCP clients can deploy for you.
 
@@ -55,8 +60,8 @@ first-timer, not a compiler.
 import "github.com/curiouspub/cli/pkg/wire"
 ```
 
-Types for capacity, waitlist, and auth are present; deploy types land
-with the deploy endpoints. Success is signalled by HTTP status alone;
+Types for capacity, waitlist, auth and deploy are present. Success is
+signalled by HTTP status alone;
 error semantics live in the error envelope, and success-body contents
 are never something to branch on.
 

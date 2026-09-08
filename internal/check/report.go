@@ -198,3 +198,94 @@ func (e *SizeMismatchError) Error() string {
 		"for one; they are read by index, so a mismatch renders one file's measurement "+
 		"against another file's name", strings.Join(e.CheckIDs, ", "))
 }
+
+// Supersede returns a Report in which rows the earlier producers DECLINED
+// are replaced by a later producer's real answers.
+//
+// WHY A REPORT NEEDS THIS AT ALL. Some checks cannot answer when the
+// report a person consents to is built, because the thing they measure
+// does not exist yet. The packed-size limit is the whole example: before
+// anything is packed there is no archive, so the honest row says the
+// check declined rather than answering with a zero. Then the archive is
+// written, the check runs for real — and the validated report still
+// carries the decline.
+//
+// That is TWO HOMES FOR ONE ID, and the machine-readable one is the
+// false one: a person sees the refusal with its real numbers while an
+// agent reading the manifest is told nothing was ever packed. The human
+// surface being right is what makes it easy to miss.
+//
+// WHAT IT WILL AND WILL NOT DO, because a primitive that rewrites a
+// validated article has to be narrow:
+//
+//   - only a DECLINED row may be replaced. An answered row is a producer
+//     that looked and reported; overwriting it would let a later part of
+//     a run quietly change what an earlier one found.
+//   - only by a row of the SAME ID. There is no cross-id merging here.
+//   - and therefore only by the producer that declined it: duplicate
+//     refusal means exactly one producer claims any id in a report, so
+//     replacing by id IS replacing by that producer. The rule needs no
+//     producer field because the gate already made ids unique.
+//
+// Findings from the later results join the report, and the whole thing
+// goes back through the same enforcements Combine applies — a superseded
+// report is validated by the same rules or it is not validated at all.
+func (r Report) Supersede(later Results) (Report, error) {
+	claimed := make(map[string]Status, len(r.manifest))
+	for _, row := range r.manifest {
+		claimed[row.CheckID] = row
+	}
+
+	var unknown, notDeclined []string
+	for _, row := range later.Manifest {
+		existing, ok := claimed[row.CheckID]
+		if !ok {
+			unknown = append(unknown, row.CheckID)
+			continue
+		}
+		if existing.Outcome != Declined {
+			notDeclined = append(notDeclined, row.CheckID)
+		}
+	}
+	sortIDs(unknown)
+	sortIDs(notDeclined)
+	if len(unknown) > 0 || len(notDeclined) > 0 {
+		return Report{}, &SupersedeError{Unknown: unknown, NotDeclined: notDeclined}
+	}
+
+	replaced := make(map[string]Status, len(later.Manifest))
+	for _, row := range later.Manifest {
+		replaced[row.CheckID] = row
+	}
+
+	merged := Results{Findings: append([]Finding(nil), r.findings...)}
+	merged.Findings = append(merged.Findings, later.Findings...)
+	for _, row := range r.manifest {
+		if answer, ok := replaced[row.CheckID]; ok {
+			merged.Manifest = append(merged.Manifest, answer)
+			continue
+		}
+		merged.Manifest = append(merged.Manifest, row)
+	}
+	return Combine(merged)
+}
+
+// SupersedeError is what Supersede returns when a later producer tried to
+// replace a row it may not.
+type SupersedeError struct {
+	Unknown     []string
+	NotDeclined []string
+}
+
+func (e *SupersedeError) Error() string {
+	var parts []string
+	if len(e.Unknown) > 0 {
+		parts = append(parts, fmt.Sprintf("no row in the report claims %s",
+			strings.Join(e.Unknown, ", ")))
+	}
+	if len(e.NotDeclined) > 0 {
+		parts = append(parts, fmt.Sprintf("%s already answered, and an answer is not "+
+			"a later producer's to overwrite", strings.Join(e.NotDeclined, ", ")))
+	}
+	return "refusing to supersede: " + strings.Join(parts, "; ")
+}
