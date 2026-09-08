@@ -545,10 +545,14 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		// nothing. This function's callers return nil only for a stored
 		// token, so an offer that hands back no error must not turn a
 		// run with no credential into a success.
-		return ui.ServerClosed(ui.NewFailure(
-			"curious.pub is full for today.",
-			apiErr.Message,
-			retryAdvice(apiErr.RetryAfter, now)))
+		//
+		// THE COPY IS NOT WRITTEN HERE. A shut account cap reaches a
+		// person by two routes — met before a login is attempted, or met
+		// at the moment an account would be spent — and the words and
+		// the reset rendering have one home for both, so the two cannot
+		// drift into telling one user something the other is not told.
+		// See closedCapacityFailure.
+		return ui.ServerClosed(closedCapacityFailure(apiErr.Message, resetsAt, now))
 
 	case wire.CodeMaintenance:
 		// The server's message, verbatim, and NO retry time — the kill
