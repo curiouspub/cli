@@ -43,16 +43,30 @@ type request struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// isNotification reports whether this message expects no answer.
+// isNotification reports whether this message expects no answer, and it
+// is a MISSING id and nothing else.
 //
-// A missing id is the protocol's definition. An explicit null is
-// forbidden as a request id and there is nothing useful to answer it
-// with, so it is read the same way — an unanswerable message is a
-// message not answered, which is the more conservative of the two
-// readings and the only one that cannot produce a reply a client is
-// unable to match.
+// It used to read an explicit null the same way, on the reasoning that
+// null is discouraged as a request id and there is nothing useful to
+// answer it with. That reasoning traded a durable deviation for a HANG,
+// which is the worse of the two: the protocol defines a notification as a
+// request object WITHOUT an id member, so a message carrying "id": null
+// is a request, and a client that sends one waits for a reply that never
+// comes. A wrong answer can be read and acted on; silence cannot be
+// distinguished from a server that died.
+//
+// So null is answered — with an invalid-request error, echoing null back
+// as the id, which is the one id every client can match against the
+// message it sent.
 func (r request) isNotification() bool {
-	return len(r.ID) == 0 || string(r.ID) == "null"
+	return len(r.ID) == 0
+}
+
+// isNullID reports whether this message carried an explicit null id,
+// which the protocol permits in a response and discourages in a request.
+// It is answered rather than dispatched: see handle.
+func (r request) isNullID() bool {
+	return string(r.ID) == "null"
 }
 
 // response is one outbound reply. Exactly one of Result and Error is

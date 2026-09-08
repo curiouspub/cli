@@ -204,6 +204,17 @@ func (s *Server) handle(line []byte, logw io.Writer) (response, bool) {
 		return response{}, false
 	}
 
+	// AN EXPLICIT NULL ID IS ANSWERED, NOT DISPATCHED. The protocol
+	// discourages null as a request id and this server declines to guess
+	// what a client meant by it — but declining to guess is not the same
+	// as declining to reply. Answered here rather than run and answered
+	// afterwards, so a tools/call spelled this way cannot do work whose
+	// result nobody can match to a request.
+	if req.isNullID() {
+		return errorReply(req.ID, codeInvalidRequest,
+			"a request id of null cannot be matched to a reply; send a string or a number"), true
+	}
+
 	if req.JSONRPC != jsonrpcVersion {
 		return errorReply(req.ID, codeInvalidRequest,
 			fmt.Sprintf("this server speaks JSON-RPC %s; the message declared %q", jsonrpcVersion, req.JSONRPC)), true
