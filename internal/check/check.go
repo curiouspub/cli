@@ -86,6 +86,30 @@ const (
 	IDSymlinks      = "symlinks"
 	IDCaseCollision = "case-collision"
 	IDPathCharset   = "path-charset"
+
+	// The four the local limits own: how many files there are, how big
+	// the largest is, how big they are together, and how big the archive
+	// turned out once they were packed.
+	//
+	// THEY ARE IN THE UNIVERSE RATHER THAN OUTSIDE IT, and that was a
+	// decision with a real alternative. Leaving them out would work —
+	// nothing obliges a producer to answer a question nobody declared —
+	// and it would put the one set of findings an agent most needs to act
+	// on outside the manifest that exists so an agent can act on
+	// findings. The structure would have been inverted to avoid paying
+	// for it.
+	//
+	// WHAT IT COSTS, stated where the cost is incurred: every combined
+	// report has to carry a row for each of these, because the combiner
+	// refuses a coverage gap in either direction. That is why the limits
+	// are measured on runs whose verdict nobody will read — a report
+	// with no limit rows cannot be built at all, so a legitimate hard
+	// stop found before them would be a hard stop the program could not
+	// render.
+	IDLimitFiles    = "limit-files"
+	IDLimitFileSize = "limit-file-size"
+	IDLimitTotal    = "limit-total"
+	IDLimitPacked   = "limit-packed"
 )
 
 // Finding is one pre-flight check's result: which check produced it, how
@@ -143,6 +167,36 @@ type Finding struct {
 	What string
 	Why  string
 	Next string
+
+	// Sizes are the measurements that go with Paths, in bytes, one per
+	// path and in the same order. Empty when the paths carry no
+	// measurement, which is most findings.
+	//
+	// IT IS A PARALLEL SLICE RATHER THAN PROSE, and the reason is the
+	// one that made Paths a field in the first place. A check with sizes
+	// to report used to render its own table into What — "5.2 MB
+	// public/hero.png", laid out by hand — and then ALSO set Paths,
+	// because the machine-readable surface needs them. The renderer
+	// appends Paths under the Why unconditionally, so the offenders
+	// appeared twice in the one hard stop a user most needs to read:
+	// once measured, once bare.
+	//
+	// The alternative was a flag telling the renderer the message had
+	// already named them. That is a trust-me field: it says nothing a
+	// reader can check and nothing the type can enforce, and it goes
+	// stale the first time somebody edits the message without it. This
+	// carries the FACTS instead, and one renderer formats them once.
+	//
+	// A machine reading this result gets a number it can compare rather
+	// than a string it has to parse back out of English, which is the
+	// deciding argument: the agent-facing surface is not a rendering of
+	// the human one, and a measurement folded into prose is a
+	// measurement only a person can use.
+	//
+	// Combine refuses a finding whose Sizes are present and do not match
+	// its Paths one for one, so a reader may pair them by index without
+	// checking.
+	Sizes []int64
 }
 
 // HasCopy reports whether this Finding carries product copy of its own.

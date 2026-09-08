@@ -43,6 +43,14 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 			{CheckID: IDPathCharset},
 		},
 	}
+	limits := Results{
+		Manifest: Manifest{
+			{CheckID: IDLimitFiles},
+			{CheckID: IDLimitFileSize},
+			{CheckID: IDLimitTotal},
+			{CheckID: IDLimitPacked, Outcome: Declined, Kind: ByDesign, Reason: "nothing packed yet"},
+		},
+	}
 	engine := Results{
 		Findings: []Finding{
 			{CheckID: IDAstroDep, Severity: SeverityHardStop, Message: "not an Astro project"},
@@ -58,7 +66,7 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 		},
 	}
 
-	got, err := Combine(walk, engine)
+	got, err := Combine(walk, engine, limits)
 	if err != nil {
 		t.Fatalf("Combine: %v", err)
 	}
@@ -73,6 +81,7 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 	wantManifest := []string{
 		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
+		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}
 	if rows := ids(got.Manifest()); !reflect.DeepEqual(rows, wantManifest) {
 		t.Errorf("manifest = %v, want the declared order %v", rows, wantManifest)
@@ -202,6 +211,10 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 			{CheckID: IDSymlinks},
 			{CheckID: IDCaseCollision},
 			{CheckID: IDPathCharset},
+			{CheckID: IDLimitFiles},
+			{CheckID: IDLimitFileSize},
+			{CheckID: IDLimitTotal},
+			{CheckID: IDLimitPacked},
 		},
 	}
 
@@ -215,6 +228,7 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 	if rows := ids(producer.Manifest); !reflect.DeepEqual(rows, []string{
 		IDLocalhost, IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
+		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}) {
 		t.Errorf("the caller's manifest was reordered: %v", rows)
 	}
@@ -240,6 +254,7 @@ func TestCoverageGapsReportsBothDirections(t *testing.T) {
 	wantMissing := []string{
 		IDLockfile, IDPagesDir, IDBuildFormat,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
+		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}
 	if !reflect.DeepEqual(missing, wantMissing) {
 		t.Errorf("missing = %v, want %v in the declared order", missing, wantMissing)
@@ -262,4 +277,73 @@ func TestCoverageGapsIsSilentOnAFullManifest(t *testing.T) {
 	if missing != nil || unexpected != nil {
 		t.Errorf("CoverageGaps on a full manifest = (%v, %v), want nothing", missing, unexpected)
 	}
+}
+
+// TestTheGateRefusesSizesThatDoNotMatchTheirPaths is the seventh
+// enforcement, and the only one about a relationship BETWEEN two fields
+// rather than about one field's content.
+//
+// Paths and Sizes are parallel slices read by index. A renderer pairing
+// them when they disagree prints one file's path against another file's
+// measurement, or stops short of the list — both wrong quietly, and both
+// worse the longer the list, which is where nobody is counting. The gate
+// is where that stops being possible, so the renderer can index without
+// checking.
+//
+// EMPTY SIZES ARE NOT A MISMATCH, and the positive control below is what
+// keeps that true: most findings have no measurement to report, and a
+// rule requiring one would make every check that names a file invent a
+// number.
+//
+// REQUIRED MUTATIONS, BOTH RUN:
+//   - delete the mismatchedSizeIDs call from Combine — the short and
+//     long rows go green;
+//   - change the predicate to `len(f.Sizes) != len(f.Paths)` without the
+//     empty guard — the positive control reds, which is the half that
+//     stops the enforcement from refusing every ordinary finding.
+func TestTheGateRefusesSizesThatDoNotMatchTheirPaths(t *testing.T) {
+	for _, row := range []struct {
+		name    string
+		paths   []string
+		sizes   []int64
+		refused bool
+	}{
+		{"no sizes at all", []string{"a.png", "b.png"}, nil, false},
+		{"one size per path", []string{"a.png", "b.png"}, []int64{1, 2}, false},
+		{"fewer sizes than paths", []string{"a.png", "b.png"}, []int64{1}, true},
+		{"more sizes than paths", []string{"a.png"}, []int64{1, 2}, true},
+		{"sizes with no paths at all", nil, []int64{1}, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			part := Results{
+				Findings: []Finding{{
+					CheckID:  IDLimitFileSize,
+					Severity: SeverityHardStop,
+					Message:  "too big",
+					Paths:    row.paths,
+					Sizes:    row.sizes,
+				}},
+				Manifest: fullManifest(),
+			}
+
+			_, err := Combine(part)
+			var mismatch *SizeMismatchError
+			if refused := errors.As(err, &mismatch); refused != row.refused {
+				t.Fatalf("refused = %v, want %v (err = %v)", refused, row.refused, err)
+			}
+			if row.refused && !strings.Contains(mismatch.Error(), IDLimitFileSize) {
+				t.Errorf("the refusal does not name the check: %v", mismatch)
+			}
+		})
+	}
+}
+
+// fullManifest is every declared id, answered — the shape a combined
+// report needs before any other enforcement can be the one under test.
+func fullManifest() Manifest {
+	m := make(Manifest, 0, len(DeclaredOrder()))
+	for _, id := range DeclaredOrder() {
+		m = append(m, Status{CheckID: id})
+	}
+	return m
 }

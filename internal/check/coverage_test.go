@@ -44,11 +44,18 @@ func standIn(ids ...string) preflight.Check {
 // is a producer answering a question that is not on the list, which
 // reaches a user as the name of a check they have never heard of.
 //
-// THERE ARE NOW TWO PRODUCERS, which is what this row was shaped for.
+// THERE ARE NOW THREE PRODUCERS, which is what this row was shaped for.
 // The file walk arrived as one more argument and three more entries in
-// the declared list, and the shape held: the row combines rather than
-// reading one manifest, so nothing here had to learn that a second
-// producer exists beyond being handed it.
+// the declared list; the local limits arrived the same way with four
+// more. The shape held both times: the row combines rather than reading
+// one manifest, so nothing here had to learn that another producer
+// exists beyond being handed it.
+//
+// THE LIMITS ARE MEASURED OVER THE WALK'S OWN LIST, which for an empty
+// directory is empty — and they still claim all four of their rows. That
+// is the property this row is in the best place to see: a producer whose
+// verdicts are all "nothing to say" still has to answer for every
+// question it owns, or the report it belongs to cannot be built.
 //
 // The walk is asked to scan A REAL DIRECTORY THAT IS EMPTY — the test's
 // own scratch directory — because this row is about WHICH QUESTIONS GET
@@ -73,7 +80,7 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 		t.Fatalf("walking an empty directory: %v", err)
 	}
 
-	combined, err := check.Combine(engine, tree.Results)
+	combined, err := check.Combine(engine, tree.Results, pack.Limits(tree.Files))
 	if err != nil {
 		t.Fatalf("combining the producers: %v", err)
 	}

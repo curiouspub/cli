@@ -8,6 +8,7 @@ import (
 
 	"github.com/curiouspub/cli/internal/check"
 	"github.com/curiouspub/cli/internal/ui"
+	"github.com/curiouspub/cli/internal/units"
 )
 
 // Prompter is the slice of the terminal this renderer needs: a line of
@@ -194,7 +195,25 @@ func ownCopy(f check.Finding) *ui.Failure {
 		if why != "" {
 			b.WriteString("\n")
 		}
-		for _, path := range f.Paths {
+		// THE MEASURED FORM IS THE SAME LIST WITH ITS NUMBERS, rendered
+		// here rather than by each check that has some.
+		//
+		// A check with sizes to report used to lay out its own table in
+		// its copy and ALSO set Paths, so the offenders arrived twice —
+		// once measured, once bare — in the one hard stop a user most
+		// needs to read. The facts now travel as facts and this is the
+		// single place that turns them into a column, which is also the
+		// only place that knows how wide the column should be.
+		//
+		// The gate guarantees the two slices line up, so this indexes
+		// without checking. That is the point of an enforcement: the
+		// reader downstream stops writing defensive code for a state
+		// that cannot arrive.
+		for i, path := range f.Paths {
+			if len(f.Sizes) > 0 {
+				fmt.Fprintf(&b, "\n  %10s  %s", units.Bytes(f.Sizes[i]), path)
+				continue
+			}
 			fmt.Fprintf(&b, "\n  %s", path)
 		}
 		why = strings.TrimPrefix(b.String(), "\n")

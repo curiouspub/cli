@@ -77,6 +77,10 @@ func (e *DuplicateCoverageError) Error() string {
 //     has nothing to report.
 //  6. Findings that say nothing. The five above are every one about a
 //     finding's ADDRESS; this is the only one about its content.
+//  7. Sizes that do not line up with Paths. They are two parallel
+//     slices read by index, so a length disagreement is a reader taking
+//     one path's measurement for another's — silently, and worst on the
+//     longest list, where nobody is counting.
 //
 // Counted by the list rather than by a numeral in this sentence, which
 // said FOUR while five were written beneath it — in the one file whose
@@ -116,6 +120,10 @@ func Combine(parts ...Results) (Report, error) {
 		return Report{}, &ContradictedFindingError{CheckIDs: contradicted}
 	}
 
+	if mismatched := mismatchedSizeIDs(findings); len(mismatched) > 0 {
+		return Report{}, &SizeMismatchError{CheckIDs: mismatched}
+	}
+
 	if silent := silentIDs(findings); len(silent) > 0 {
 		return Report{}, &EmptyMessageError{CheckIDs: silent}
 	}
@@ -128,12 +136,23 @@ func Combine(parts ...Results) (Report, error) {
 // copyFinding returns a finding that shares nothing with the one it was
 // given. Only Paths needs it — every other field is a string.
 func copyFinding(f Finding) Finding {
-	if f.Paths == nil {
-		return f
+	if f.Paths != nil {
+		paths := make([]string, len(f.Paths))
+		copy(paths, f.Paths)
+		f.Paths = paths
 	}
-	paths := make([]string, len(f.Paths))
-	copy(paths, f.Paths)
-	f.Paths = paths
+	// Sizes gets the same treatment as Paths, and it is a separate
+	// branch rather than an extension of one early return: the version
+	// of this function that returned early on a nil Paths would have
+	// left Sizes aliased on any finding that carried measurements and no
+	// paths — which the gate now refuses, but a copy that is correct
+	// only because something else rejects the input is a copy waiting
+	// for that something else to change.
+	if f.Sizes != nil {
+		sizes := make([]int64, len(f.Sizes))
+		copy(sizes, f.Sizes)
+		f.Sizes = sizes
+	}
 	return f
 }
 
@@ -298,4 +317,27 @@ func sortIDs(ids []string) {
 		}
 		return ids[i] < ids[j]
 	})
+}
+
+// mismatchedSizeIDs returns every check id whose finding carries sizes
+// that do not line up with its paths.
+//
+// EMPTY SIZES ARE FINE — most findings have no measurement to report,
+// and requiring one would make every check that names a file invent a
+// number. It is a present-but-wrong slice that this refuses.
+func mismatchedSizeIDs(findings []Finding) []string {
+	var ids []string
+	seen := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		if len(f.Sizes) == 0 || len(f.Sizes) == len(f.Paths) {
+			continue
+		}
+		if seen[f.CheckID] {
+			continue
+		}
+		seen[f.CheckID] = true
+		ids = append(ids, f.CheckID)
+	}
+	sortIDs(ids)
+	return ids
 }

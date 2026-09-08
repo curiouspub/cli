@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/curiouspub/cli/internal/check"
+	"github.com/curiouspub/cli/internal/units"
 )
 
 // What the walk has to say about a project, and the row that says it
@@ -269,11 +270,26 @@ func allowedInPath(r rune) bool {
 
 // countOf renders "1 thing" and "3 things", so a message about one file
 // does not read as though it were written for a list.
+//
+// THE NUMBER IS GROUPED, and that was a correction rather than a flourish
+// (2026-09-08). The counts this originally served were small — a handful
+// of skipped links, a colliding pair — so the grouping never showed, and
+// nothing distinguished "does not group" from "has never been given a
+// number worth grouping". Then the limits arrived with counts in the
+// thousands, and one program was printing "3,412 files" in one message
+// and "3000 files" in the next, decided by which sentence a reader
+// happened to hit.
+//
+// REQUIRED MUTATION, run 2026-09-08: restore the ungrouped formatting,
+// written as `_ = units.Count(n)` above it — deleting the call outright
+// leaves the import unused, and a mutation that will not compile proves
+// nothing. Reds the grouping row in this package's suite on both of its
+// halves, and nothing else.
 func countOf(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
 	}
-	return fmt.Sprintf("%d %s", n, many)
+	return units.Count(n) + " " + many
 }
 
 // nextFor is the action, and a name carrying a combining mark gets a

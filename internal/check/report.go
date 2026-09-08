@@ -167,3 +167,21 @@ func (e *EmptyMessageError) Error() string {
 		"renders as a blank line and still asks the reader to decide about it",
 		strings.Join(e.CheckIDs, ", "))
 }
+
+// SizeMismatchError is what Combine returns when a finding's Sizes and
+// Paths disagree in length.
+//
+// They are two parallel slices read by index, so a disagreement is not a
+// cosmetic problem: a renderer pairing them prints one file's path
+// against another file's measurement, or stops short of the list. Both
+// are wrong quietly, and both get worse the longer the list, which is
+// exactly where nobody is counting.
+type SizeMismatchError struct {
+	CheckIDs []string
+}
+
+func (e *SizeMismatchError) Error() string {
+	return fmt.Sprintf("a finding from %s carries sizes that do not match its paths one "+
+		"for one; they are read by index, so a mismatch renders one file's measurement "+
+		"against another file's name", strings.Join(e.CheckIDs, ", "))
+}

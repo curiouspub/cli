@@ -406,6 +406,77 @@ func TestPreflightRenderNamesTheFilesAFindingIsAbout(t *testing.T) {
 	}
 }
 
+// TestPreflightRenderMeasuresThePathsWhenTheFindingMeasuredThem is the
+// sized branch of the same list.
+//
+// A check with measurements to report used to lay out its own table in
+// its copy and ALSO set Paths, so the offenders arrived twice in the one
+// hard stop a reader most needs — once measured, once bare. The facts now
+// travel as facts and this is the single place that turns them into a
+// column, which is also the only place that knows how wide the column
+// should be.
+//
+// It formats through the same byte formatter the copy uses, because a
+// message that restates a limit in one unit and its offenders in another
+// is a message that teaches its reader the check is wrong.
+//
+// REQUIRED MUTATIONS, BOTH RUN — and BOTH NEED RESHAPING FIRST, which is
+// worth saying because the naive spelling of either does not compile:
+// dropping the only call to units.Bytes orphans the import, and a build
+// failure is not a red row, it is a mutation nobody ran.
+//
+//   - render the path alone, ignoring Sizes, with `_ = units.Bytes` to
+//     keep the import alive: reds on both measurements and on the
+//     beside-its-own-path assertion;
+//   - keep units.Bytes alive the same way and format with %10d instead:
+//     reds on all of those AND on the raw-byte-count assertion, which is
+//     the half a plain integer would otherwise pass.
+//
+// THE UNMEASURED CASE IS THE POSITIVE CONTROL, and it is the row above:
+// a finding with paths and no sizes still renders its paths, so this one
+// cannot pass against a renderer that has quietly started requiring a
+// measurement it does not have.
+func TestPreflightRenderMeasuresThePathsWhenTheFindingMeasuredThem(t *testing.T) {
+	r := &recorder{answer: true}
+
+	err := RenderPreflight(r, reportOf(t, []check.Finding{{
+		CheckID:  check.IDLimitFileSize,
+		Severity: check.SeverityHardStop,
+		Message:  "2 files are larger than 5.0 MB.",
+		// It carries its own copy, which is what routes it through
+		// ownCopy — the branch that renders a finding's paths. A hard
+		// stop with no copy is synthesised from summaries instead, and
+		// that branch has never named paths.
+		What:  "2 files are larger than 5.0 MB, which is the most any single file may be.",
+		Next:  "Shrink or remove each one, then run `curious deploy` again.",
+		Paths: []string{"public/hero.png", "public/reel.mov"},
+		Sizes: []int64{5_200_000, 41_000_000},
+	}}), 0)
+	if err == nil {
+		t.Fatal("a hard stop returned nil, so nothing below is about a rendered stop")
+	}
+
+	out := rendered(err)
+	for _, want := range []string{
+		"public/hero.png", "public/reel.mov", "5.2 MB", "41.0 MB",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the rendered stop does not carry %q:\n%s", want, out)
+		}
+	}
+
+	// The measurement stands BESIDE its own path, not somewhere else in
+	// the output: two paths and two sizes in one list is exactly the
+	// arrangement an off-by-one renders wrongly while still printing
+	// every string this row looks for.
+	if !strings.Contains(out, "5.2 MB  public/hero.png") {
+		t.Errorf("the size is not beside its own path:\n%s", out)
+	}
+	if strings.Contains(out, "5200000") {
+		t.Errorf("the rendered stop carries a raw byte count:\n%s", out)
+	}
+}
+
 // ---------------------------------------------------------------------
 // Timing and determinism
 // ---------------------------------------------------------------------
