@@ -23,42 +23,72 @@ func readGolden(t *testing.T, name string) string {
 	return string(data)
 }
 
-// TestFailureGoldens pins the two worked examples byte for byte, so a
-// reword is a visible diff in review rather than an invisible change of
-// tone. Copy drifts one considerate edit at a time, and nobody notices
-// until the program sounds like several people.
+// THE RENDERER FIXTURES. Every row in this file that used to reach for a
+// published example now uses one of these, and the reason is that all of
+// them were about the RENDERER rather than about the words: how three
+// parts are laid out, that styling changes nothing but escape sequences,
+// that a golden comparison can tell two strings apart.
+//
+// The product copy those rows borrowed has moved to the checks that own
+// its conditions, and dragging it along would have left this package
+// holding a second copy of it — the exact divergence the move was made
+// to end. So these say nothing about anybody's project: their words are
+// deliberately unremarkable, because a fixture whose text reads like
+// product copy invites the next reader to edit it as if it were.
+//
+// They are VALUES, and a pointer is taken where one is needed. The row
+// that reworded a published example took a copy of the POINTER and then
+// wrote through it, permanently editing the package-level copy for every
+// row that ran afterwards; nothing failed, because the rows that ran
+// later did not assert on the part that had changed. A value copy cannot
+// do that.
+var (
+	// threePartSample fills all three parts, which is the layout the
+	// renderer's ordinary output has.
+	threePartSample = Failure{
+		What: "Something in this project needs a look.",
+		Why: "This is a fixture for the renderer rather than copy about anybody's\n" +
+			"project, and its words are chosen to be unremarkable.",
+		Next: "Compare it against the golden file beside this test.",
+	}
+
+	// whatAndNextSample leaves the middle part empty, which is the shape
+	// renderFailure drops rather than rendering as a blank paragraph.
+	// Nothing this package publishes has an empty part, so without a
+	// fixture that does, the branch that drops one has no golden at all.
+	whatAndNextSample = Failure{
+		What: "A failure that never worked out its middle paragraph.",
+		Next: "The empty part is dropped rather than printed as a blank line, and\n" +
+			"this golden is what says so.",
+	}
+)
+
+// TestFailureGoldens pins the RENDERING byte for byte: what separates
+// the parts, what happens to a part that is empty, and where the output
+// ends. A change to any of that is then a visible diff in review rather
+// than a layout that quietly drifts.
+//
+// IT IS ABOUT THE LAYOUT AND NOT ABOUT ANY PARTICULAR WORDS, which is
+// the change here. These rows used to be driven by the two published
+// examples, and they were never assertions about that copy — a golden
+// cannot tell a good sentence from a bad one, only a changed one. The
+// copy has gone to the checks that own its conditions, and the promise
+// it carries with it — that this program and the build agent tell a user
+// the same story about the same condition — is asserted there, beside
+// the words it is about, rather than here beside a renderer.
 //
 // Both golden files were TYPED, not generated from this package's
 // output. A golden captured from the code it checks asserts only that
-// the code is unchanged; one written from the copy as authored asserts
-// that the code says what the copy says.
-//
-// AUTHORITY FOR THE LOCKFILE MESSAGE. The build agent reaches this same
-// condition from the other side and emits its own message when it does —
-// and because it does that whether or not anybody ran this CLI, its
-// authored text is the authority here. Its wording names three lockfile
-// spellings it will install from: package-lock.json, npm-shrinkwrap.json
-// and pnpm-lock.yaml. So does this.
-//
-// The obligation is that the two SAY THE SAME THING — same claim, same
-// named cause, same instruction — and deliberately not that they are
-// byte-identical: this renderer emits three paragraphs to a terminal and
-// the agent emits one compact line into a log stream, so byte-identity
-// would have this file arguing with a log line about where to wrap. What
-// it forbids is the real failure, which is a user reading one story here
-// and a different one from the build and concluding that the two halves
-// of this product disagree about what happened. A project carrying only
-// an npm-shrinkwrap.json builds perfectly well; a version of this
-// message naming two spellings would tell its owner they have no
-// lockfile.
+// the code is unchanged; one written by hand asserts that the code
+// produces what somebody meant.
 func TestFailureGoldens(t *testing.T) {
 	cases := []struct {
 		name    string
 		failure *Failure
 		golden  string
 	}{
-		{"no lockfile", NoLockfile, "no-lockfile.golden"},
-		{"not an Astro project", NotAnAstroProject, "not-an-astro-project.golden"},
+		{"all three parts", &threePartSample, "three-part-failure.golden"},
+		{"an empty middle part", &whatAndNextSample, "what-and-next-only.golden"},
 	}
 
 	for _, tc := range cases {
@@ -66,10 +96,9 @@ func TestFailureGoldens(t *testing.T) {
 			u, _, _ := testUI("", false, nil)
 			want := readGolden(t, tc.golden)
 
-			// REQUIRED MUTATION: change any word of NoLockfile or
-			// NotAnAstroProject in failure.go — dropping
-			// "npm-shrinkwrap.json" from the lockfile list is the edit
-			// this row exists for.
+			// REQUIRED MUTATION: change any word of either fixture
+			// above, or make renderFailure join the parts with a single
+			// newline instead of a blank line.
 			if got := u.renderFailure(tc.failure); got != want {
 				t.Errorf("rendering does not match %s\n--- got ---\n%s\n--- want ---\n%s",
 					tc.golden, got, want)
@@ -87,10 +116,10 @@ func TestFailureGoldens(t *testing.T) {
 func TestGoldenComparisonCanFail(t *testing.T) {
 	u, _, _ := testUI("", false, nil)
 
-	reworded := NoLockfile
-	reworded.Why = strings.Replace(reworded.Why, "npm-shrinkwrap.json or ", "", 1)
+	reworded := threePartSample
+	reworded.Why = strings.Replace(reworded.Why, "unremarkable", "ordinary", 1)
 
-	if u.renderFailure(reworded) == readGolden(t, "no-lockfile.golden") {
+	if u.renderFailure(&reworded) == readGolden(t, "three-part-failure.golden") {
 		t.Error("a reworded failure still matched the golden file — the comparison " +
 			"in TestFailureGoldens cannot detect a change and proves nothing")
 	}
@@ -103,9 +132,9 @@ func TestGoldenComparisonCanFail(t *testing.T) {
 // several parts and testing one part is not sampling the list.
 func TestEveryPublishedFailureNamesAnAction(t *testing.T) {
 	published := map[string]*Failure{
-		"NoLockfile":            NoLockfile,
-		"NotAnAstroProject":     NotAnAstroProject,
 		"notInteractiveFailure": notInteractiveFailure,
+		"noAnswerFailure":       noAnswerFailure,
+		"serverClosedFailure":   serverClosedFailure,
 	}
 	for name, f := range published {
 		if strings.TrimSpace(f.What) == "" {
@@ -138,9 +167,9 @@ var developerText = regexp.MustCompile(
 // all, and the second one passes forever.
 func TestCopyIsWrittenForAPerson(t *testing.T) {
 	u, _, errOut := testUI("", false, nil)
-	u.Fail(NoLockfile)
-	u.Fail(NotAnAstroProject)
 	u.Fail(notInteractiveFailure)
+	u.Fail(noAnswerFailure)
+	u.Fail(serverClosedFailure)
 	u.Internal(errors.New("an internal problem nobody anticipated"))
 	u.Cancelled()
 
@@ -331,16 +360,16 @@ func TestExitCode(t *testing.T) {
 			// Failure falls through to Internal. This row reds on the
 			// missing copy, and the row below reds too.
 			name:       "a Failure renders its own copy",
-			err:        NoLockfile,
+			err:        &threePartSample,
 			wantCode:   1,
-			wantOnErr:  "No lockfile found.",
+			wantOnErr:  threePartSample.What,
 			wantAbsent: internalWhat,
 		},
 		{
 			name:      "a wrapped Failure renders its own copy",
-			err:       fmt.Errorf("checking the project: %w", NoLockfile),
+			err:       fmt.Errorf("checking the project: %w", &threePartSample),
 			wantCode:  1,
-			wantOnErr: "No lockfile found.",
+			wantOnErr: threePartSample.What,
 		},
 		{
 			// THE THIRD EXIT CODE, and the whole of what it means is in

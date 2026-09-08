@@ -1,0 +1,4 @@
+A failure that never worked out its middle paragraph.
+
+The empty part is dropped rather than printed as a blank line, and
+this golden is what says so.

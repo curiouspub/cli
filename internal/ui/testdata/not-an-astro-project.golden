@@ -1,7 +1,0 @@
-This doesn't look like an Astro project.
-
-curious deploys Astro sites, and package.json here doesn't list
-astro as a dependency.
-
-If this is the wrong folder, pass the right one:
-`curious deploy ./my-site`.
