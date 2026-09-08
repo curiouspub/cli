@@ -22,6 +22,13 @@ import (
 // flow does — one address prompt across a run with three wrong codes —
 // without arranging a terminal, which is not a thing a test can portably
 // do on all three platforms this ships to.
+//
+// A PROMPT ERROR IS RETURNED UNCHANGED, and that leaves one thing this
+// seam's to keep: ui.ServerClosed is the flow's to mint, never an
+// implementation's. The third exit code means a door that is shut, and
+// the routing below only marks a stop with it holding a capacity or
+// maintenance response. A prompter that wrapped its own error in it
+// would exit 3 with nothing behind it, and nothing here would notice.
 type LoginPrompter interface {
 	Step(format string, args ...any)
 	Line(prompt string) (string, error)
@@ -53,12 +60,25 @@ type Authenticator interface {
 //
 // It returns the error that ends the run. What the offer SAYS is not
 // this flow's business; that it stops is.
+//
+// WHAT AN IMPLEMENTATION OWES THE RUN, said here because nothing
+// enforces it: it must RETURN. A blocking offer blocks the login; the
+// context handed in is the only cancellation there is, and it works only
+// if the callback honours it; a panic is not contained here and ends the
+// process. Deliberately no machinery — a recover() would swallow a
+// programming error in code this package does not own, and a deadline
+// would be this flow inventing one for a call whose cost it cannot know.
 type WaitlistOffer func(ctx context.Context, email string, resetsAt time.Time) error
 
 // TokenWriter stores the token together with the endpoint it was issued
 // against. The pair is validated together by whoever implements this, so
 // a token with no endpoint or an endpoint with no token cannot be
 // written at all.
+//
+// ITS ERROR TEXT REACHES THE USER VERBATIM — writeFailure prints it. So
+// an error from this seam must never carry the token. The shipped writer
+// does not, and that is why this is a sentence rather than a defect: the
+// type accepts any error and the renderer trusts it.
 type TokenWriter func(token ui.Secret, issuedAgainst string) error
 
 // LoginDeps is everything Login needs from outside itself.
@@ -600,6 +620,14 @@ func retryAdvice(retryAfter time.Duration, now time.Time) string {
 // identity that already holds a token reissues rather than spending a
 // second slot of the day's account capacity — so the last line is an
 // instruction rather than an apology.
+//
+// THAT IS A CLAIM ABOUT THE SERVER, and the one sentence here this
+// repository cannot prove. It holds because verify skips the capacity
+// spend when the identity already holds an active token, and the
+// server's own code carries the other half of this pointer, at the step
+// that makes it true. Nothing tests the pair across that boundary: if
+// the step ever starts spending, this copy becomes a lie and no suite on
+// either side goes red. Change one end, come to the other.
 func writeFailure(err error) error {
 	return ui.NewFailure(
 		"Logged in, but the login could not be saved.",

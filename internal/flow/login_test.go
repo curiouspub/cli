@@ -449,7 +449,7 @@ func TestLoginNeverRestartsAtTheEmailPrompt(t *testing.T) {
 		t.Fatalf("run ended with %v, want the cancellation sentinel", err)
 	}
 	if got := len(run.prompt.emailAsks); got != 1 {
-		t.Errorf("the email prompt was rendered %d times, want exactly 1: %v",
+		t.Errorf("the flow asked for the address %d times, want exactly 1: %v",
 			got, run.prompt.emailAsks)
 	}
 	if got := run.script.startCount(); got != 3 {
