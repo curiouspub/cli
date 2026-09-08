@@ -1308,3 +1308,68 @@ func TestPreflightRenderChargesTheTwoKindsDifferently(t *testing.T) {
 		}
 	}
 }
+
+// TestPreflightRenderMeasuresPathsUnderSeveralHardStops is the other half
+// of the sized list, and it exists because the row above cannot reach it.
+//
+// THE RENDERER HAS TWO BRANCHES THAT PRINT PATHS. A lone hard finding
+// carries its own copy and goes through ownCopy; several are synthesised
+// into one failure, and that path prints each finding through summary.
+// Sizes was added for the first and not wired into the second, so a
+// project breaking the per-file limit AND the total limit — the ordinary
+// shape of a too-big project — lost every measurement exactly when it had
+// more of them.
+//
+// The single-finding row above is by construction unable to see this: one
+// finding never reaches summary. That is a row whose INPUTS cannot reach
+// the property it names, and the fix for that shape is inputs, not
+// assertions — which is what this row is.
+//
+// REQUIRED MUTATION: make summary ignore Sizes and print the bare path,
+// keeping the formatter referenced so the package still builds. Reds on
+// both measurements.
+func TestPreflightRenderMeasuresPathsUnderSeveralHardStops(t *testing.T) {
+	r := &recorder{answer: true}
+
+	err := RenderPreflight(r, reportOf(t, []check.Finding{
+		{
+			CheckID:  check.IDLimitFileSize,
+			Severity: check.SeverityHardStop,
+			Message:  "1 file is larger than 5.0 MB.",
+			Paths:    []string{"public/reel.mov"},
+			Sizes:    []int64{41_000_000},
+		},
+		{
+			CheckID:  check.IDLimitTotal,
+			Severity: check.SeverityHardStop,
+			Message:  "This project is 62.0 MB of source.",
+			Paths:    []string{"public/archive.zip"},
+			Sizes:    []int64{21_000_000},
+		},
+	}), 0)
+	if err == nil {
+		t.Fatal("two hard stops returned nil, so nothing below is about a rendered stop")
+	}
+
+	out := rendered(err)
+	for _, want := range []string{
+		"public/reel.mov", "41.0 MB",
+		"public/archive.zip", "21.0 MB",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the synthesised stop does not carry %q:\n%s", want, out)
+		}
+	}
+
+	// Beside its own path, not merely somewhere in the output: two
+	// findings with one measurement each is exactly the arrangement a
+	// renderer pairing them wrongly still prints every string above.
+	for _, want := range []string{
+		"41.0 MB  public/reel.mov",
+		"21.0 MB  public/archive.zip",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the measurement is not beside its own path (%q):\n%s", want, out)
+		}
+	}
+}

@@ -205,17 +205,9 @@ func ownCopy(f check.Finding) *ui.Failure {
 		// single place that turns them into a column, which is also the
 		// only place that knows how wide the column should be.
 		//
-		// The gate guarantees the two slices line up, so this indexes
-		// without checking. That is the point of an enforcement: the
-		// reader downstream stops writing defensive code for a state
-		// that cannot arrive.
-		for i, path := range f.Paths {
-			if len(f.Sizes) > 0 {
-				fmt.Fprintf(&b, "\n  %10s  %s", units.Bytes(f.Sizes[i]), path)
-				continue
-			}
-			fmt.Fprintf(&b, "\n  %s", path)
-		}
+		// Both branches that print paths go through one renderer, so a
+		// measurement cannot appear on one and not the other.
+		b.WriteString(pathList(f))
 		why = strings.TrimPrefix(b.String(), "\n")
 	}
 
@@ -288,7 +280,28 @@ func summary(f check.Finding) string {
 	}
 	var b strings.Builder
 	b.WriteString(headline)
-	for _, path := range f.Paths {
+	b.WriteString(pathList(f))
+	return b.String()
+}
+
+// pathList renders a finding's paths, measured when it measured them.
+//
+// IT IS SHARED BY BOTH BRANCHES THAT PRINT PATHS, which is the whole
+// reason it exists. ownCopy renders a lone hard finding; summary renders
+// each of several, and warnings. Sizes was wired into the first and not
+// the second, so a project with two reasons to be refused lost the
+// measurements exactly when it had more of them — the feature working
+// until there was more than one occasion to use it.
+//
+// The gate guarantees the two slices line up, so this indexes without
+// checking: that is what an enforcement buys the code downstream of it.
+func pathList(f check.Finding) string {
+	var b strings.Builder
+	for i, path := range f.Paths {
+		if len(f.Sizes) > 0 {
+			fmt.Fprintf(&b, "\n  %10s  %s", units.Bytes(f.Sizes[i]), path)
+			continue
+		}
 		fmt.Fprintf(&b, "\n  %s", path)
 	}
 	return b.String()
