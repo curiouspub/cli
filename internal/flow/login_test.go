@@ -458,6 +458,19 @@ func TestLoginNeverRestartsAtTheEmailPrompt(t *testing.T) {
 // assignment putting it back is what a naive recovery path looks like in
 // source, and it is what this refuses.
 //
+// WHAT IT DOES NOT SEE, said here rather than left to be discovered,
+// because a guard with an undocumented blind spot reads as total
+// coverage and ends the search. It matches assignment STATEMENTS, so it
+// forbids the form the machine is actually written in and not every form
+// a Go programmer could reach the same effect through: a helper
+// returning the state, a switch expression, a slice of next-states
+// indexed at run time. That is a live limit rather than a theoretical
+// one — it holds today because every transition below is a plain
+// assignment, and it would stop holding the moment somebody factors the
+// transitions into a function. The behavioural row above is what covers
+// the flow whatever shape the transitions take; this one covers the
+// shapes the flow has.
+//
 // REQUIRED MUTATION, RUN: in login.go's recover state, change the
 // declined-resend branch from `state = stateAskCode` to
 // `state = stateAskEmail`. Nine rows red — this one plus
