@@ -343,6 +343,56 @@ func TestExitCode(t *testing.T) {
 			wantOnErr: "No lockfile found.",
 		},
 		{
+			// THE THIRD EXIT CODE, and the whole of what it means is in
+			// this package's doc comment: the server is closed to you
+			// right now. A bare number would be something every later
+			// surface has to guess at; a number with a sentence beside
+			// it is one they can route to without deciding again.
+			//
+			// REQUIRED MUTATION: return 1 from the ErrServerClosed
+			// branch in ExitCode. This row reds on the code.
+			name:       "a closed door costs its own code",
+			err:        ErrServerClosed,
+			wantCode:   ExitServerClosed,
+			wantOnErr:  "isn't taking this right now",
+			wantAbsent: internalWhat,
+		},
+		{
+			// The sentinel decides the COST; the wrapped error decides
+			// what is SAID. A caller that knows why the door is shut,
+			// and when it reopens, keeps its own words.
+			//
+			// REQUIRED MUTATION: in ExitCode's ErrServerClosed branch,
+			// render serverClosedFailure unconditionally instead of the
+			// caller's copy. This row reds on the missing copy.
+			name:       "a marked Failure keeps its own copy and still costs the code",
+			err:        ServerClosed(NewFailure("We're full for today.", "Because of this.", "Come back at 12:15.")),
+			wantCode:   ExitServerClosed,
+			wantOnErr:  "Come back at 12:15.",
+			wantAbsent: internalWhat,
+		},
+		{
+			// The mark survives the ordinary wrapping a call stack does
+			// to an error on its way up, which is the only reason
+			// errors.Is is the right question to ask about it.
+			name:      "a wrapped closed door is still a closed door",
+			err:       fmt.Errorf("verifying the code: %w", ServerClosed(NewFailure("Full.", "Why.", "Next."))),
+			wantCode:  ExitServerClosed,
+			wantOnErr: "Full.",
+		},
+		{
+			// THE NEGATIVE CONTROL FOR THE SCOPE. An ordinary Failure
+			// costs 1, so "everything that stops costs 3" and "a closed
+			// door costs 3" are distinguishable — without this row they
+			// are not, and the scope would be described rather than
+			// asserted.
+			name:       "a stop that is not a closed door costs the ordinary code",
+			err:        NewFailure("Too many requests from here.", "Because of this.", "Try later."),
+			wantCode:   1,
+			wantAbsent: internalWhat,
+			wantOnErr:  "Too many requests from here.",
+		},
+		{
 			name:      "anything else is an internal fault",
 			err:       errors.New("something nobody anticipated"),
 			wantCode:  1,
@@ -377,6 +427,38 @@ func TestExitCode(t *testing.T) {
 	}
 }
 
+// TestTheClosedDoorCodeIsThree pins the NUMBER, and it is a separate row
+// because every other assertion about it names the constant on both
+// sides — so they all keep passing with the constant set to anything at
+// all, 1 included. Measured: changing the constant to 1 moved no row in
+// either package until this one existed.
+//
+// The value is contract in the way a status code is contract. It is read
+// by things that are not reading messages — a wrapper script, a CI step,
+// an agent deciding whether to wait — and none of them can be updated
+// when it changes, which is the whole reason it is worth pinning rather
+// than deriving.
+//
+// Three, and not 2: a shell reserves 2 for a usage error, and this
+// program already exits 2 for one.
+//
+// REQUIRED MUTATION, RUN: set ExitServerClosed to any other value. This
+// row reds alone, which is also the measurement that nothing else was
+// watching the number.
+func TestTheClosedDoorCodeIsThree(t *testing.T) {
+	if ExitServerClosed != 3 {
+		t.Errorf("ExitServerClosed = %d, want 3", ExitServerClosed)
+	}
+	// And distinct from the two costs that already exist, since a code
+	// that collides with one of them conveys nothing.
+	for name, other := range map[string]int{"success or cancellation": 0, "an ordinary failure": 1} {
+		if ExitServerClosed == other {
+			t.Errorf("ExitServerClosed is %d, which is also what %s costs — a "+
+				"caller cannot act on a code it cannot tell apart", other, name)
+		}
+	}
+}
+
 // TestEverySentinelIsMapped is the row that would have caught the
 // no-answer defect without anybody thinking of no answers, and it is
 // here because of how that defect was found.
@@ -408,6 +490,7 @@ func TestEverySentinelIsMapped(t *testing.T) {
 		"ErrNotInteractive": ErrNotInteractive,
 		"ErrAborted":        ErrAborted,
 		"ErrNoAnswer":       ErrNoAnswer,
+		"ErrServerClosed":   ErrServerClosed,
 	}
 
 	for name, sentinel := range sentinels {

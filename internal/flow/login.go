@@ -221,6 +221,12 @@ var errorRouting = map[wire.ErrorCode]verifyRoute{
 	// Network-scoped throttling. The identity-scoped kind is
 	// indistinguishable from a wrong code and hides inside the
 	// unauthorized row above.
+	//
+	// It stops WITHOUT the closed-door mark, and that is a decision
+	// rather than an omission: this is about pace, not access. The
+	// server is telling the caller when to come back, so a script that
+	// treated it as a shut door would sleep through a limit it was being
+	// invited to wait out.
 	wire.CodeRateLimited: routeStop,
 
 	// The account cap closed between whatever checked it and here.
@@ -508,26 +514,30 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		resetsAt := now.Add(apiErr.RetryAfter)
 		if deps.Offer != nil {
 			if err := deps.Offer(ctx, email, resetsAt); err != nil {
-				return err
+				// The offer owns the WORDS; this flow owns the COST. A
+				// hand-off should not have to decide an exit code as a
+				// side effect of writing a message, and marking it here
+				// is what spares it from having to.
+				return ui.ServerClosed(err)
 			}
 		}
 		// Reached when no offer is wired, and when a wired one reports
 		// nothing. This function's callers return nil only for a stored
 		// token, so an offer that hands back no error must not turn a
 		// run with no credential into a success.
-		return ui.NewFailure(
+		return ui.ServerClosed(ui.NewFailure(
 			"curious.pub is full for today.",
 			apiErr.Message,
-			retryAdvice(apiErr.RetryAfter, now))
+			retryAdvice(apiErr.RetryAfter, now)))
 
 	case wire.CodeMaintenance:
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name, which is why
 		// the contract does not promise one for it.
-		return ui.NewFailure(
+		return ui.ServerClosed(ui.NewFailure(
 			"curious.pub is not taking logins right now.",
 			apiErr.Message,
-			"Try again a little later. Nothing has been uploaded.")
+			"Try again a little later. Nothing has been uploaded."))
 
 	case wire.CodeForbidden:
 		return ui.NewFailure(

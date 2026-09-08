@@ -1406,6 +1406,17 @@ func TestCapacityClosedStopsWithNoOfferWired(t *testing.T) {
 	if !strings.Contains(rendered(err), want) {
 		t.Errorf("the stop never named the time to come back (%s):\n%s", want, rendered(err))
 	}
+	// The UNWIRED path is its own branch and needs its own assertion.
+	// Measured: with the wired hand-off supplying the copy, the table
+	// over the contract's codes never reaches this line at all, so
+	// dropping the mark here moved nothing.
+	if !errors.Is(err, ui.ErrServerClosed) {
+		t.Error("the stop carries no closed-door mark, so a run that met a closed " +
+			"cap with no offer wired costs the same as a broken project")
+	}
+	if code := exitCodeFor(t, err); code != ui.ExitServerClosed {
+		t.Errorf("exit code %d, want %d", code, ui.ExitServerClosed)
+	}
 }
 
 // TestMaintenanceStopsWithTheServerMessageAndNoTime is the asymmetry the
@@ -1837,25 +1848,57 @@ func TestAnEndpointThatCannotBeComparedIsRefusedUpFront(t *testing.T) {
 // What a stop COSTS, pinned as it stands today.
 // -------------------------------------------------------------------
 
-// TestEveryStopExitsOneToday records the exit codes this flow can
-// actually produce, which is 0 for a cancellation and 1 for everything
-// else, because that is the whole vocabulary the program has.
+// closedDoorCodes is what "the server is closed to you right now" means
+// in terms of this contract's codes.
 //
-// It is a PIN rather than an endorsement. Whether some of these stops
-// deserve a distinct code is a question this flow is the first to meet
-// and is not the place to answer; if a third code is ever introduced,
-// this row reds and whoever introduces it has to come here and say what
-// changed.
-func TestEveryStopExitsOneToday(t *testing.T) {
-	stops := 0
+// The SET being ranged comes from the contract; this expectation is
+// local, which is the arrangement that lets the table below notice a
+// ninth code without inheriting an answer for it. Capacity closed and
+// the kill switch are the door being shut. Rate limiting deliberately is
+// NOT: it is about pace rather than access, and its stop tells the
+// reader when to come back rather than that they are shut out.
+var closedDoorCodes = map[wire.ErrorCode]bool{
+	wire.CodeCapacityClosed: true,
+	wire.CodeMaintenance:    true,
+}
+
+// TestOnlyTheClosedDoorStopsExitThree is the exit-code table, and it
+// replaces a row that asserted every stop costs 1.
+//
+// That row was right when it was written and it did the job it was for:
+// a third exit code could not appear without somebody coming here and
+// saying so. This is that. What it may not do is keep its old name — a
+// test whose name disagrees with its body is a comment that lies with
+// the authority of code, and the name is what the next reader trusts
+// before the assertions.
+//
+// BOTH DIRECTIONS, because a table that only checked the scoped pair
+// would pass just as happily if every stop cost 3. The codes inside the
+// scope cost ExitServerClosed and carry the mark; every other stop costs
+// the ordinary code and does not.
+func TestOnlyTheClosedDoorStopsExitThree(t *testing.T) {
+	inScope, outOfScope := 0, 0
 	for _, code := range wire.AllErrorCodes {
-		if route, stated := routeFor(code); stated && route == routeStop {
-			stops++
+		if route, stated := routeFor(code); !stated || route != routeStop {
+			continue
+		}
+		if closedDoorCodes[code] {
+			inScope++
+		} else {
+			outOfScope++
 		}
 	}
-	if stops == 0 {
-		t.Fatal("no contract code is routed to a stop — this row ranged an empty " +
-			"set and asserted nothing")
+	// The cardinality both ways. Either half being empty makes the
+	// corresponding direction vacuously true, and an empty scope is the
+	// likelier accident.
+	if inScope != len(closedDoorCodes) {
+		t.Fatalf("%d of the %d closed-door codes reach a stop; a code that never "+
+			"stops cannot be asserted to stop with a particular cost",
+			inScope, len(closedDoorCodes))
+	}
+	if outOfScope == 0 {
+		t.Fatal("every stop is inside the scope, so this table cannot tell a " +
+			"scoped cost from a blanket one")
 	}
 
 	for _, code := range wire.AllErrorCodes {
@@ -1868,12 +1911,50 @@ func TestEveryStopExitsOneToday(t *testing.T) {
 			if res.err == nil {
 				t.Fatalf("%q did not stop the run", code)
 			}
-			if got := exitCodeFor(t, res.err); got != 1 {
-				t.Errorf("%q exits %d; the program maps a cancellation to 0 and "+
-					"everything else to 1, and nothing here may invent a third",
-					code, got)
+
+			wantMark := closedDoorCodes[code]
+			if got := errors.Is(res.err, ui.ErrServerClosed); got != wantMark {
+				t.Errorf("%q carries the closed-door mark = %v, want %v", code, got, wantMark)
+			}
+
+			want := 1
+			if wantMark {
+				want = ui.ExitServerClosed
+			}
+			if got := exitCodeFor(t, res.err); got != want {
+				t.Errorf("%q exits %d, want %d", code, got, want)
 			}
 		})
+	}
+}
+
+// TestTheOfferKeepsItsWordsAndTheFlowKeepsTheCost. A wired hand-off owns
+// what the reader is told; it does not own what the run costs, and it
+// must not have to know. Marking the offer's own error here is what
+// spares the change that wires a real one up from deciding an exit code
+// as a side effect.
+func TestTheOfferKeepsItsWordsAndTheFlowKeepsTheCost(t *testing.T) {
+	run := newLoginRun(t)
+	run.prompt.emails = []answer{says("someone@example.com")}
+	run.prompt.lines = []answer{says("111111")}
+	run.prompt.confirms = []answer{no()}
+	run.deps.Offer = func(context.Context, string, time.Time) error {
+		return ui.NewFailure("Want a nudge when a slot frees up?", "Because.", "Say yes.")
+	}
+	run.script.verifyOutcomes = []outcome{
+		fails(http.StatusServiceUnavailable, wire.CodeCapacityClosed, "full").after("900"),
+	}
+
+	err := run.run(t)
+	if err == nil {
+		t.Fatal("the run continued past a closed capacity")
+	}
+	if !strings.Contains(rendered(err), "Want a nudge when a slot frees up?") {
+		t.Errorf("the offer's own words were replaced:\n%s", rendered(err))
+	}
+	if code := exitCodeFor(t, err); code != ui.ExitServerClosed {
+		t.Errorf("exit code %d, want %d — the cost is this flow's to decide, not "+
+			"the hand-off's", code, ui.ExitServerClosed)
 	}
 }
 
