@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -160,8 +161,29 @@ func (a Archive) Remove() error {
 // entry pointing outside the extraction root is precisely the payload
 // the service's extractor is hardened against, and a client that
 // routinely emitted them would make every real attack look like ordinary
-// traffic. The walk never puts a link in the file list, and this loop
-// could not emit one if it did.
+// traffic.
+//
+// THIS FUNCTION REFUSES A NON-REGULAR ENTRY RATHER THAN TRUSTING ITS
+// CALLER, and the refusal is why the paragraph above is a property
+// instead of a hope. It previously said the walk never puts a link in
+// the list "and this loop could not emit one if it did" — which was true
+// of the ENTRY and false of the harm. A symlink handed to it was
+// FOLLOWED, because the file is reached through Open, and its target's
+// bytes went into the archive under a regular-file entry: content from
+// outside the project, in the upload, with no link entry anywhere. The
+// sentence was literally true and materially wrong, and the fix is the
+// enforcement rather than a better sentence.
+//
+// A FIFO is the second reason, and it is not about disclosure: opening
+// one blocks until somebody writes, so a packer that trusted its caller
+// could hang a deploy on a file the user forgot was there.
+//
+// THE ORDER IS THIS FUNCTION'S OWN, not its caller's. The walk sorts,
+// but a packer that wrote whatever sequence it was handed made
+// determinism a property of the PIPELINE rather than of the packer — the
+// same file set in two orders produced two digests. Sorting here costs a
+// copy and makes the guarantee belong to the function that promises it.
+// The caller's slice is never reordered.
 //
 // dir is where the temporary archive is created; empty means the
 // system's temporary directory, which is what the CLI passes. It is a
@@ -216,7 +238,7 @@ func Pack(fsys FS, root, dir string, files []File) (Archive, error) {
 	zw.Header = gzip.Header{OS: gzipOSUnknown}
 
 	tw := tar.NewWriter(zw)
-	for _, file := range files {
+	for _, file := range sortedByPath(files) {
 		if err := writeEntry(tw, fsys, root, file); err != nil {
 			return Archive{}, err
 		}
@@ -254,6 +276,20 @@ func Pack(fsys FS, root, dir string, files []File) (Archive, error) {
 // machines for no reason a reader of it could use.
 const gzipOSUnknown = 255
 
+// sortedByPath returns the files in the archive's own order, leaving the
+// caller's slice alone.
+//
+// A copy rather than an in-place sort: this function is handed a list the
+// caller may still be holding — the walk's own Tree.Files is the obvious
+// one — and reordering somebody else's slice as a side effect of packing
+// is the kind of surprise that shows up three callers away.
+func sortedByPath(files []File) []File {
+	ordered := make([]File, len(files))
+	copy(ordered, files)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	return ordered
+}
+
 // writeEntry writes one file's header and bytes.
 //
 // THE FILE IS OPENED BEFORE THE HEADER IS WRITTEN, so a file that
@@ -261,6 +297,26 @@ const gzipOSUnknown = 255
 // committed to the stream rather than after a header promising bytes
 // that never arrive.
 func writeEntry(tw *tar.Writer, fsys FS, root string, file File) error {
+	// THE REFUSAL COMES BEFORE THE OPEN, and that order is the whole
+	// point: Open follows a symlink, so a check afterwards would already
+	// have read a file outside the project to find out it should not
+	// have.
+	//
+	// WHAT THIS DOES NOT CHECK, said here rather than left to be found,
+	// because a guard with an undocumented field of view reads as total
+	// coverage: it refuses by KIND and not by NAME. A path that is
+	// absolute, that climbs out with "..", or that carries a NUL or a
+	// control byte still reaches the header verbatim — measured, and the
+	// service's extractor refuses the WHOLE archive over any of them. The
+	// walk cannot produce such a name, so nothing shipped reaches this;
+	// it is an open question about how much this function should check
+	// rather than trust, not an accepted hole.
+	if !file.Mode.IsRegular() {
+		return fmt.Errorf("%s is not a regular file (%s), and only regular files "+
+			"can be archived: a link would be followed to whatever it points at, "+
+			"and a pipe or device would block or read forever", file.Path, file.Mode)
+	}
+
 	rc, err := fsys.Open(filepath.Join(root, filepath.FromSlash(file.Path)))
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", file.Path, err)
