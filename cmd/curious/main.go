@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"runtime"
+
+	"github.com/curiouspub/cli/internal/mcp"
 )
 
 // version, commit and date are overridden at build time via
@@ -23,13 +25,18 @@ var (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 // run dispatches to a subcommand and returns the process exit code. It
-// takes its arguments and output streams explicitly so dispatch is
+// takes its arguments and all three streams explicitly so dispatch is
 // testable without a subprocess.
-func run(args []string, stdout, stderr io.Writer) int {
+//
+// STDIN ARRIVES HERE TOO, and it did not have to until `mcp` landed: one
+// subcommand reads a protocol off it rather than answering a person, and
+// a command that reached for os.Stdin itself would be one no test could
+// drive without giving the test process a pipe of its own.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printUsage(stderr)
 		return 2
@@ -46,6 +53,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runVersion(args[1:], stdout, stderr)
 	case "deploy":
 		return runDeploy(args[1:], stdout, stderr)
+	case "mcp":
+		return runMCP(args[1:], stdin, stdout, stderr)
 	default:
 		printUsage(stderr)
 		return 2
@@ -53,13 +62,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // printUsage writes the command surface to w. Deliberately small: this
-// binary has two commands today, and anything not listed here is not yet
-// public surface.
+// binary has three commands today, and anything not listed here is not
+// yet public surface.
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, `usage: curious <command> [arguments]
 
 commands:
   deploy [dir]   pack an Astro project, upload it, and stream the build
+  mcp            serve the Model Context Protocol on stdin and stdout
   version        print the version, commit and build date
 
 Run 'curious <command> -h' for a command's own flags.
@@ -76,6 +86,14 @@ const deployUsage = `usage: curious deploy [dir]
 
 Pack the Astro project in [dir] (default: the current directory),
 upload it, and stream the build.
+`
+
+const mcpUsage = `usage: curious mcp
+
+Serve the Model Context Protocol on stdin and stdout, so an agent can
+deploy the same way a person does. Takes no arguments, and is meant to be
+started by a client rather than run by hand: stdout carries the protocol,
+so anything you type is read as a message.
 `
 
 // parseSubcommand parses a subcommand's arguments and reports whether the
@@ -140,4 +158,29 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stderr, "curious deploy: not implemented yet")
 	return 1
+}
+
+// runMCP serves the Model Context Protocol on this process's own pipes
+// until the client closes them.
+//
+// STDOUT IS THE PROTOCOL. Every diagnostic this command produces goes to
+// stderr, which is why the server is handed the two writers separately
+// rather than being left to pick one: a stray byte on stdout is a
+// message the client cannot parse, and the symptom a user reports is a
+// client that disconnected without saying why.
+//
+// The server is given this binary's own version rather than a literal,
+// so an unreleased build introduces itself to a client as "dev" for the
+// same reason `curious version` does.
+func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	if code, done := parseSubcommand(fs, args, 0, mcpUsage, stdout, stderr); done {
+		return code
+	}
+
+	if err := mcp.New("curious", version).Serve(stdin, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "curious mcp: %v\n", err)
+		return 1
+	}
+	return 0
 }

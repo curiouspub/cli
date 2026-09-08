@@ -97,18 +97,26 @@ The finished product is one binary with two faces:
   release-built binary. The binary is named `curious` either way.
 
 **What exists in the tree right now is smaller than that, and this
-section says so on purpose.** Today `curious` dispatches `version` and a
-`deploy` that exits non-zero as an unimplemented stub; `curious mcp` does
-not exist yet; `internal/` holds packages scaffolded empty-but-real for
-the changes that will fill them. A repository describing unbuilt features
-in the present tense has told its reader something false, and this one is
+section says so on purpose.** Today `curious` dispatches `version`, a
+`deploy` that exits non-zero as an unimplemented stub, and an `mcp`
+server that is **transport and dispatch with NO TOOLS REGISTERED** — a
+client connects, completes a handshake and receives an empty tool list,
+because the callables an agent would actually use land in a later change.
+The rest of `internal/` holds packages scaffolded empty-but-real for the
+changes that will fill them. A repository describing unbuilt features in
+the present tense has told its reader something false, and this one is
 read by strangers deciding whether to trust it.
+
+The split between the server and its tools is deliberate rather than a
+staging accident: a server with no tools is testable against the protocol
+alone, and every protocol defect found there is one not found while also
+debugging a deploy.
 
 ## Layout
 
 - `cmd/curious/` — entrypoint and subcommand dispatch only, no logic.
-- `internal/` — `ui`, `config`, `api`, `preflight`, `pack`, `flow`,
-  `guard`.
+- `internal/` — `ui`, `config`, `api`, `preflight`, `pack`, `check`,
+  `flow`, `mcp`, `guard`.
 - `pkg/wire/` — **the public wire contract**, and the reason this
   repository is a Go module anyone can import.
 
