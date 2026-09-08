@@ -338,6 +338,12 @@ func TestIDsAreEchoedByteForByte(t *testing.T) {
 // implement, where a reply would be a protocol violation and an error
 // reply would additionally be wrong.
 //
+// THE NULL-ID CASE USED TO LIVE HERE AND HAS MOVED, deliberately: a
+// message carrying "id": null is a request the protocol permits and
+// discourages, not a notification, and reading it as one left a client
+// waiting for a reply that never came. It is now answered — see
+// TestAnExplicitNullIDIsAnsweredRatherThanIgnored.
+//
 // REQUIRED MUTATION, run 2026-09-08: delete the isNotification branch
 // from handle. Every row here reds.
 func TestNotificationsAreNeverAnswered(t *testing.T) {
@@ -350,7 +356,6 @@ func TestNotificationsAreNeverAnswered(t *testing.T) {
 		{"a notification this server does not implement", `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`, true},
 		{"an unknown method with no id", `{"jsonrpc":"2.0","method":"frobnicate"}`, true},
 		{"a request-shaped method with no id", `{"jsonrpc":"2.0","method":"tools/list"}`, true},
-		{"an explicit null id", `{"jsonrpc":"2.0","id":null,"method":"frobnicate"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout, stderr := drive(t, testServer(), tc.message)
@@ -554,5 +559,54 @@ func TestPingIsAnswered(t *testing.T) {
 	}
 	if string(got.Result) != "{}" {
 		t.Errorf("ping result = %s, want an empty object", got.Result)
+	}
+}
+
+// TestAnExplicitNullIDIsAnsweredRatherThanIgnored is the row that used to
+// say the opposite.
+//
+// A notification is a request object WITHOUT an id member. A message
+// carrying "id": null has one, so it is a request — discouraged by the
+// protocol, but a request — and a server that treats it as a
+// notification leaves the client waiting for a reply that never arrives.
+// **A hang outranks a durable deviation**: a wrong answer can be read and
+// acted on, where silence cannot be told apart from a server that died.
+//
+// The reply echoes null back, because that is the one id a client can
+// match against the message it sent, and it says the id is the problem
+// rather than the method — the method is never dispatched.
+//
+// REQUIRED MUTATIONS, BOTH RUN:
+//   - restore `|| string(r.ID) == "null"` in isNotification: this row
+//     reds on the missing reply, which is the hang made visible.
+//   - answer with codeMethodNotFound instead: reds on the code, because
+//     what is wrong is the id and not the method.
+func TestAnExplicitNullIDIsAnsweredRatherThanIgnored(t *testing.T) {
+	stdout, _ := drive(t, testServer(), `{"jsonrpc":"2.0","id":null,"method":"frobnicate"}`)
+	replies := protocolLines(t, stdout)
+
+	if len(replies) != 1 {
+		t.Fatalf("replies = %d, want exactly one — a client that sent this is "+
+			"waiting for it, and silence is indistinguishable from a dead server",
+			len(replies))
+	}
+
+	var got response
+	if err := json.Unmarshal([]byte(replies[0]), &got); err != nil {
+		t.Fatalf("the reply is not a JSON-RPC response: %v\n%s", err, replies[0])
+	}
+	if string(got.ID) != "null" {
+		t.Errorf("reply id = %s, want null echoed back — any other id is one the "+
+			"client cannot match to what it sent", got.ID)
+	}
+	if got.Error == nil {
+		t.Fatalf("the reply carries no error: %s", replies[0])
+	}
+	if got.Error.Code != codeInvalidRequest {
+		t.Errorf("error code = %d, want %d — the id is what is wrong here, not the method",
+			got.Error.Code, codeInvalidRequest)
+	}
+	if got.Result != nil {
+		t.Errorf("the reply carries a result as well as an error: %s", replies[0])
 	}
 }
