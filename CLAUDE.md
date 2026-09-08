@@ -98,14 +98,23 @@ The finished product is one binary with two faces:
 
 **What exists in the tree right now is smaller than that, and this
 section says so on purpose.** Today `curious` dispatches `version`, a
-`deploy` that exits non-zero as an unimplemented stub, and an `mcp`
+`deploy` that runs the whole LOCAL half of the sequence, and an `mcp`
 server that is **transport and dispatch with NO TOOLS REGISTERED** — a
 client connects, completes a handshake and receives an empty tool list,
 because the callables an agent would actually use land in a later change.
-The rest of `internal/` holds packages scaffolded empty-but-real for the
-changes that will fill them. A repository describing unbuilt features in
-the present tense has told its reader something false, and this one is
-read by strangers deciding whether to trust it.
+A repository describing unbuilt features in the present tense has told
+its reader something false, and this one is read by strangers deciding
+whether to trust it.
+
+`deploy` resolves the directory, reads any stored login, walks the
+project once, runs the pre-flight checks and the local limits over that
+one walk, checks capacity and logs in when there is no usable token, and
+packs the archive — **and then stops, with the archive removed and a line
+saying so.** The upload, the streamed build and the published URL are the
+next change. The ordering is the product rather than an implementation
+detail: everything free and local runs first, so **a project that cannot
+deploy makes zero network calls**, and nobody is walked through email
+verification before being told there is no `package.json`.
 
 The split between the server and its tools is deliberate rather than a
 staging accident: a server with no tools is testable against the protocol
