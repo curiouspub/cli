@@ -81,10 +81,11 @@ func Sanitize(s string) string {
 
 // needsEscaping is the fast path: the overwhelming majority of lines
 // carry nothing to escape, and returning the original string means they
-// cost one pass and no allocation.
+// cost one pass and no allocation. It reads the same table the rewrite
+// does, so the two cannot disagree about which bytes are in the set.
 func needsEscaping(s string) bool {
 	for i := 0; i < len(s); i++ {
-		if s[i] < firstPrintable || s[i] == del {
+		if escapes[s[i]] != "" {
 			return true
 		}
 	}
@@ -93,44 +94,63 @@ func needsEscaping(s string) bool {
 
 // escapeFor is the printable form of one byte, or the empty string for a
 // byte that passes through untouched.
+func escapeFor(c byte) string { return escapes[c] }
+
+// escapes is THE set: the printable form of every byte this package
+// rewrites, empty for every byte it leaves alone.
 //
-// The named forms are here for the two that occur in real build output —
-// a tab of indentation and a newline that survived somebody's own
-// formatting — because "\t" is legible where "\x09" is a puzzle. Every
-// form is made of printable ASCII and none of them contains a byte this
-// function escapes, which is the whole of the idempotence argument.
-func escapeFor(c byte) string {
-	switch c {
-	// ESC HAS ITS OWN CASE, deliberately not folded into the range
-	// below. It is the byte the whole mechanism exists for — every
-	// cursor movement, screen clear, colour change and window-title
-	// rewrite begins with it — so a reader looking for what stops an
-	// escape sequence finds it named here, and a change that removes
-	// this byte alone from the set is a change one row can see.
-	case esc:
-		return `\x1b`
-	case '\a':
-		return `\a`
-	case '\b':
-		return `\b`
-	case '\t':
-		return `\t`
-	case '\n':
-		return `\n`
-	case '\v':
-		return `\v`
-	case '\f':
-		return `\f`
-	case '\r':
-		return `\r`
+// It is a table rather than a range test for two reasons, and the second
+// is the one worth writing down.
+//
+// The first is that the named forms have to live somewhere. A tab of
+// indentation and a newline that survived somebody's own formatting are
+// the two control bytes that turn up in real build output, and "\t" is
+// legible where "\x09" is a puzzle.
+//
+// The second is that A SET BUILT ENTIRELY BY A RANGE HAS NO MEMBER
+// ANYBODY CAN REMOVE. ESC is the byte this whole mechanism exists for —
+// every cursor movement, screen clear, colour change and window-title
+// rewrite begins with it — and a claim that the set covers it can only be
+// proved by taking it out and watching something go red. Under a range
+// test there is nothing to take out: deleting a line that names ESC
+// changes no behaviour, so the proof cannot be run and the coverage is
+// asserted rather than shown. So the range below SKIPS it and the entry
+// is written on its own line.
+//
+// Every form here is printable ASCII and none contains a byte in this
+// set, which is the whole of the idempotence argument.
+var escapes = buildEscapes()
+
+func buildEscapes() [256]string {
+	var table [256]string
+	for b := 0; b < firstPrintable; b++ {
+		if b == esc {
+			// Written below, on purpose. See the doc comment above.
+			continue
+		}
+		table[b] = hexEscape(byte(b))
 	}
-	if c < firstPrintable || c == del {
-		return `\x` + string(hexDigits[c>>4]) + string(hexDigits[c&0x0f])
-	}
-	return ""
+	table[del] = hexEscape(del)
+
+	table[esc] = `\x1b`
+
+	table['\a'] = `\a`
+	table['\b'] = `\b`
+	table['\t'] = `\t`
+	table['\n'] = `\n`
+	table['\v'] = `\v`
+	table['\f'] = `\f`
+	table['\r'] = `\r`
+	return table
 }
 
-// hexDigits is lowercase on purpose: the escapes above are lowercase, and
-// two spellings of one byte in one line of output is a difference a
-// reader would try to interpret.
+// hexEscape is the general form, for the bytes with no name worth
+// learning.
+func hexEscape(c byte) string {
+	return `\x` + string(hexDigits[c>>4]) + string(hexDigits[c&0x0f])
+}
+
+// hexDigits is lowercase on purpose: the named escapes above are
+// lowercase, and two spellings of one byte in one line of output is a
+// difference a reader would try to interpret.
 const hexDigits = "0123456789abcdef"
