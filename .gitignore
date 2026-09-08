@@ -9,6 +9,16 @@ go.work*
 # GoReleaser
 /.goreleaser/
 
+# npm wrapper: what a local install or pack leaves behind. The package's
+# own published file list is an allowlist, so none of this could ship —
+# but the leak scan reads every untracked file no rule covers, and a
+# downloaded binary is not something anybody authored.
+/npm/node_modules/
+/npm/*.tgz
+/npm/installed.json
+/npm/curious
+/npm/curious.exe
+
 # test & coverage
 *.test
 coverage.out
