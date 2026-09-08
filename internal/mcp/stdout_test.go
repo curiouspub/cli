@@ -77,7 +77,7 @@ func purityScenario(t *testing.T) (stdout, stderr string) {
 // would move both sides together and this row would stay green while
 // every client broke. What is written here is what goes on the wire.
 var wantPurityTranscript = []string{
-	`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"curious","version":"0.0.0-test"}}}`,
+	`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"curious","version":"0.0.0-test"}}}`,
 	`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"The boom tool failed unexpectedly and nothing it was doing was finished. The server is still running, so you can try the call again."}],"isError":true}}`,
 	`{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"boom","inputSchema":{"type":"object"}}]}}`,
 }

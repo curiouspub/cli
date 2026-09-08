@@ -227,12 +227,12 @@ func TestHandshakeCompletesOverAPipePair(t *testing.T) {
 	if got.Error != nil {
 		t.Errorf("the handshake was answered with an error: %s", got.Error)
 	}
-	if got.Result.ProtocolVersion != "2025-06-18" {
+	if got.Result.ProtocolVersion != "2025-11-25" {
 		t.Errorf("protocolVersion = %q, want %q — the revision is pinned by name and this is the pin",
-			got.Result.ProtocolVersion, "2025-06-18")
+			got.Result.ProtocolVersion, "2025-11-25")
 	}
-	if ProtocolVersion != "2025-06-18" {
-		t.Errorf("ProtocolVersion = %q, want %q", ProtocolVersion, "2025-06-18")
+	if ProtocolVersion != "2025-11-25" {
+		t.Errorf("ProtocolVersion = %q, want %q", ProtocolVersion, "2025-11-25")
 	}
 	// THE TOOLS CAPABILITY IS DECLARED EVEN WITH NO TOOLS REGISTERED. A
 	// client that never sees it is entitled to skip tools/list entirely,

@@ -22,7 +22,31 @@ import (
 // Changing it is a one-line change here and a deliberate one everywhere
 // else: the shape of the messages below is the shape THIS revision
 // defines, so the value and the code that implements it move together.
-const ProtocolVersion = "2025-06-18"
+//
+// WHY THIS ONE, AND NOT THE CURRENT ONE. The protocol's current revision
+// is 2026-07-28, and it is not a newer spelling of what is below — it
+// replaces the handshake entirely. The version travels per-request in a
+// _meta key rather than being agreed once, there is a mandatory discovery
+// call, and an unsupported version comes back as a typed error. This
+// server implements the HANDSHAKE-BASED family, whose last revision is
+// the one pinned here, and the current specification documents backward
+// compatibility with exactly that family. So this is a deliberate
+// position rather than a lag: the newest revision of the shape this
+// server actually speaks.
+//
+// THE TRIGGER FOR MOVING IS EVIDENCE, not a date. Two things reopen it,
+// and both are observable rather than a matter of taste:
+//
+//   - a real client that REFUSES this revision — the compatibility the
+//     current specification documents is a claim, and the first refusal
+//     is the measurement that tests it;
+//   - a tool this server must expose that the handshake-based family
+//     cannot carry.
+//
+// Either one reopens the decision to hand-roll rather than take a
+// library, because that decision was made on a version negotiated once,
+// which is exactly what the newer shape stops being.
+const ProtocolVersion = "2025-11-25"
 
 // The method names this server implements. They are constants because
 // each is matched in one place and named in another, and a method

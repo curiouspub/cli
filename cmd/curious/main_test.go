@@ -166,7 +166,7 @@ func TestArgumentErrorsAreAnswered(t *testing.T) {
 // fires. The claim was plausible and untrue, and the only reason it is
 // not still written above is that the mutation was actually run.
 func TestMCPIsDispatchedToARealServer(t *testing.T) {
-	const handshake = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`
+	const handshake = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"mcp"}, strings.NewReader(handshake+"\n"), &stdout, &stderr)
