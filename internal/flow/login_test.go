@@ -97,10 +97,23 @@ type scriptedPrompt struct {
 	// ask, which is what the real terminal does with no TTY on either
 	// half of a question.
 	notInteractive bool
+
+	// transcript is everything this terminal did — narration and
+	// questions interleaved, in the order it happened.
+	//
+	// The buffer and the per-prompt slices above cannot answer an
+	// ORDERING question between the two: a question is recorded in a
+	// slice and a line is written to a buffer, so a run that printed its
+	// explanation after asking looks identical to one that printed it
+	// before. Some rules are orders — nothing asks for an address until
+	// the offer it is for has been accepted — and this is what can see
+	// one.
+	transcript []string
 }
 
 func (s *scriptedPrompt) Step(format string, args ...any) {
 	fmt.Fprintf(&s.out, format+"\n", args...)
+	s.transcript = append(s.transcript, "said: "+fmt.Sprintf(format, args...))
 }
 
 func (s *scriptedPrompt) Email(prompt string) (string, error) {
@@ -108,6 +121,7 @@ func (s *scriptedPrompt) Email(prompt string) (string, error) {
 		return "", ui.ErrNotInteractive
 	}
 	s.emailAsks = append(s.emailAsks, prompt)
+	s.transcript = append(s.transcript, "asked: "+prompt)
 	next, ok := pop(&s.emails)
 	if !ok {
 		return "", errScriptExhausted
@@ -120,6 +134,7 @@ func (s *scriptedPrompt) Line(prompt string) (string, error) {
 		return "", ui.ErrNotInteractive
 	}
 	s.lineAsks = append(s.lineAsks, prompt)
+	s.transcript = append(s.transcript, "asked: "+prompt)
 	next, ok := pop(&s.lines)
 	if !ok {
 		return "", errScriptExhausted
@@ -132,6 +147,7 @@ func (s *scriptedPrompt) Confirm(question string, defaultYes bool) (bool, error)
 		return false, ui.ErrNotInteractive
 	}
 	s.confirmAsks = append(s.confirmAsks, confirmAsk{question: question, defaultYes: defaultYes})
+	s.transcript = append(s.transcript, "asked: "+question)
 	next, ok := pop(&s.confirms)
 	if !ok {
 		return false, errScriptExhausted
