@@ -1002,12 +1002,20 @@ func TestAnArchiveOverTheCapIsRefusedWithNoReceiptAboveIt(t *testing.T) {
 	if !strings.Contains(text, "30.0 MB") {
 		t.Errorf("the message does not state the cap:\n%s", text)
 	}
-	if !strings.Contains(text, "blob-") {
-		t.Errorf("the message names no file, so it names nothing anybody can act on:\n%s", text)
-	}
+	// THE FILES ARE READ FROM Paths, NOT FROM THE COPY. They used to be
+	// in both, which is what made the renderer print each one twice.
 	if len(found[0].Paths) == 0 {
-		t.Errorf("the finding carries no paths, so an agent has to read English to " +
-			"learn which file to open")
+		t.Errorf("the finding carries no paths, so it names nothing anybody can act " +
+			"on, and an agent has to read English to learn which file to open")
+	}
+	if len(found[0].Sizes) != len(found[0].Paths) {
+		t.Errorf("Sizes = %v, Paths = %v — the gate refuses a finding whose two lists "+
+			"disagree", found[0].Sizes, found[0].Paths)
+	}
+	for _, p := range found[0].Paths {
+		if !strings.HasPrefix(p, "blob-") {
+			t.Errorf("Paths names %q, which is not one of the fixture's files", p)
+		}
 	}
 }
 
@@ -1041,7 +1049,7 @@ func TestTheLeastCompressibleFilesAreTheOnesReported(t *testing.T) {
 		list = append(list, File{Path: name, Size: int64(len(body))})
 	}
 
-	got := leastCompressible(fakeFS{dirs: dirs}, "root", list)
+	got, _ := leastCompressible(fakeFS{dirs: dirs}, "root", list)
 	if len(got) != 3+2 {
 		t.Fatalf("leastCompressible returned %d rows, want %d", len(got), listedContributors)
 	}
@@ -1074,6 +1082,16 @@ func TestAnOrdinaryProjectHasNothingToSay(t *testing.T) {
 	res := Limits(tree.Files)
 	if len(res.Findings) != 0 {
 		t.Errorf("findings = %v, want none from an ordinary project", res.Findings)
+	}
+	// THE ROW'S OWN POSITIVE CONTROL. Every assertion here is about an
+	// ABSENCE, so a Limits that had become a no-op returning nothing
+	// would satisfy all of them — the row would pass hardest against the
+	// subject having vanished. Naming the manifest it must carry is what
+	// tells "nothing to report" apart from "nothing ran".
+	if len(res.Manifest) != len(limitIDs) {
+		t.Fatalf("the manifest carries %d rows, want %d — a check that reported "+
+			"nothing and a check that did not run look identical from an empty "+
+			"findings list", len(res.Manifest), len(limitIDs))
 	}
 	for _, row := range res.Manifest {
 		if row.CheckID == check.IDLimitPacked {
@@ -1325,4 +1343,104 @@ func everyLimitFinding(t *testing.T) map[string]check.Finding {
 		}
 	}
 	return out
+}
+
+// TestThePackedFindingNamesEachFileOnce is the fourth limit's half of the
+// sized-path model.
+//
+// It used to lay its own table into the copy — a packed size, an on-disk
+// size and a path per row — AND set Paths, so the renderer appended every
+// one of those paths again underneath. The one hard stop reached by a
+// project that did nothing wrong listed its offenders twice.
+//
+// THE RATIO SURVIVES AS A SENTENCE, NOT AS A COLUMN. The list is selected
+// and ordered by how little each file compressed, so the ordering already
+// carries what the second column said; what a reader cannot recover from
+// the ordering is the overall shape, and that is one sentence rather than
+// a number per row.
+//
+// REQUIRED MUTATION: put the per-file packed-of-on-disk column back in
+// the copy while leaving Paths set. Reds here on the duplicate name.
+func TestThePackedFindingNamesEachFileOnce(t *testing.T) {
+	root := writeTree(t, []entry{
+		{path: "public/a.bin", body: "not compressible enough"},
+		{path: "public/b.bin", body: "also stubborn content here"},
+	})
+	files := []File{
+		{Path: "public/a.bin", Size: 23, Mode: 0o644},
+		{Path: "public/b.bin", Size: 26, Mode: 0o644},
+	}
+
+	f := packedFinding(OSFileSystem{}, root, files, Archive{Size: 32_257_024})
+
+	if len(f.Paths) == 0 {
+		t.Fatal("the finding names no files, so nothing below is about a list")
+	}
+	if len(f.Sizes) != len(f.Paths) {
+		t.Fatalf("Sizes = %v, Paths = %v — the gate refuses a finding whose two "+
+			"lists disagree", f.Sizes, f.Paths)
+	}
+	for _, path := range f.Paths {
+		if n := strings.Count(f.What, path); n != 0 {
+			t.Errorf("the copy names %q %d times as well as carrying it in Paths, "+
+				"so the renderer prints it twice", path, n)
+		}
+	}
+	// The overall ratio is still said, once, because the ordering cannot
+	// say it: a reader needs to know the archive barely compressed at all.
+	if !strings.Contains(f.What, "compressed least") {
+		t.Errorf("the copy no longer says what the list is:\n%s", f.What)
+	}
+}
+
+// TestTheCompressionDiagnosticSkipsALinkRatherThanFollowingIt.
+//
+// The packer refuses a non-regular entry before opening it, because Open
+// resolves a symlink and a check afterwards would already have read the
+// file it meant to refuse. The compression diagnostic reads the SAME
+// list a second time, to say which files compressed least, and it did not
+// share that refusal — so a link in the list was followed and its
+// target's bytes were read, from outside the project, on a path that had
+// already failed and nobody was watching.
+//
+// REQUIRED MUTATION: drop the packable guard from compressedSize. This
+// row reds — the link is measured, so it appears in the result.
+func TestTheCompressionDiagnosticSkipsALinkRatherThanFollowingIt(t *testing.T) {
+	root := writeTree(t, []entry{{path: "public/real.bin", body: "ordinary content"}})
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("SECRET-CONTENT"), 0o600); err != nil {
+		t.Fatalf("writing the out-of-tree fixture: %v", err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, "public/link.bin")); err != nil {
+		t.Skipf("this runner cannot create a symbolic link, so the input this row needs cannot exist: %v", err)
+	}
+
+	measured, left := leastCompressible(OSFileSystem{}, root, []File{
+		{Path: "public/real.bin", Size: 16, Mode: 0o644},
+		{Path: "public/link.bin", Size: 14, Mode: os.ModeSymlink | 0o777},
+	})
+
+	// WHICH GUARD FIRED, not merely that one did. A link left out for
+	// any other reason would satisfy the list assertion below while
+	// proving nothing about the refusal this row exists for.
+	if len(left) != 1 || left[0].file.Path != "public/link.bin" {
+		t.Fatalf("skipped = %v, want the link alone", left)
+	}
+	if left[0].reason != skippedUnpackable {
+		t.Errorf("the link was skipped for reason %d, want the packer's own refusal — "+
+			"a negative row satisfied by a different guard proves the wrong one",
+			left[0].reason)
+	}
+
+	// The positive control is in the same call: the regular file IS
+	// measured, so this row cannot pass against a diagnostic that has
+	// quietly stopped measuring anything.
+	var names []string
+	for _, m := range measured {
+		names = append(names, m.file.Path)
+	}
+	if !reflect.DeepEqual(names, []string{"public/real.bin"}) {
+		t.Errorf("measured %v, want the regular file alone — a link must be skipped, "+
+			"not followed to whatever it points at", names)
+	}
 }

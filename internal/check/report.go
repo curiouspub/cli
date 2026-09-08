@@ -38,17 +38,30 @@ func (r Report) Valid() bool { return r.validated }
 
 // Findings returns the validated findings, in report order.
 //
-// A FRESH SLICE each call. A caller that sorted or reordered what it was
-// handed would otherwise change what the next reader of the same Report
-// sees, and a validated article that changes under its readers is not
-// one. The Paths inside are already this Report's own — Combine copied
-// them at construction — so nothing here reaches back into a producer.
+// A FRESH SLICE each call, AND FRESH SLICES INSIDE IT. A caller that
+// sorted or reordered what it was handed would otherwise change what the
+// next reader of the same Report sees, and a validated article that
+// changes under its readers is not one.
+//
+// The outer copy alone was not enough, and the gap was the same one
+// Combine closes at the other end. Combine deep-copies on the way IN so a
+// producer cannot reach into a finished report; this copies on the way
+// OUT so a reader cannot either — including into the length disagreement
+// between Paths and Sizes that the gate refuses at construction. A
+// validated article its readers can invalidate is not validated, it is
+// merely validated once.
+//
+// It reuses Combine's own copy rather than repeating the field list,
+// because the day a third slice joins Finding is the day two hand-written
+// copies stop agreeing.
 func (r Report) Findings() []Finding {
 	if len(r.findings) == 0 {
 		return nil
 	}
 	out := make([]Finding, len(r.findings))
-	copy(out, r.findings)
+	for i, f := range r.findings {
+		out[i] = copyFinding(f)
+	}
 	return out
 }
 

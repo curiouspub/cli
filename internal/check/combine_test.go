@@ -154,14 +154,33 @@ func TestCombineReportsEveryDuplicateAtOnce(t *testing.T) {
 // claiming a check twice is the same broken report as two producers
 // claiming it once each, and a rule that only looked across producers
 // would let the sloppier case through.
+//
+// THIS ROW DID NOT TEST ITS OWN NAME. It asserted only that SOME error
+// came back, over a fixture of two rows — an incomplete manifest, which
+// the coverage rule refuses whether or not duplicate detection exists.
+// Deleting duplicateIDs from Combine left it GREEN, measured, while a
+// differently-named sibling was the only thing that reddened.
+//
+// Two changes make the name true. The fixture now satisfies coverage, so
+// nothing but the duplicate can refuse it; and the assertion names the
+// error rather than accepting any. That is this repository's own rule —
+// assert the SPECIFIC failure, not that a failure happened — and this is
+// the second row caught by it this week.
+//
+// REQUIRED MUTATION, RUN: delete the duplicateIDs branch from Combine.
+// Reds here now; it did not before.
 func TestCombineRefusesADuplicateInsideOneProducer(t *testing.T) {
-	one := Results{Manifest: Manifest{
-		{CheckID: IDAstroDep},
-		{CheckID: IDAstroDep},
-	}}
+	manifest := everyDeclaredID()
+	one := Results{Manifest: append(manifest, Status{CheckID: IDAstroDep})}
 
-	if _, err := Combine(one); err == nil {
-		t.Fatal("Combine accepted one producer claiming the same check twice")
+	_, err := Combine(one)
+	var dup *DuplicateCoverageError
+	if !errors.As(err, &dup) {
+		t.Fatalf("err = %v, want a duplicate refusal — one producer claimed the "+
+			"same check twice", err)
+	}
+	if !reflect.DeepEqual(dup.CheckIDs, []string{IDAstroDep}) {
+		t.Errorf("CheckIDs = %v, want the id that was claimed twice", dup.CheckIDs)
 	}
 }
 

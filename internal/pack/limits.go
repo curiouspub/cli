@@ -289,9 +289,17 @@ func fileSizeFinding(files []File) (check.Finding, bool) {
 // totalSizeFinding is the whole-project hard stop.
 //
 // IT SUMS THE UNCOMPRESSED SIZES, deliberately, and that makes this
-// client the stricter of the two ends: a tree at this limit always
-// compresses to something the server will accept, so a project refused
-// here would have been accepted there. The alternative — measuring what
+// client the stricter of the two ends ALMOST always — which is the safe
+// direction to be wrong in, and not the same claim as "by construction".
+//
+// The sentence here used to say a tree at this limit always compresses to
+// something the server will accept. That is false, and the file it was
+// written in disproves it: compression helps the file DATA while the
+// archive adds its own bytes, so a tree of small incompressible files
+// pays overhead it cannot earn back. TestAnArchiveOverTheCapIsRefused-
+// WithNoReceiptAboveIt builds the case — 3,000 files of 10,000 bytes is
+// exactly 30,000,000 bytes of source and packs to 32,257,024 — and the
+// fourth limit below exists for precisely that gap. The alternative — measuring what
 // the upload would weigh — means packing first, which is exactly the
 // wait this check exists to spare somebody, and it means a project that
 // happens to compress well can be dozens of times over a limit the
@@ -352,14 +360,27 @@ func packedFinding(fsys FS, root string, files []File, archive Archive) check.Fi
 		"overhead:\neach file costs a record on top of its content, and a file that does "+
 		"not\ncompress cannot pay that back.", units.Bytes(totalSize(files)))
 
-	stubborn := leastCompressible(fsys, root, files)
+	// THE LIST IS FACTS, NOT A TABLE. This used to write a packed-size,
+	// on-disk-size and path per row into the copy AND set Paths, so the
+	// renderer appended every one of those paths again underneath: the
+	// one hard stop reached by a project that did nothing wrong named its
+	// offenders twice.
+	//
+	// The ratio survives as a sentence rather than a second column,
+	// because the list is SELECTED AND ORDERED by how little each file
+	// compressed — the ordering already carries what that column said.
+	// What a reader cannot recover from an ordering is the overall shape,
+	// and that is one sentence.
+	stubborn, _ := leastCompressible(fsys, root, files)
 	var paths []string
+	var sizes []int64
 	if len(stubborn) > 0 {
-		b.WriteString("\n\nThe files that compressed least, on their own:\n")
+		fmt.Fprintf(&b, "\n\nThese compressed least — together they packed to %s of "+
+			"their %s on disk, largest first:",
+			units.Bytes(packedTotal(stubborn)), units.Bytes(onDiskTotal(stubborn)))
 		for _, s := range stubborn {
-			fmt.Fprintf(&b, "\n  %10s of %-10s %s",
-				units.Bytes(s.packed), units.Bytes(s.file.Size), s.file.Path)
 			paths = append(paths, s.file.Path)
+			sizes = append(sizes, s.file.Size)
 		}
 	}
 
@@ -369,6 +390,7 @@ func packedFinding(fsys FS, root string, files []File, archive Archive) check.Fi
 		Message:  headline,
 		What:     b.String(),
 		Paths:    check.NewPaths(paths...),
+		Sizes:    sizes,
 		Why:      alreadyExcluded(),
 		Next: "Remove one of those files, convert it to a format that compresses, or add " +
 			"it to .gitignore if the site does not need it, then run `curious deploy` again.",
@@ -482,14 +504,64 @@ type compressed struct {
 // A FILE IT CANNOT READ IS SKIPPED RATHER THAN GUESSED AT. This runs on
 // a path that is already failing, and a message is not worth turning a
 // refusal into an I/O error the reader cannot connect to anything.
-func leastCompressible(fsys FS, root string, files []File) []compressed {
+// skipReason says WHY a file was left out of the measurement, and it
+// exists so a row can assert which guard fired rather than that one did.
+//
+// The pipe row was green against a MISSING mode refusal, because the
+// fixture recorded the pipe as zero bytes and the empty-file skip caught
+// it first: a negative row satisfied by an earlier, unrelated refusal.
+// Nothing in a shorter result list distinguishes the two, so the row had
+// no way to tell the guard it was about from the guard it hit. Naming
+// the reason is what turns "it was skipped" into "it was skipped by
+// this".
+type skipReason int
+
+const (
+	// skippedUnpackable is the packer's own refusal, shared: a link
+	// would be followed to whatever it points at, a pipe would block.
+	skippedUnpackable skipReason = iota
+	// skippedEmpty is a file with nothing to compress.
+	skippedEmpty
+	// skippedUnreadable is a file this pass could not read. It runs on a
+	// path that has already failed, and a message is not worth turning a
+	// refusal into an I/O error nobody can connect to anything.
+	skippedUnreadable
+)
+
+// skipped is one file the measurement left out, and why.
+type skipped struct {
+	file   File
+	reason skipReason
+}
+
+func leastCompressible(fsys FS, root string, files []File) ([]compressed, []skipped) {
 	measured := make([]compressed, 0, len(files))
+	var left []skipped
 	for _, f := range files {
+		// THE SAME REFUSAL THE PACKER APPLIES, from the same predicate,
+		// and it lives HERE rather than inside compressedSize because
+		// this is the only caller and one guard is what a mutation can
+		// remove. Guarding both sites read as belt and braces and was
+		// worse than either alone: deleting one left the other standing,
+		// so the row that should have hung passed instead — a mutation
+		// that cannot red is a row nobody has seen fail.
+		//
+		// IT COMES BEFORE THE EMPTY-FILE SKIP, and the order is the fix
+		// rather than a preference: a pipe recorded as zero bytes must
+		// be refused for being a pipe, not passed over for being empty.
+		// The second answer is right by accident and stops being right
+		// the moment somebody records a size.
+		if err := packable(f); err != nil {
+			left = append(left, skipped{file: f, reason: skippedUnpackable})
+			continue
+		}
 		if f.Size == 0 {
+			left = append(left, skipped{file: f, reason: skippedEmpty})
 			continue
 		}
 		size, err := compressedSize(fsys, root, f)
 		if err != nil {
+			left = append(left, skipped{file: f, reason: skippedUnreadable})
 			continue
 		}
 		measured = append(measured, compressed{file: f, packed: size})
@@ -511,7 +583,7 @@ func leastCompressible(fsys FS, root string, files []File) []compressed {
 	if len(measured) > listedContributors {
 		measured = measured[:listedContributors]
 	}
-	return measured
+	return measured, left
 }
 
 func compressedSize(fsys FS, root string, f File) (int64, error) {
@@ -603,10 +675,36 @@ func pathsOfFiles(files []File) []string {
 	return out
 }
 
+// totalSize sums the uncompressed sizes.
+//
+// NO OVERFLOW BRANCH, and the reason is recorded rather than left to be
+// re-derived: reaching int64's ceiling needs a walked list summing past
+// 9.2 exabytes, and every file large enough to contribute meaningfully
+// is refused by the per-file limit in the same run. A run cannot pass
+// silently through an overflow here — it is already refused — so a check
+// would buy a branch nothing can reach and one more thing to keep true.
 func totalSize(files []File) int64 {
 	var total int64
 	for _, f := range files {
 		total += f.Size
 	}
 	return total
+}
+
+// packedTotal and onDiskTotal are the two halves of the ratio the list's
+// ordering cannot state on its own.
+func packedTotal(measured []compressed) int64 {
+	var n int64
+	for _, m := range measured {
+		n += m.packed
+	}
+	return n
+}
+
+func onDiskTotal(measured []compressed) int64 {
+	var n int64
+	for _, m := range measured {
+		n += m.file.Size
+	}
+	return n
 }
