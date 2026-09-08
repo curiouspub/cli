@@ -352,6 +352,30 @@ type objectStore struct {
 
 	puts []storePut
 
+	// readChunk and readPause make this store SLOW BUT PROGRESSING: it
+	// consumes the body readChunk bytes at a time, pausing readPause
+	// between them. A row uses it to spend several stall windows on one
+	// upload while never letting the gap between two bytes reach one.
+	readChunk int
+	readPause time.Duration
+
+	// pauseUntil is how many bytes are consumed at the paced rate before
+	// the rest is drained at full speed. The tail matters: once the
+	// client has handed its last byte to the socket there is no progress
+	// left to report, so a paced drain of the remainder would look like a
+	// stall to a client that had done nothing wrong.
+	pauseUntil int64
+
+	// stopReadingAfter makes it WEDGED: it consumes that many bytes and
+	// then stops reading, holding the request open without ever
+	// finishing it. That is the failure a total deadline and a stall
+	// timer tell apart, and the only shape that can show the difference.
+	stopReadingAfter int64
+
+	// release is closed when the test ends, so a wedged handler cannot
+	// outlive its row.
+	release chan struct{}
+
 	srv *httptest.Server
 }
 
@@ -366,10 +390,13 @@ type storePut struct {
 
 func newObjectStore(t *testing.T, journal *deployJournal) *objectStore {
 	t.Helper()
-	store := &objectStore{journal: journal}
+	store := &objectStore{journal: journal, release: make(chan struct{})}
 	srv := httptest.NewServer(store)
 	store.srv = srv
+	// The release closes FIRST, so a wedged handler is let go before
+	// srv.Close waits for it. Cleanups run last-registered-first.
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(store.release) })
 	// A query string carrying something signature-shaped, because the
 	// rule this client keeps is about a credential in a query string
 	// and a target with none could not show it being kept.
@@ -395,7 +422,42 @@ func (s *objectStore) sign(length int64) {
 }
 
 func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
+	// The reading policy is snapshotted under the lock and the body is
+	// then read WITHOUT it: a wedged handler holds this goroutine for the
+	// life of the row, and holding the mutex too would deadlock every
+	// assertion the row makes afterwards.
+	s.mu.Lock()
+	chunk, pause, stopAfter, release := s.readChunk, s.readPause, s.stopReadingAfter, s.release
+	pauseUntil := s.pauseUntil
+	s.mu.Unlock()
+
+	var body []byte
+	switch {
+	case stopAfter > 0:
+		_, _ = io.CopyN(io.Discard, r.Body, stopAfter)
+		<-release
+		return
+	case pause > 0 && chunk > 0:
+		buf := make([]byte, chunk)
+		var paced int64
+		for paced < pauseUntil {
+			n, err := io.ReadFull(r.Body, buf)
+			body = append(body, buf[:n]...)
+			paced += int64(n)
+			if err != nil {
+				break
+			}
+			select {
+			case <-time.After(pause):
+			case <-release:
+				return
+			}
+		}
+		rest, _ := io.ReadAll(r.Body)
+		body = append(body, rest...)
+	default:
+		body, _ = io.ReadAll(r.Body)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

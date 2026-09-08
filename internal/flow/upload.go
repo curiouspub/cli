@@ -2,24 +2,65 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/curiouspub/cli/internal/ui"
 )
 
-// uploadTimeout bounds the PUT end to end.
+// stallTimeout bounds a STALL, not a transfer. Thirty seconds is how long
+// this client waits for the NEXT byte to move, and no amount of time is
+// too long provided bytes keep moving.
 //
-// IT IS SET HERE RATHER THAN INHERITED, and that is the whole reason
-// this constant exists. The API client's own timeout and its redirect
-// refusal live on a private http.Client; what it exposes is the
-// TRANSPORT alone. So an upload built on that transport starts with no
-// deadline and net/http's default follow-redirects behaviour, and both
-// have to be stated again rather than assumed to have come along.
-const uploadTimeout = 30 * time.Second
+// ~~const uploadTimeout = 30 * time.Second~~ — the same number bounding
+// the whole PUT, and it was wrong. It was carried across from the JSON
+// client, where thirty seconds bounds a small request and a small
+// answer. Here it bounded a body up to the archive cap: 30 MB needs 48
+// seconds at 5 Mbit/s and 24 at 10, so a legitimate large project on an
+// ordinary uplink failed a deadline it could never have met, and said
+// the host was unreachable while it was busy talking to it. A constant
+// carried between two places carries its NUMBER; it does not carry the
+// reason the number was chosen, and the two sites bound different
+// things.
+//
+// THE ONLY HARD CEILING IS THE LINK'S OWN WINDOW, which the create
+// announced and the store enforces regardless of what this client
+// believes. A second ceiling of our own would be two facts about one
+// window, free to disagree — so there is not one.
+//
+// IT IS SET HERE RATHER THAN INHERITED. The API client's own timeout and
+// its redirect refusal live on a private http.Client; what it exposes is
+// the TRANSPORT alone, so an upload built on that transport starts with
+// no policy at all and every piece of it has to be stated again.
+const stallTimeout = 30 * time.Second
+
+// errUploadStalled is the cause the watchdog cancels with, so the branch
+// that renders the stall reads WHY the request ended rather than
+// guessing from the shape of net/http's error.
+var errUploadStalled = errors.New("upload stalled")
+
+// progressReader reports every byte handed to the transport. It is the
+// only thing that can tell a slow upload from a stopped one: net/http
+// offers no progress signal, and the difference between the two is the
+// whole reason this client stopped using a total deadline.
+type progressReader struct {
+	r        io.Reader
+	progress func(n int)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.progress(n)
+	}
+	return n, err
+}
 
 // The copy a refused upload renders, held as named values because three
 // sentences that must never be confused with one another are exactly the
@@ -36,6 +77,24 @@ const (
 	// otherwise name, and sending somebody round a loop with no exit is
 	// worse than saying nothing.
 	refusedInsideWindow = "running again will not fix this"
+
+	// uploadStalled is for a request where no byte moved for the whole
+	// stall window. It is deliberately NOT the unreachable sentence
+	// below: the connection was made and bytes may well have crossed it,
+	// so telling somebody their network is down is both wrong and the
+	// least actionable thing this client could say.
+	uploadStalled = "The upload stalled"
+
+	// couldNotReach is for a failure where NOTHING was ever sent. Its
+	// own row asserts it appears nowhere else — a stall after progress
+	// that rendered it would be describing a connection that plainly
+	// worked.
+	couldNotReach = "could not reach"
+
+	// connectionDropped is the third of that family: bytes moved, then
+	// the connection failed. Neither "unreachable" nor "stalled" is true
+	// of it.
+	connectionDropped = "The connection dropped while curious was sending the archive"
 
 	// mayHaveExpired is the honest ambiguous form, for a server that
 	// told this client no window at all. IT IS THE BRANCH THAT RUNS
@@ -149,6 +208,14 @@ type uploadDeps struct {
 
 	// Now is the clock the window is compared against.
 	Now func() time.Time
+
+	// StallTimeout is how long the upload waits for the NEXT byte before
+	// giving up. Zero means stallTimeout, which is what production
+	// passes; it is injected for the same reason Now is, so a row can
+	// prove the behaviour in milliseconds instead of half a minute. It
+	// is the same single constant arriving by argument, not a second
+	// one.
+	StallTimeout time.Duration
 }
 
 // uploadArchive PUTs the packed archive at the presigned link.
@@ -179,7 +246,48 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 	}
 	defer func() { _ = file.Close() }()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, deps.URL, file)
+	// THE CEILING IS THE SERVER'S FACT. The window the create announced
+	// becomes this request's deadline, so a link that has already run out
+	// refuses before a single byte leaves this machine, and one that runs
+	// out mid-transfer ends the moment the store would have started
+	// refusing anyway. No ceiling of our own sits beside it.
+	//
+	// ONE CLOCK GOVERNS BOTH the ceiling and the copy. The window is
+	// announced as an instant, and it becomes a DURATION measured against
+	// deps.Now before it reaches the context — because context.WithDeadline
+	// would compare that instant against the wall clock while every
+	// sentence this file renders compares it against deps.Now, and two
+	// clocks deciding one window is the shape this round exists to
+	// remove. A window already closed gives a non-positive duration, and
+	// a context that is expired on arrival refuses before a byte leaves
+	// this machine.
+	reqCtx := ctx
+	if !deps.ExpiresAt.IsZero() {
+		var cancelWindow context.CancelFunc
+		reqCtx, cancelWindow = context.WithTimeout(reqCtx, deps.ExpiresAt.Sub(deps.Now()))
+		defer cancelWindow()
+	}
+	reqCtx, cancelStall := context.WithCancelCause(reqCtx)
+	defer cancelStall(nil)
+
+	stall := deps.StallTimeout
+	if stall <= 0 {
+		stall = stallTimeout
+	}
+	// The watchdog fires when the next byte has not moved for the whole
+	// window; every byte that does move pushes it back. A Reset that
+	// races a firing timer is harmless — by then the request is already
+	// cancelled and nothing reads the timer again.
+	watchdog := time.AfterFunc(stall, func() { cancelStall(errUploadStalled) })
+	defer watchdog.Stop()
+
+	var sent atomic.Int64
+	body := &progressReader{r: file, progress: func(n int) {
+		sent.Add(int64(n))
+		watchdog.Reset(stall)
+	}}
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPut, deps.URL, body)
 	if err != nil {
 		// THE UNDERLYING ERROR IS NOT WRAPPED, because net/http builds
 		// this one out of the URL it was handed.
@@ -192,9 +300,11 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 	// otherwise choose for a file body — is refused by the store.
 	req.ContentLength = deps.Bytes
 
+	// NO Timeout FIELD. It is a total deadline by construction, which is
+	// the thing this round removed; the stall watchdog and the link's own
+	// window are the two limits, and both are on the context.
 	client := &http.Client{
 		Transport: deps.Transport,
-		Timeout:   uploadTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -205,11 +315,35 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 		// THE TRANSPORT ERROR IS NEVER RETURNED. It is a *url.Error
 		// carrying the whole signed link, and returning it — or
 		// wrapping it — puts a credential into every log line, bug
-		// report and terminal that error reaches.
+		// report and terminal that error reaches. Every branch below
+		// builds its message from scratch and none of them touches err.
+		switch cause := context.Cause(reqCtx); {
+		case errors.Is(cause, errUploadStalled):
+			return uploadFailed(host, 0,
+				fmt.Sprintf("%s: no data was sent for %s. The connection is open but\n"+
+					"nothing is moving across it, so curious stopped rather than wait\n"+
+					"indefinitely.", uploadStalled, stall),
+				"Check your connection and run `curious deploy` again.")
+
+		case errors.Is(cause, context.DeadlineExceeded) && !deps.ExpiresAt.IsZero():
+			// The deadline firing IS the window closing. Asking
+			// deps.Now to confirm it would be a second fact about one
+			// window — exactly what having no ceiling of our own
+			// avoids — and the two could disagree.
+			why, next := expiredCopy()
+			return uploadFailed(host, 0, why, next)
+
+		case sent.Load() == 0:
+			return uploadFailed(host, 0,
+				"curious "+couldNotReach+" "+host+" to send the archive. That usually\n"+
+					"means the connection dropped, or something between here and there\n"+
+					"is blocking it.",
+				"Check your connection and run `curious deploy` again.")
+		}
+
 		return uploadFailed(host, 0,
-			"curious could not reach "+host+" to send the archive. That usually\n"+
-				"means the connection dropped, or something between here and there\n"+
-				"is blocking it.",
+			connectionDropped+". It had reached "+host+" and\n"+
+				"was part way through when the connection failed.",
 			"Check your connection and run `curious deploy` again.")
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -259,9 +393,7 @@ func refusalCopy(host string, expiresAt, now time.Time) (why, next string) {
 				"report it."
 
 	case !now.Before(expiresAt):
-		return linkExpired + " Links are short-lived on\n" +
-				"purpose, and a slow connection or a large project can outlast one.",
-			"Run `curious deploy` again — a fresh link is issued every time."
+		return expiredCopy()
 	}
 
 	return "The link had not run out yet, so " + refusedInsideWindow + ". Something\n" +
@@ -269,4 +401,14 @@ func refusalCopy(host string, expiresAt, now time.Time) (why, next string) {
 			"is a fault in curious rather than anything about your project.",
 		"Please report this, and say which version you are on — `curious version`\n" +
 			"prints it."
+}
+
+// expiredCopy is the ONE place the closed-window sentence is written.
+// Two callers reach it — a refusal the store returned, and the request
+// deadline the announced window set — and they must say the same thing,
+// because they are the same event observed from two sides.
+func expiredCopy() (why, next string) {
+	return linkExpired + " Links are short-lived on\n" +
+			"purpose, and a slow connection or a large project can outlast one.",
+		"Run `curious deploy` again — a fresh link is issued every time."
 }

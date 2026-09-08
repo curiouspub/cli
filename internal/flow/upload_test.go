@@ -7,6 +7,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -344,48 +346,63 @@ func TestARedirectFromTheStoreIsNotASuccess(t *testing.T) {
 // AND the two that must not are asserted absent, because a message that
 // says nothing satisfies an absence check on its own.
 //
-// REQUIRED MUTATION, run 2026-09-08, TWO of them, because one message
-// standing in for both is the defect this exists to remove. Rendering
-// the expired copy for a refusal INSIDE the window reds the first row
-// alone. Rendering the refused copy for one AT OR AFTER the window reds
-// the other two — both of them, because a window that has closed is one
-// condition tested at two instants, and a prediction of "exactly one"
-// would have been a claim about the table rather than about the code.
+// REQUIRED MUTATION. Rendering the expired copy for a refusal INSIDE the
+// window reds the first row alone. Dropping the announced window from the
+// request's deadline reds BOTH closed-window rows.
+//
+// It reds them EARLIER than predicted, and the correction is worth
+// keeping. The prediction was "on the count" — the zero becomes a one.
+// What actually happens is that those two cases set no status at all
+// (they are never meant to reach the store), so with the deadline gone
+// the upload SUCCEEDS and the row stops at "a refused upload was
+// reported as a completed one" before the count is ever read. Same
+// mutation, same two rows, a stricter assertion firing first. A
+// prediction about which line reports is a claim about the table.
 func TestTheTwoFacesOfARefusedUpload(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		expires time.Time
-		want    string
-		absent  []string
-		status  int
+		name     string
+		expires  time.Time
+		want     string
+		absent   []string
+		status   int
+		wantPuts int
 	}{
 		{
-			name:    "refused inside the window",
-			expires: fixedNowLocal.Add(10 * time.Minute),
-			want:    refusedInsideWindow,
-			absent:  []string{linkExpired, mayHaveExpired},
-			status:  http.StatusForbidden,
+			name:     "refused inside the window",
+			expires:  fixedNowLocal.Add(10 * time.Minute),
+			want:     refusedInsideWindow,
+			absent:   []string{linkExpired, mayHaveExpired},
+			status:   http.StatusForbidden,
+			wantPuts: 1,
 		},
 		{
-			name:    "refused at the moment the window closes",
-			expires: fixedNowLocal,
-			want:    linkExpired,
-			absent:  []string{refusedInsideWindow, mayHaveExpired},
-			status:  http.StatusForbidden,
+			// THE CEILING, and it is why these two send nothing. The
+			// announced window is this request's own deadline, so a link
+			// that has already run out is refused before a byte leaves
+			// the machine — wantPuts is 0, and that zero is the
+			// assertion. Round 1 drove these through a refusal the store
+			// returned, which is a round trip spent to be told what the
+			// client already knew.
+			name:     "the window had already closed",
+			expires:  fixedNowLocal,
+			want:     linkExpired,
+			absent:   []string{refusedInsideWindow, mayHaveExpired},
+			wantPuts: 0,
 		},
 		{
-			name:    "refused after the window closed",
-			expires: fixedNowLocal.Add(-time.Minute),
-			want:    linkExpired,
-			absent:  []string{refusedInsideWindow, mayHaveExpired},
-			status:  http.StatusForbidden,
+			name:     "the window closed a minute ago",
+			expires:  fixedNowLocal.Add(-time.Minute),
+			want:     linkExpired,
+			absent:   []string{refusedInsideWindow, mayHaveExpired},
+			wantPuts: 0,
 		},
 		{
-			name:    "the server told this client no window at all",
-			expires: time.Time{},
-			want:    mayHaveExpired,
-			absent:  []string{refusedInsideWindow, linkExpired},
-			status:  http.StatusForbidden,
+			name:     "the server told this client no window at all",
+			expires:  time.Time{},
+			want:     mayHaveExpired,
+			absent:   []string{refusedInsideWindow, linkExpired},
+			status:   http.StatusForbidden,
+			wantPuts: 1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -402,8 +419,8 @@ func TestTheTwoFacesOfARefusedUpload(t *testing.T) {
 			if err == nil {
 				t.Fatal("a refused upload was reported as a completed one")
 			}
-			if puts := run.store.received(); len(puts) != 1 {
-				t.Fatalf("the store received %d requests, want 1", len(puts))
+			if puts := run.store.received(); len(puts) != tc.wantPuts {
+				t.Fatalf("the store received %d requests, want %d", len(puts), tc.wantPuts)
 			}
 
 			text, _ := renderedBytes(t, err)
@@ -982,4 +999,169 @@ func readFileString(t *testing.T, path string) string {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return string(data)
+}
+
+// bulkyProject is a deployable project whose archive is far larger than
+// any socket buffer between this client and a store on loopback.
+//
+// THE SIZE IS THE POINT, and it was MEASURED rather than guessed. A small
+// body is swallowed whole by the kernel's socket buffers, so the client
+// finishes writing before the store has read anything and the rows below
+// would measure nothing — a "slow" store the client never waited for, and
+// a "wedged" one it had already finished with. On this machine those
+// buffers hold about 4 MiB: a probe on the client's own progress showed
+// it hand over exactly 4,194,304 bytes and then block. Twelve MiB is
+// comfortably past that in three files, each under the per-file cap. The
+// content is random so the packer's gzip cannot shrink it back to
+// nothing.
+func bulkyProject(t *testing.T) string {
+	t.Helper()
+	files := astroProject(nil)
+	src := rand.New(rand.NewSource(1))
+	for _, name := range []string{"public/a.bin", "public/b.bin", "public/c.bin"} {
+		buf := make([]byte, 4<<20)
+		if _, err := io.ReadFull(src, buf); err != nil {
+			t.Fatalf("building the bulky fixture: %v", err)
+		}
+		files[name] = buf
+	}
+	return writeProject(t, files)
+}
+
+// TestASlowUploadIsNotAStalledOne is the row the fixed deadline could
+// never have passed.
+//
+// The store consumes the body at a pace that makes the whole upload take
+// SEVERAL stall windows, while never letting the gap between two bytes
+// reach one. Under a total deadline this is indistinguishable from a
+// hang; under a stall timer it is exactly what an ordinary uplink and a
+// large project look like, and it must succeed.
+//
+// THE NUMBERS COME FROM A MEASUREMENT, and the first set did not. A
+// 250 ms window failed roughly one run in six, and instrumenting the
+// client's own progress said why: the gap between two bytes is not the
+// store's pause but the time for the kernel's socket buffers to free
+// enough space, which on this machine ran to 88-110 ms at a 20 ms pace
+// and spiked past 250 under load. The window is now 600 ms — five times
+// the observed worst gap — and the paced phase is long enough that the
+// upload still spends several windows. A timing row whose margin is
+// smaller than the thing it did not measure is a flake with a schedule.
+//
+// The paced phase covers the first half of the body and the rest is
+// drained at full speed. The tail must exceed the socket buffers: once
+// the client has handed over its last byte there is no progress left to
+// report, so a paced drain of a bufferful would look like a stall the
+// client did not cause.
+//
+// REQUIRED MUTATION: stop resetting the watchdog on progress.
+func TestASlowUploadIsNotAStalledOne(t *testing.T) {
+	const stall = 600 * time.Millisecond
+
+	run := newDeployRun(t, bulkyProject(t)).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.deps.UploadStallTimeout = stall
+	run.store.readChunk = 64 << 10
+	run.store.readPause = 25 * time.Millisecond
+	run.store.pauseUntil = 6 << 20
+
+	started := time.Now()
+	handoff, err := run.run()
+	defer handoff.Release()
+	elapsed := time.Since(started)
+
+	if err != nil {
+		t.Fatalf("a slow but progressing upload was refused after %v: %v", elapsed, err)
+	}
+	if elapsed < 3*stall {
+		t.Fatalf("the upload took %v, which is under %v — this row did not spend "+
+			"long enough to prove a total deadline would have killed it",
+			elapsed, 3*stall)
+	}
+	puts := run.store.received()
+	if len(puts) != 1 {
+		t.Fatalf("the store received %d requests, want 1", len(puts))
+	}
+	if puts[0].bodyLength != puts[0].contentLength {
+		t.Errorf("the store read %d bytes of a %d-byte body, so the upload did not "+
+			"finish", puts[0].bodyLength, puts[0].contentLength)
+	}
+}
+
+// TestAWedgedUploadStopsAndSaysSo is the other side of the row above,
+// and the pair is the whole ruling: a stall timer must let one through
+// and stop the other.
+//
+// The store reads a little and then stops reading at all, holding the
+// request open. Nothing is broken — the connection is up and the host is
+// answering — which is why the copy must not say the host could not be
+// reached. It says the upload stalled, and it names the host so a person
+// can tell a wrong address from a quiet one.
+//
+// REQUIRED MUTATION: collapse the stall branch into the unreachable one.
+func TestAWedgedUploadStopsAndSaysSo(t *testing.T) {
+	const stall = 600 * time.Millisecond
+
+	run := newDeployRun(t, bulkyProject(t)).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.deps.UploadStallTimeout = stall
+	run.store.stopReadingAfter = 64 << 10
+
+	started := time.Now()
+	handoff, err := run.run()
+	defer handoff.Release()
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("a wedged upload was reported as a completed one")
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("the wedged upload took %v to give up, which is the whole failure "+
+			"this round removed", elapsed)
+	}
+
+	text, _ := renderedBytes(t, err)
+	if !strings.Contains(text, uploadStalled) {
+		t.Errorf("a wedged upload never said it had stalled:\n%s", text)
+	}
+	// THE HOST IS NAMED and the signature is not. The redacted half is
+	// the actionable half.
+	host := hostOf(t, run.store.url)
+	if !strings.Contains(text, host) {
+		t.Errorf("the stall never named the host %q:\n%s", host, text)
+	}
+	if strings.Contains(text, storeSignature) {
+		t.Errorf("the stall leaked the signature from the upload link:\n%s", text)
+	}
+	// THE EXCLUSIVITY, and it is the point of having three sentences.
+	// Bytes crossed this connection, so neither "could not reach" nor
+	// "the connection dropped" is a true thing to tell somebody.
+	if strings.Contains(text, couldNotReach) {
+		t.Errorf("a stall AFTER progress rendered the unreachable copy, which "+
+			"describes a connection that plainly worked:\n%s", text)
+	}
+	if strings.Contains(text, connectionDropped) {
+		t.Errorf("a stall rendered the dropped-connection copy:\n%s", text)
+	}
+}
+
+// TestTheUnreachableCopyIsOnlyForAFailureThatSentNothing is the positive
+// half of the exclusivity the row above asserts negatively. Without it,
+// deleting the unreachable sentence outright would leave both rows green.
+func TestTheUnreachableCopyIsOnlyForAFailureThatSentNothing(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.uploadOverride = deadAddress(t)
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err == nil {
+		t.Fatal("an upload to an address nothing answers on was reported as completed")
+	}
+	text, _ := renderedBytes(t, err)
+	if !strings.Contains(text, couldNotReach) {
+		t.Errorf("a failure that sent nothing did not render the unreachable copy:\n%s", text)
+	}
+	if strings.Contains(text, uploadStalled) {
+		t.Errorf("a dial failure rendered the stall copy:\n%s", text)
+	}
 }

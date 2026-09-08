@@ -84,6 +84,19 @@ type DeployDeps struct {
 
 	// Now is the clock. Optional.
 	Now func() time.Time
+
+	// UploadStallTimeout is how long the upload waits for the next byte
+	// before giving up. Optional; without one the upload's own constant
+	// applies.
+	//
+	// IT IS A SEAM FOR THE SAME REASON Now IS. The behaviour it governs
+	// is "a slow upload must survive and a stopped one must not", and
+	// the only way to see either at the real thirty seconds is to spend
+	// thirty seconds. Injecting it lets a row prove both in
+	// milliseconds. It is the one constant arriving by argument, not a
+	// second constant: nothing here chooses a different number, and
+	// production passes none at all.
+	UploadStallTimeout time.Duration
 }
 
 // Handoff is what a completed run leaves in the caller's hands: the
@@ -381,12 +394,13 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	// server's to expire. This step adds no state and no file of its
 	// own, and the copy says so rather than implying it cleaned up.
 	if err := uploadArchive(ctx, uploadDeps{
-		URL:         resp.UploadURL,
-		ArchivePath: prepared.Archive.Path,
-		Bytes:       prepared.Archive.Size,
-		ExpiresAt:   resp.ExpiresAt,
-		Transport:   authed.Transport(),
-		Now:         now,
+		URL:          resp.UploadURL,
+		ArchivePath:  prepared.Archive.Path,
+		Bytes:        prepared.Archive.Size,
+		ExpiresAt:    resp.ExpiresAt,
+		Transport:    authed.Transport(),
+		Now:          now,
+		StallTimeout: deps.UploadStallTimeout,
 	}); err != nil {
 		return nil, err
 	}
