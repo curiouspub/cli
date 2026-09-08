@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,5 +127,58 @@ func TestWithTimeout_ActuallyCancels(t *testing.T) {
 	var netErr net.Error
 	if errors.As(err, &netErr) && !netErr.Timeout() {
 		t.Errorf("error %v does not report itself as a timeout", err)
+	}
+}
+
+// TestARefusedBaseURLDoesNotEchoTheSecretItRefuses is the userinfo rule's
+// other half, and the one it was missing.
+//
+// The address guard refuses a base URL carrying "user:pass@" because
+// net/http would turn it into an Authorization header on every request,
+// silently — that is the ruling this row belongs to. Its refusal then
+// printed the value back, so the password reached stderr, terminal
+// scrollback, and whatever the reader pastes into a bug report. **The
+// check whose entire subject is "do not put a password here" was the one
+// echoing it.**
+//
+// Every refusal in the guard now renders through url.Redacted, not just
+// the userinfo one: any of them can be reached by a URL that also carries
+// a password, and a rule applied at one branch is a rule the other
+// branches are exempt from.
+//
+// The parse-failure branch names no value at all, and that is stated
+// where it lives: redaction needs a parsed URL, and that is the one
+// branch without one.
+//
+// REQUIRED MUTATION, RUN: restore `raw` in place of u.Redacted() in any
+// refusal below. Reds on the secret appearing in the message.
+func TestARefusedBaseURLDoesNotEchoTheSecretItRefuses(t *testing.T) {
+	const secret = "hunter2correcthorse"
+
+	for _, row := range []struct {
+		name string
+		base string
+	}{
+		{"userinfo, the refusal this rule is named for", "https://user:" + secret + "@api.example.com"},
+		{"userinfo on a bad scheme", "ftp://user:" + secret + "@api.example.com"},
+		{"userinfo with a query string", "https://user:" + secret + "@api.example.com?x=1"},
+		{"userinfo with a fragment", "https://user:" + secret + "@api.example.com#f"},
+		{"userinfo over plaintext to a non-loopback host", "http://user:" + secret + "@api.example.com"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			_, err := validateBaseURL(row.base)
+			if err == nil {
+				t.Fatal("the guard accepted a base URL carrying userinfo")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("the refusal echoes the password it is refusing:\n%s", err)
+			}
+			// The positive control: the message is still about THIS value,
+			// not a generic one — a refusal that named nothing would pass
+			// the assertion above while telling the reader nothing.
+			if !strings.Contains(err.Error(), "api.example.com") {
+				t.Errorf("the refusal names no host, so it cannot be acted on:\n%s", err)
+			}
+		})
 	}
 }
