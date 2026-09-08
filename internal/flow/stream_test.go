@@ -1194,8 +1194,14 @@ func splitEvenly(s string, n int) []string {
 func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 	stall := timing.StreamPartialLineIsNotAStall.Window
 
+	// TWENTY-EIGHT PIECES, and the number follows the window rather than
+	// the other way round. This row asserts it spent at least three
+	// windows on ONE line, so the line has to be delivered over longer
+	// than three of them: at the fixture's pace, 29 flushes is well past
+	// that. It was ten pieces while the window was 60 ms; the window is
+	// now sized against a measurement instead of against the pace.
 	frame := logFrame("A-LINE-DELIVERED-IN-PIECES")
-	frames := splitEvenly(frame, 10)
+	frames := splitEvenly(frame, 28)
 	frames = append(frames, doneFrame(wire.StatusBuilt))
 
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()

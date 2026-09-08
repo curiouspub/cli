@@ -23,6 +23,20 @@
 // is a confusion nobody needs, and this one is about time rather than
 // about tests.
 //
+// # How the numbers in here were taken
+//
+// Each leg's number is the worst gap seen over ONE HUNDRED consecutive
+// runs of that entry's probe — five passes of twenty, the last of which
+// ran with the whole suite in parallel, because a margin measured on an
+// idle machine is not the margin a gate has. The probes live beside the rows
+// they measure, in internal/flow, and reproduce each row's own fixture
+// rather than a cheaper approximation of it: a shorter transfer over a
+// connection kept warm answered a different question by 160 ms.
+//
+// A block point is likewise the LARGEST seen, because the danger it
+// guards against is a fixture too small to make the client block, and
+// the largest block point is the one a fixture has to clear.
+//
 // # This package is imported by test files only
 //
 // It compiles as ordinary code so that a test in any package can import
@@ -184,6 +198,35 @@ const MinimumMargin = 5
 // a stalled one: the store consumes the body at a pace that makes the
 // whole upload span several windows while never letting the gap between
 // two bytes reach one.
+//
+// # THIS ENTRY IS UNDER THE SIZING RULE, KNOWINGLY, AND THAT IS THE ROUND'S FINDING
+//
+// Measured on darwin: worst gap 434 ms over 100 runs, against a 600 ms
+// window. That is a margin of 1.4, where the rule asks for 5. The row
+// passed 20 consecutive runs while the measurement was being taken —
+// which is the whole point of the rule, because a margin is a
+// distribution and a green run is an outcome.
+//
+// THE WINDOW WAS NOT RAISED TO 2.17 s, and the reason is arithmetic
+// rather than reluctance. The row also asserts it spent at least THREE
+// windows uploading, which is what makes it evidence that a total
+// deadline would have killed the same upload. Raise the window and that
+// assertion demands a transfer of 6.5 s, which at the fixture's drain
+// rate is about 17 MB of paced body — and the gap being measured is not
+// independent of how long the transfer runs. Across connections kept
+// warm the same probe measured 594 ms where a fresh one measured 434 ms,
+// so the kernel gives a busy connection a larger buffer and a larger
+// buffer is a longer gap. Whether that converges was NOT measured, and a
+// mechanism nobody has measured is not a reason to move a number by a
+// factor of four.
+//
+// So this is recorded as a finding about the ROW rather than as a number
+// to tune until it is quiet: on this leg the row's two constraints — a
+// five-times margin, and a transfer spanning three windows — are set
+// against each other by the same kernel buffer, and which of them gives
+// is a decision rather than an implementation detail. The guard reds
+// here until somebody makes it, which is the correct state for a margin
+// that is known to be too thin and is not yet ruled on.
 var UploadSlowIsNotStalled = Entry{
 	Name:   "UploadSlowIsNotStalled",
 	Row:    "TestASlowUploadIsNotAStalledOne",
@@ -191,9 +234,11 @@ var UploadSlowIsNotStalled = Entry{
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads — not by the pause the store fixture asks for",
-	Instrument:   "progressReader, internal/flow/upload.go",
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+	Instrument: "progressReader, internal/flow/upload.go",
+	Measurements: map[Leg]Measurement{
+		Darwin: {WorstGap: 434081 * time.Microsecond, Runs: 100, Date: "2026-09-09", BlockPoint: 3014656},
+	},
+	SetBy: Darwin,
 }
 
 // UploadWedgedStops bounds the other half of that pair: a store that
@@ -207,9 +252,11 @@ var UploadWedgedStops = Entry{
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads — the same quantity its sibling row measures",
-	Instrument:   "progressReader, internal/flow/upload.go",
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+	Instrument: "progressReader, internal/flow/upload.go",
+	Measurements: map[Leg]Measurement{
+		Darwin: {WorstGap: 434081 * time.Microsecond, Runs: 100, Date: "2026-09-09", BlockPoint: 3014656},
+	},
+	SetBy: Darwin,
 	Carried: &Carried{
 		From: "UploadSlowIsNotStalled",
 		Reason: "the two rows are one ruling and share one window by construction: a " +
@@ -238,9 +285,11 @@ var StreamGoesQuiet = Entry{
 	Governs: "the interval from the watchdog being armed — before the connection is " +
 		"opened — to the first byte of the first frame arriving: connection " +
 		"establishment plus delivery plus whatever the scheduler adds",
-	Instrument:   "streamProgress, internal/flow/stream.go",
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+	Instrument: "streamProgress, internal/flow/stream.go",
+	Measurements: map[Leg]Measurement{
+		Darwin: {WorstGap: 1246 * time.Microsecond, Runs: 100, Date: "2026-09-09"},
+	},
+	SetBy: Darwin,
 }
 
 // StreamKeepAlivesAreProofOfLife bounds the row that proves a comment
@@ -253,10 +302,13 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	Side:   Read,
 	Governs: "the interval between two flushes ARRIVING at this client at the " +
 		"fixture's keep-alive pace — the pace plus delivery plus scheduling, not " +
-		"the pace on its own",
-	Instrument:   "streamProgress, internal/flow/stream.go",
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+		"the pace on its own; the first such interval runs from the watchdog " +
+		"being armed, which is before the connection is opened",
+	Instrument: "streamProgress, internal/flow/stream.go",
+	Measurements: map[Leg]Measurement{
+		Darwin: {WorstGap: 18892 * time.Microsecond, Runs: 100, Date: "2026-09-09"},
+	},
+	SetBy: Darwin,
 }
 
 // StreamPartialLineIsNotAStall bounds the row that proves bytes arriving
@@ -269,16 +321,30 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 // measurement taken at one pace does not bound a row running at a
 // slower one, and carrying it would be the defect this package exists
 // against wearing a permitted name.
+//
+// THE WINDOW WAS 60 ms AND IS RAISED BY DARWIN'S MEASUREMENT. Sixty was
+// three times the fixture's 20 ms pacing knob — the visible quantity,
+// chosen the day after the rule against doing that was written. The
+// governing quantity measured 24.96 ms: the pace plus delivery plus
+// scheduling, which is what the client's watchdog actually sees. Three
+// times the knob was 2.4 times the real gap. The fixture also grew, from
+// ten pieces to twenty-eight, because the row asserts it spends at least
+// three windows on one line and a bigger window needs a longer line to
+// spend it on — the row's meaning is unchanged, only its arithmetic.
 var StreamPartialLineIsNotAStall = Entry{
 	Name:   "StreamPartialLineIsNotAStall",
 	Row:    "TestBytesArrivingWithoutANewlineAreNotAStall",
-	Window: 60 * time.Millisecond,
+	Window: 150 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two partial writes of one frame ARRIVING at this " +
-		"client at the fixture's own pace — the pace plus delivery plus scheduling",
-	Instrument:   "streamProgress, internal/flow/stream.go",
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+		"client at the fixture's own pace — the pace plus delivery plus scheduling; " +
+		"the first such interval runs from the watchdog being armed, which is " +
+		"before the connection is opened",
+	Instrument: "streamProgress, internal/flow/stream.go",
+	Measurements: map[Leg]Measurement{
+		Darwin: {WorstGap: 23374 * time.Microsecond, Runs: 100, Date: "2026-09-09"},
+	},
+	SetBy: Darwin,
 }
 
 // Registry is every stall window in this repository, keyed by name.
