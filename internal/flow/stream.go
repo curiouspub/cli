@@ -215,6 +215,10 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error
 	deps.Render.Step("%s", streamOpening)
 
 	shown := 0
+	// lastPhase survives across reconnections on purpose: it is what
+	// tells a replayed phase from a new one at the moment the tally has
+	// just caught up.
+	var lastPhase wire.Phase
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
@@ -228,7 +232,7 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error
 			}
 		}
 
-		status, finished, err := readStream(ctx, deps, &shown)
+		status, finished, err := readStream(ctx, deps, &shown, &lastPhase)
 		if finished {
 			return status, nil
 		}
@@ -283,7 +287,7 @@ func streamReconnectDelay(attempt int, step time.Duration) time.Duration {
 // end of input, a connection that stopped talking — is a connection to be
 // picked up again, and err says which so the caller can tell a refusal
 // apart from a broken pipe.
-func readStream(ctx context.Context, deps streamDeps, shown *int) (status wire.DeployStatus, finished bool, err error) {
+func readStream(ctx context.Context, deps streamDeps, shown *int, lastPhase *wire.Phase) (status wire.DeployStatus, finished bool, err error) {
 	reqCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -319,16 +323,29 @@ func readStream(ctx context.Context, deps streamDeps, shown *int) (status wire.D
 	// needed it must be EXPLICIT, must say what it bounds where it is
 	// written, and must deliver the over-long line with a visible marker
 	// — never drop it, and never end the stream.
-	reader := bufio.NewReader(body)
+	// THE WATCHDOG IS RESET ON THE READ, NOT ON THE LINE, and the
+	// difference is the whole of what it promises. A line is not the unit
+	// that moves across a connection; bytes are. bufio's ReadString
+	// blocks until it sees a newline, so a server writing one long line
+	// slowly delivers continuously while a line-counting client sees
+	// nothing at all — and cuts a healthy connection, then replays the
+	// build to get back to where it was.
+	//
+	// ONE ESTABLISHMENT, deliberately. An arming here and a second reset
+	// on the completed line would be two places establishing one
+	// protection, and a mutation removing either would leave the row
+	// green while half the guard was gone (docs: one guard, one call
+	// site — the question is how many places ESTABLISH it, not how many
+	// call it).
+	reader := bufio.NewReader(&streamProgress{r: body, seen: func() {
+		watchdog.Reset(stall)
+	}})
 
 	seen := 0
 	var eventName string
 	var data []byte
 	for {
 		line, readErr := reader.ReadString('\n')
-		if len(line) > 0 {
-			watchdog.Reset(stall)
-		}
 		if readErr != nil {
 			// A PARTIAL FINAL LINE CANNOT COMPLETE AN EVENT — dispatch
 			// needs the blank line that follows it — so there is nothing
@@ -341,6 +358,29 @@ func readStream(ctx context.Context, deps streamDeps, shown *int) (status wire.D
 		}
 		line = strings.TrimSuffix(line, "\n")
 		line = strings.TrimSuffix(line, "\r")
+		// LF AND CRLF ONLY, AND THAT IS A DECISION RATHER THAN AN
+		// OVERSIGHT. The event-stream format also admits a bare CR as a
+		// line terminator, and says a leading byte-order mark is
+		// stripped; this parser does neither, so a CR-only stream would
+		// never dispatch an event and a BOM would spoil the first field
+		// name.
+		//
+		// Neither is reachable. This client talks to one service — the
+		// address guard sees to that — and its relay writes LF. Writing
+		// a general parser for the two forms would mean carrying, and
+		// keeping correct, code that nothing in this system can
+		// exercise: a row for it would have to fabricate a server that
+		// does not exist, and would then be the only thing keeping the
+		// code honest.
+		//
+		// The trade is stated so it can be revisited on a fact rather
+		// than a worry. WHAT WOULD CHANGE IT: this client being pointed
+		// at a second implementation of the protocol, or the relay
+		// changing what it writes. Both are visible events, and the
+		// symptom of getting it wrong is loud — no event ever
+		// dispatches, so the stream ends without `done` and the
+		// reconnect budget runs out with a message saying so, rather
+		// than anything silently going missing.
 
 		switch {
 		case line == "":
@@ -348,7 +388,7 @@ func readStream(ctx context.Context, deps streamDeps, shown *int) (status wire.D
 				continue
 			}
 			status, terminal := renderEvent(deps.Render, eventName,
-				strings.TrimSuffix(string(data), "\n"), &seen, shown)
+				strings.TrimSuffix(string(data), "\n"), &seen, shown, lastPhase)
 			eventName, data = "", nil
 			if terminal {
 				return status, true, nil
@@ -388,7 +428,7 @@ func readStream(ctx context.Context, deps streamDeps, shown *int) (status wire.D
 // shown counts the ones already put in front of the reader, so an event
 // whose number is not past what has been shown is a replay of something
 // the reader has seen and is skipped.
-func renderEvent(render streamRenderer, name, data string, seen, shown *int) (wire.DeployStatus, bool) {
+func renderEvent(render streamRenderer, name, data string, seen, shown *int, lastPhase *wire.Phase) (wire.DeployStatus, bool) {
 	switch wire.EventType(name) {
 	case wire.EventLog:
 		// COUNTED BEFORE IT IS DECODED, and the order is load bearing. The
@@ -453,6 +493,24 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int) (wi
 		if *seen < *shown {
 			return "", false
 		}
+		// AND THE TALLY ALONE IS NOT ENOUGH AT THE BOUNDARY. A cut
+		// falling immediately after a phase leaves the replay arriving
+		// with the tally already equal, so the phase passes the test
+		// above and narrates a second time — and again on every
+		// reconnect after that. Suppressing on `<=` instead would be
+		// worse: it would swallow a genuinely NEW phase arriving right
+		// after the last replayed line.
+		//
+		// What identifies the repeat is that it is the phase already
+		// showing. Comparing the value costs nothing, cannot suppress a
+		// different one, and needs no second counter — which matters,
+		// because a counter of its own would be wrong on the other
+		// replay shape: the evicted path carries no phase events at all,
+		// so a phase tally would still be zero when a new phase arrived.
+		if ev.Phase == *lastPhase {
+			return "", false
+		}
+		*lastPhase = ev.Phase
 		render.Step("%s%s.", phaseNarration, ui.Sanitize(string(ev.Phase)))
 		return "", false
 
@@ -567,4 +625,22 @@ func buildFailedFailure() error {
 			"the log above rather than here, and it is a problem in the project\n"+
 			"rather than in curious or the service.",
 		"Fix what the log reports, then run `curious deploy` again.")
+}
+
+// streamProgress reports every read that moved bytes, so the stall
+// watchdog can be keyed to the connection rather than to the parser
+// sitting on top of it. It is the same shape the archive upload uses for
+// the same reason, and deliberately not shared with it: that one counts
+// bytes for a message, this one only needs to say "something arrived".
+type streamProgress struct {
+	r    io.Reader
+	seen func()
+}
+
+func (p *streamProgress) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.seen()
+	}
+	return n, err
 }

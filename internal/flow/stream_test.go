@@ -1275,3 +1275,119 @@ func TestOriginDecidesTheStream(t *testing.T) {
 		}
 	})
 }
+
+// splitEvenly cuts s into n pieces, so a fixture can deliver one frame
+// as a sequence of partial writes rather than in a single flush.
+func splitEvenly(s string, n int) []string {
+	size := (len(s) + n - 1) / n
+	var out []string
+	for i := 0; i < len(s); i += size {
+		end := i + size
+		if end > len(s) {
+			end = len(s)
+		}
+		out = append(out, s[i:end])
+	}
+	return out
+}
+
+// TestBytesArrivingWithoutANewlineAreNotAStall. The watchdog's promise is
+// that the connection is MOVING, and a line is not the unit that moves —
+// bytes are. A server writing one long line slowly is delivering
+// continuously; a client that only notices completed lines sees nothing
+// happening at all, cuts a healthy connection, and replays the whole
+// build to get back to where it was.
+//
+// The fixture spends several stall windows on ONE line, with every gap a
+// small fraction of a window. Under a line-counting watchdog the run
+// fails; under a byte-counting one it finishes.
+//
+// REQUIRED MUTATION: reset the watchdog on the completed line instead of
+// on the read.
+func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
+	const stall = 60 * time.Millisecond
+
+	frame := logFrame("A-LINE-DELIVERED-IN-PIECES")
+	frames := splitEvenly(frame, 10)
+	frames = append(frames, doneFrame(wire.StatusBuilt))
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.deps.StreamStallTimeout = stall
+	run.script.eventScripts = []eventScript{{
+		frames: frames,
+		pace:   20 * time.Millisecond,
+		hold:   true,
+	}}
+
+	started := time.Now()
+	handoff, err := run.run()
+	defer handoff.Release()
+	elapsed := time.Since(started)
+
+	if err != nil {
+		t.Fatalf("a stream delivering bytes continuously was treated as stalled "+
+			"after %v: %v\n%s", elapsed, err, rendered(err))
+	}
+	if conns := run.script.eventConnections(); conns != 1 {
+		t.Errorf("the stream was opened %d times, want 1 — a healthy connection "+
+			"was cut and replayed", conns)
+	}
+	if elapsed < 3*stall {
+		t.Fatalf("the run took %v, under %v, so it never spent long enough on one "+
+			"line for a line-counting watchdog to fire", elapsed, 3*stall)
+	}
+	if printed := run.prompt.results.String(); !strings.Contains(printed, "A-LINE-DELIVERED-IN-PIECES") {
+		t.Errorf("the line delivered in pieces never reached stdout:\n%s", printed)
+	}
+}
+
+// TestAPhaseIsNotNarratedTwiceAcrossAReconnect. The persisted-event tally
+// suppresses narration while a replay catches up, and at the moment it
+// catches up exactly — the cut fell right after a phase — the phase is
+// replayed with the tally already equal, so it renders a second time.
+//
+// Every reconnect after that repeats it, so the marker multiplies on the
+// one surface a person is watching.
+//
+// REQUIRED MUTATION: suppress on the tally alone (drop the check that the
+// phase is the one already shown).
+func TestAPhaseIsNotNarratedTwiceAcrossAReconnect(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	// The cut falls immediately after the phase, which is the boundary
+	// the tally cannot see.
+	run.script.eventScripts = []eventScript{
+		{frames: []string{
+			logFrame("BEFORE-THE-PHASE"),
+			phaseFrame(wire.PhaseBuilding),
+		}},
+		{frames: []string{
+			logFrame("BEFORE-THE-PHASE"),
+			phaseFrame(wire.PhaseBuilding),
+			logFrame("AFTER-THE-CUT"),
+			doneFrame(wire.StatusBuilt),
+		}, hold: true},
+	}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	narrated := run.prompt.out.String()
+	want := phaseNarration + string(wire.PhaseBuilding) + "."
+	if got := strings.Count(narrated, want); got != 1 {
+		t.Errorf("the phase was narrated %d times, want exactly 1 — a reconnect "+
+			"repeated the marker it was cut after:\n%s", got, narrated)
+	}
+	// The positive control: a phase this client has NOT shown before
+	// still gets through, so the fix cannot be "never narrate a phase".
+	if !strings.Contains(narrated, want) {
+		t.Errorf("the phase was never narrated at all:\n%s", narrated)
+	}
+	if printed := run.prompt.results.String(); !strings.Contains(printed, "AFTER-THE-CUT") {
+		t.Errorf("the run did not get past the reconnect:\n%s", printed)
+	}
+}
