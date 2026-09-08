@@ -32,14 +32,19 @@ const (
 )
 
 // resetsLayout renders a time of day WITH ITS NUMERIC OFFSET, and it is
-// built from the login flow's own wall-clock layout rather than beside
-// it so the two cannot drift on the time-of-day half.
+// the only time-of-day layout this package has.
+//
+// It replaced a bare "15:04 MST" that the login flow kept beside its own
+// retry advice — two layouts for one question, which is how a person
+// meeting the same wall twice gets told two different things. That
+// layout is retired: every retry time this program renders comes through
+// the renderer below, so there is nothing left to drift against.
 //
 // The offset is the addition, and it is not decoration. A zone
 // abbreviation alone is ambiguous across the world and absent entirely
 // from a zone that has no name, so a reader in the wrong place reads a
 // correct time and plans around the wrong hour.
-const resetsLayout = wallClockLayout + " (-07:00)"
+const resetsLayout = "15:04 MST (-07:00)"
 
 // announceClosed is what a person reads before they are asked anything.
 //

@@ -599,3 +599,82 @@ func TestAnUnreachableServerNamesTheHostItTried(t *testing.T) {
 		t.Errorf("an unreachable server asked %d questions, want 0", got)
 	}
 }
+
+// TestCancellingTheOfferStillCostsAShutDoor is the branch the reasoning
+// above reaches second, and it was the one with nothing measuring it.
+//
+// ui.ExitCode maps ui.ErrAborted to **0** — a deliberate Ctrl-D asked
+// for the run to stop and it stopped, and every wrapper script is right
+// to read that as success. On this path it would be a lie. The person
+// cancelled a WAITLIST OFFER; the deploy was declined by the service
+// before they were asked anything, and a run that exits 0 having
+// deployed nothing is a command that lies to a script. So a cancellation
+// here ends as a decline, and the run still costs the closed-door code.
+//
+// The same holds for a prompt that got its bounded number of unreadable
+// answers: ui.ErrNoAnswer is also a 1 in that table, and neither number
+// describes what happened to this run.
+//
+// THE CONTROL IS THE MECHANISM ITSELF. Each row asserts what the bare
+// sentinel costs before asserting what the run costs, so it cannot pass
+// on a 3 that arrived because the sentinels are harmless — the danger is
+// stated as a measurement rather than as a claim in a comment.
+//
+// REQUIRED MUTATIONS, BOTH RUN. Two, because they fail differently and
+// only one of them fails usefully.
+//
+//   - In offerWaitlist, return the confirm's own error rather than
+//     unaskableStop(err, ...). Reds CLEANLY, on the sentinel assertion,
+//     naming the mechanism — and it is what an implementer would
+//     actually write.
+//   - In unaskableStop, return nil for anything that is not the
+//     no-terminal sentinel. Reds too, and then PANICS: unaskableStop
+//     returns *ui.Failure into an error return, so a nil there is a
+//     non-nil interface holding a nil pointer, and the renderer
+//     dereferences it. Worth knowing about the shape of these
+//     constructors, and worth recording that the suite was entirely
+//     green under this mutation before this row existed — which is what
+//     made the branch worth a row in the first place.
+func TestCancellingTheOfferStillCostsAShutDoor(t *testing.T) {
+	for _, row := range []struct {
+		name     string
+		sentinel error
+		bare     int
+	}{
+		{"cancelled at the offer", ui.ErrAborted, 0},
+		{"no usable answer at the offer", ui.ErrNoAnswer, 1},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			if got := exitCodeFor(t, row.sentinel); got != row.bare {
+				t.Fatalf("the bare sentinel costs %d, want %d — this row's whole "+
+					"point is that letting it escape would cost that instead of "+
+					"the closed-door code", got, row.bare)
+			}
+
+			run := newGateRun(t).closed(4 * time.Hour)
+			run.prompt.confirms = []answer{{err: row.sentinel}}
+
+			err := run.run(t)
+			if err == nil {
+				t.Fatal("the run continued past a shut door")
+			}
+			if errors.Is(err, row.sentinel) {
+				t.Fatalf("the stop carries %v, which ui.ExitCode answers before it "+
+					"reaches the closed-door branch", row.sentinel)
+			}
+			if code := exitCodeFor(t, err); code != ui.ExitServerClosed {
+				t.Errorf("exit code %d, want %d — the deploy was declined by the "+
+					"service, whatever the person did about the offer",
+					code, ui.ExitServerClosed)
+			}
+			if got := len(run.script.joined()); got != 0 {
+				t.Errorf("a cancelled offer signed the person up %d times", got)
+			}
+			// Still actionable: a stop that cannot say when to come back
+			// is one nobody can plan around.
+			if !strings.Contains(rendered(err), "17:00 CET (+01:00)") {
+				t.Errorf("the stop never named the reset time:\n%s", rendered(err))
+			}
+		})
+	}
+}
