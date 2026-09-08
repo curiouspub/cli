@@ -52,4 +52,26 @@
 // is blind by design and its copy has to be honest about a state it
 // cannot observe: where a code would go, and what to do when nothing
 // arrives — never that one is on its way.
+//
+// # Which stream a line goes to is decided by where it CAME FROM
+//
+// Server-originated content — the build's log lines and the diagnostics
+// the server sends alongside them — goes to STDOUT, so that a redirected
+// log is the log the server wrote. Everything this client says about the
+// run — that a connection dropped and is being retried, that nothing has
+// moved for a while, how the run ended — is narration and goes to
+// STDERR, where it can be watched without landing in the file somebody
+// is keeping.
+//
+// The test is provenance, not shape: an error event is rendered through a
+// sentence of this client's own, and still goes to stdout, because the
+// server writes that same text into the same log it writes the build
+// output into. Splitting them would produce a saved log missing the line
+// that explains the rest of it. A phase marker is the other way round —
+// the server sends it, but it is progress this client narrates rather
+// than content the log keeps, so it goes to stderr.
+//
+// The distinguishing question, when a new kind of line appears: WOULD
+// THE SERVER'S OWN LOG HAVE THIS LINE IN IT? If yes, stdout. If it only
+// exists because this client is running, stderr.
 package flow

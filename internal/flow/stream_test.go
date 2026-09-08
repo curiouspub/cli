@@ -1190,3 +1190,88 @@ func TestTheStreamsFailureNamesTheDeployAndNeverTheToken(t *testing.T) {
 
 // streamTestToken is a fixture value and names no real credential.
 const streamTestToken = "stream-bearer-sentinel-value"
+
+// TestOriginDecidesTheStream is the routing rule stated as two rows, and
+// the pair is the whole of it: one thing the SERVER said and one thing
+// this CLIENT said, each asserted present on its own stream and absent
+// from the other.
+//
+// The rule is provenance rather than shape — an error event is rendered
+// through a sentence of this client's own and still belongs to stdout,
+// because the server writes that same text into the same log it writes
+// the build output into. A saved log missing the line that explains why
+// the rest of it stops is worse than one carrying a sentence somebody
+// did not expect.
+//
+// REQUIRED MUTATION: swap the writer on either. Sending the error to
+// stderr reds the first row; sending the reconnect notice to stdout reds
+// the second. Each reds ALONE, which is what makes them two rows rather
+// than one row asserted twice.
+func TestOriginDecidesTheStream(t *testing.T) {
+	t.Run("what the server said goes to stdout", func(t *testing.T) {
+		run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+		run.prompt.confirms = []answer{no()}
+		run.script.eventScripts = []eventScript{{
+			frames: []string{
+				errorFrame(wire.CodeInternal, "THE-SERVERS-OWN-DIAGNOSTIC"),
+				doneFrame(wire.StatusFailed),
+			},
+			hold: true,
+		}}
+
+		handoff, err := run.run()
+		defer handoff.Release()
+		if err == nil {
+			t.Fatal("a build that ended failed was reported as a success")
+		}
+
+		printed, narrated := run.prompt.results.String(), run.prompt.out.String()
+		if !strings.Contains(printed, "THE-SERVERS-OWN-DIAGNOSTIC") {
+			t.Errorf("the server's diagnostic did not reach stdout, so a redirected "+
+				"log would be missing the line explaining why the build stopped:\n%s",
+				printed)
+		}
+		if strings.Contains(narrated, "THE-SERVERS-OWN-DIAGNOSTIC") {
+			t.Errorf("the server's diagnostic was also written to stderr:\n%s", narrated)
+		}
+	})
+
+	t.Run("what this client said goes to stderr", func(t *testing.T) {
+		run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+		run.prompt.confirms = []answer{no()}
+		// Two connections: the first ends without `done`, which is the
+		// abnormal ending this client narrates and retries.
+		run.script.eventScripts = []eventScript{
+			{frames: []string{logFrame("BEFORE-THE-CUT")}},
+			{frames: []string{
+				logFrame("BEFORE-THE-CUT"),
+				logFrame("AFTER-THE-CUT"),
+				doneFrame(wire.StatusBuilt),
+			}, hold: true},
+		}
+
+		handoff, err := run.run()
+		defer handoff.Release()
+		if err != nil {
+			t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+		}
+
+		printed, narrated := run.prompt.results.String(), run.prompt.out.String()
+		if !strings.Contains(narrated, reconnectNarration) {
+			t.Errorf("this client never said on stderr that it was picking the "+
+				"stream up again:\n%s", narrated)
+		}
+		if strings.Contains(printed, reconnectNarration) {
+			t.Errorf("this client's reconnect notice went to stdout, which is the "+
+				"build log's — a saved log would carry a line the server never "+
+				"wrote:\n%s", printed)
+		}
+		// The positive control for the capture itself: the build's own
+		// output DID reach stdout in the same run, so "absent from
+		// stdout" is not a claim about an empty buffer.
+		if !strings.Contains(printed, "AFTER-THE-CUT") {
+			t.Fatalf("no build output reached stdout at all, so the absence "+
+				"asserted above is about an empty stream:\n%s", printed)
+		}
+	})
+}
