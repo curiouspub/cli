@@ -80,6 +80,8 @@ windows github.com/curiouspub/cli/internal/pack TestWalkDoesNotHangOnAPipeNamedL
 # legitimate belongs outside this file.
 windows github.com/curiouspub/cli/internal/pack TestWalkListsARealSymlink
 windows github.com/curiouspub/cli/internal/pack TestWalkEmitsItsFindingsFromOneTree
+windows github.com/curiouspub/cli/internal/pack TestNoSkippedLinkReachesTheArchive
+windows github.com/curiouspub/cli/internal/pack TestTheSkippedLinkWarningNamesNoTarget
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_FIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkToFIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkedConfigResolves
@@ -112,6 +114,33 @@ windows github.com/curiouspub/cli/internal/ui TestTheTerminatorReallyDiesOfTheSi
 # actual volume anyway, because the tag says what the platform generally
 # does and not what this mount does.
 linux github.com/curiouspub/cli/internal/pack TestWalkDetectsARealOnDiskCollision
+
+# The same fixture, one layer on: that both spellings survive into the
+# archive rather than only into the walk's list. It differs from the row
+# above in where the platform question is asked — it is COMPILED
+# everywhere and asks the volume at run time, so it skips on the two
+# platforms whose usual filesystem folds the names as well as on a
+# folding mount anywhere. The wildcard says exactly that: the skip is
+# legitimate on all three, for one reason on one of them and another on
+# the other two.
+#
+# WHAT THE SKIP COSTS: on a folding volume, nothing asserts that the
+# packer carries two colliding names through. That the packer rewrites no
+# name at all is asserted on every platform, from a synthetic listing, by
+# the row about combining marks.
+* github.com/curiouspub/cli/internal/pack TestBothHalvesOfACaseCollisionReachTheArchive
+
+# The row that needs a file wearing a real, unusual permission mode —
+# executable, owner-only, read-only — to prove that none of them reaches
+# the archive. Windows derives a file's reported mode from a read-only
+# attribute rather than from nine bits, so the fixture cannot be built
+# there and the helper that builds it says so.
+#
+# WHAT THE SKIP COSTS: the confirmation that a real volume can hand the
+# packer a file wearing some other mode. That every entry packs as 0644
+# whatever the file claimed is asserted on all three platforms from a
+# synthetic listing, because the header is a pure function of that list.
+windows github.com/curiouspub/cli/internal/pack TestTheArchiveModeIgnoresWhatIsOnDisk
 
 # The row that asks the release tool to validate the release
 # configuration. That tool is not a build dependency of this module and
