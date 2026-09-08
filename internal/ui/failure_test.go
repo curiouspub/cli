@@ -127,16 +127,21 @@ func TestGoldenComparisonCanFail(t *testing.T) {
 
 // TestEveryPublishedFailureNamesAnAction holds the rule that makes these
 // three fields worth having: a hard stop that does not name something to
-// do is a fact, not a message. The published examples are checked as a
-// SET rather than one representative, because a list is one fact with
-// several parts and testing one part is not sampling the list.
+// do is a fact, not a message.
+//
+// It ranges publishedFailures rather than a literal typed here, and that
+// is the correction. This row used to carry its own list of names under a
+// comment saying the examples were checked "as a SET" — and the list had
+// gone stale, missing two of the five failures the package had grown.
+// **A set claim over a hand-typed list is a claim about whoever last
+// remembered to edit it.** The registry it now ranges has a guard of its
+// own keeping it complete.
 func TestEveryPublishedFailureNamesAnAction(t *testing.T) {
-	published := map[string]*Failure{
-		"notInteractiveFailure": notInteractiveFailure,
-		"noAnswerFailure":       noAnswerFailure,
-		"serverClosedFailure":   serverClosedFailure,
+	if len(publishedFailures) == 0 {
+		t.Fatal("publishedFailures is empty, so every assertion below ranges " +
+			"nothing and this row passes by measuring no failures at all")
 	}
-	for name, f := range published {
+	for name, f := range publishedFailures {
 		if strings.TrimSpace(f.What) == "" {
 			t.Errorf("%s has no What — the reader is not told what happened", name)
 		}

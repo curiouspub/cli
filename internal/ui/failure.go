@@ -136,6 +136,29 @@ var serverClosedFailure = &Failure{
 	Next: "Try again a little later. Nothing has been uploaded.",
 }
 
+// publishedFailures is every standing Failure this package can put in
+// front of a person, keyed by the name it is declared under.
+//
+// IT EXISTS BECAUSE A HAND-TYPED LIST IS NOT A SET. The row that asserts
+// every published failure names an action used to carry its own literal
+// of three names under a comment claiming it checked them "as a SET". It
+// was true when it was written and stopped being true the day
+// serverClosedFailure was added — nobody edits a test in another package
+// while adding copy, and nothing made them. That is a closed list built
+// by a pattern, unable to contain the members that arrive after the
+// pattern was chosen.
+//
+// So the set has one home, here, beside the values — and
+// TestPublishedFailureSetIsComplete reads this package's own source to
+// prove it holds every one of them. Adding a Failure without adding it
+// here reds. That is what makes serverClosedFailure the last member a
+// list ever silently drops.
+var publishedFailures = map[string]*Failure{
+	"notInteractiveFailure": notInteractiveFailure,
+	"noAnswerFailure":       noAnswerFailure,
+	"serverClosedFailure":   serverClosedFailure,
+}
+
 // Fail writes a Failure to stderr — never stdout, because a failure is
 // prose for a person and stdout is for output a program will read.
 func (u *UI) Fail(f *Failure) {
