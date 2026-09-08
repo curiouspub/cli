@@ -60,8 +60,8 @@ first-timer, not a compiler.
 import "github.com/curiouspub/cli/pkg/wire"
 ```
 
-Types for capacity, waitlist, and auth are present; deploy types land
-with the deploy endpoints. Success is signalled by HTTP status alone;
+Types for capacity, waitlist, auth and deploy are present. Success is
+signalled by HTTP status alone;
 error semantics live in the error envelope, and success-body contents
 are never something to branch on.
 
