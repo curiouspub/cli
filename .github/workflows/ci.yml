@@ -1,9 +1,31 @@
 name: CI
 
+# EVERY REF, and that is a change with a reason rather than a widening
+# for its own sake. The surface check below reads the range a push
+# publishes, and a job that never runs catches nothing: filtered to the
+# default branch, it would have examined exactly the pushes that had
+# already been reviewed and none of the ones where a message is written.
+# A tag is included because a tag is a published name carrying a
+# published message, and the release workflow is not the only way one
+# arrives.
+#
+# THE MERGE-QUEUE TRIGGER NEEDS A SETTING NOBODY CAN MAKE FROM HERE, and
+# saying so is the difference between a trigger and coverage. A squash
+# merge composes its commit message out of a pull request's title and
+# body, and the queue is where that composed commit can be read before it
+# lands. The event only ever fires if the merge queue is enabled on the
+# default branch AND this check is marked required, so until an operator
+# does both, the line below is a trigger that never fires — which is
+# exactly what a check that reads as coverage and is decoration looks
+# like. The pull-request job reads the title and body directly, so the
+# surface is covered before publication either way; what the queue adds
+# is the composed commit itself.
 on:
   push:
-    branches: [main]
+    branches: ['**']
+    tags: ['**']
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
@@ -17,6 +39,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # THE SUITE NOW ASSERTS SOMETHING ABOUT THIS REPOSITORY'S OWN
+          # HISTORY, so it needs that history. The surface checker proves
+          # itself against two real commits before it is trusted with a
+          # range, and those are objects rather than fixtures on purpose:
+          # a fixture file holding a private identifier is the leak
+          # arriving through the check that hunts it. A shallow checkout
+          # cannot answer whether the checker works, and the rows say so
+          # rather than skipping.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -39,3 +71,41 @@ jobs:
       - name: make ci
         shell: bash
         run: make ci
+
+  # THE SURFACES `make ci` CANNOT SEE. The suite above reads file
+  # contents; a commit message, a branch name, a tag and a pull request's
+  # own text are published exactly as loudly and are not files. This job
+  # reads the range being published and fails on what it finds there.
+  #
+  # ONE LEG, not the matrix. It reads git objects and text, which is the
+  # same answer on every operating system, and the three-way matrix exists
+  # for path handling and permissions — neither of which this touches. A
+  # leg that can only agree with its siblings is a leg that costs minutes
+  # to restate a result.
+  surfaces:
+    name: the published surfaces that are not files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A range needs both of its own endpoints, and a shallow
+          # checkout has neither. `git merge-base`, `git log base..head`
+          # and reading a file at the base all want history that is not
+          # there — and a range that silently resolves to nothing is this
+          # check's whole failure mode, so it is stated here rather than
+          # assumed.
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      # Through the Makefile, so the command this workflow runs is the
+      # command a person runs — and the same one the optional pre-push
+      # hook runs. The event is read out of the payload file by the
+      # program itself: a pull request's title and body are written by
+      # whoever opened it, and interpolating that into a shell line here
+      # would hand a stranger the runner.
+      - name: make surface-check
+        shell: bash
+        run: make surface-check

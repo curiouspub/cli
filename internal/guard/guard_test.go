@@ -199,9 +199,14 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 //     this guard and inside the leak scan's.
 //
 // Two further stated limits. File CONTENTS are matched, never file
-// NAMES: a branch name, a commit message, a tag or a pull-request title
-// is a published surface no pattern here can see, and those are
-// hand-checked at the publish point. And `--exclude-standard` honours
+// NAMES: a branch name, a commit message, a tag and its message, and a
+// pull request's own text are published surfaces no pattern here can
+// see. They are no longer hand-checked — tools/surfacecheck reads them
+// over the range being published, out of the same two rule files this
+// guard reads, so the vocabulary cannot be enforced in a comment and
+// evadable in the message of the commit that adds it. What is left to a
+// person is named there and is smaller than this sentence used to
+// describe. And `--exclude-standard` honours
 // the operator's GLOBAL ignore file as well as this repository's, so a
 // personal global rule could in principle drop a real file out of scope
 // on one machine — CI checks out clean with no global excludes, which is

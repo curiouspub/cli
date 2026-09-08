@@ -1,0 +1,82 @@
+#!/bin/sh
+# A pre-push hook that reads what you are about to publish — the messages
+# in the range, and the name of the ref carrying them — and stops the push
+# when one of them says something this repository does not publish.
+#
+# IT IS NOT THE GATE, AND SAYING SO IS THE POINT. It lives in a directory
+# git does not clone, it is skipped by --no-verify, and it is absent on
+# CI. Anything that has to hold has to hold in the workflow, which runs
+# this same program over the same range. What this buys is the failure
+# arriving in a couple of seconds on the machine that wrote the message,
+# instead of a couple of minutes later in a run.
+#
+# Install it with `make hooks`. That is opt in, because a hook somebody
+# did not choose to install is a hook they will work around.
+#
+# git hands this one line per ref on standard input:
+#
+#   <local ref> <local sha> <remote ref> <remote sha>
+#
+# and the two shas carry the awkward cases: all zeroes on the LOCAL side
+# means the ref is being deleted, and all zeroes on the REMOTE side means
+# it does not exist there yet.
+
+set -eu
+
+remote="${1:-origin}"
+zero="0000000000000000000000000000000000000000"
+status=0
+
+if ! command -v go >/dev/null 2>&1; then
+	echo "pre-push: this check is a Go program and go is not on the path." >&2
+	echo "pre-push: install Go, or push with --no-verify and let the workflow answer." >&2
+	exit 1
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+	# Nothing is being published: there is no message, no tree and no new
+	# name on the far side.
+	if [ "$local_sha" = "$zero" ]; then
+		echo "pre-push: ${remote_ref} is being deleted; nothing to check."
+		continue
+	fi
+
+	if [ "$remote_sha" != "$zero" ]; then
+		base="$remote_sha"
+	else
+		# A ref the remote has never seen. What is new is measured against
+		# the default branch, and the answer has to come from somewhere
+		# this hook can reach without the network.
+		#
+		# REFUSING IS THE HONEST ANSWER when it cannot. Guessing a branch
+		# name would make this check quietly measure the wrong range, and
+		# a check that reports the wrong range is worse than one that says
+		# it cannot look.
+		head_ref="$(git symbolic-ref --quiet "refs/remotes/${remote}/HEAD" 2>/dev/null || true)"
+		if [ -z "$head_ref" ]; then
+			echo "pre-push: ${remote} has no recorded default branch, so there is nothing" >&2
+			echo "pre-push: to measure a brand new ref against. Fix it with:" >&2
+			echo "pre-push:     git remote set-head ${remote} --auto" >&2
+			status=1
+			continue
+		fi
+		base="$(git merge-base "$head_ref" "$local_sha")"
+	fi
+
+	# The ref's own NAME is a published surface too, and on a brand new
+	# branch it is the only one there is.
+	name="${local_ref#refs/heads/}"
+	name="${name#refs/tags/}"
+
+	echo "pre-push: checking ${name}"
+	if ! go run ./tools/surfacecheck -base "$base" -head "$local_sha" -branch "$name"; then
+		status=1
+	fi
+done
+
+if [ "$status" -ne 0 ]; then
+	echo "pre-push: nothing was pushed. A published message cannot be unpublished by a" >&2
+	echo "pre-push: later one, which is why this stops before the push rather than after." >&2
+fi
+
+exit "$status"
