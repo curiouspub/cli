@@ -29,6 +29,15 @@ const (
 	// rather than this client's choice, which is exactly why the window
 	// below is expressed as a multiple of it: a number chosen
 	// independently would drift away from the thing it is watching for.
+	//
+	// IT IS THE ONE NUMBER HERE THIS CLIENT CANNOT CHECK. Nothing in this
+	// process can observe the far end's interval, so a server that slowed
+	// its keep-alive past the window below would have this client
+	// reconnecting on a healthy connection — visibly, in the copy, and
+	// costing a replay rather than a deploy, which is why the multiple is
+	// generous and why the failure is loud rather than silent. If that
+	// interval ever moves, this constant has to move with it; there is no
+	// mechanism here that would notice.
 	streamKeepAliveInterval = 15 * time.Second
 
 	// streamKeepAlivesMissed is how many of those may go missing before
