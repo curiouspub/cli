@@ -74,6 +74,33 @@ func (c *Client) DeployCreate(ctx context.Context, req wire.DeployCreateRequest)
 	return &out, nil
 }
 
+// DeployStart calls POST /v1/deploys/{id}/start: the call that turns an
+// uploaded archive into a running build.
+//
+// NEVER RETRIED, and the reason is not that a repeat would be harmful.
+// The endpoint is honest about one — a start on a deploy that is already
+// building answers with that status rather than an error — so a retry is
+// not wrong. It is still the wrong instinct to build in, because of where
+// the information lives: once this call has returned, everything the user
+// is waiting for arrives on the event stream, so a client that reacts to
+// a timeout by asking again is asking the one surface that has nothing
+// left to tell it. Reconnect to the stream instead.
+//
+// The success body's Status INFORMS and never BRANCHES. The contract says
+// so at the type, and it is contract rather than convention: the client
+// takes the identical next action for every value the field can carry, so
+// a switch on it is the defect and not the omission. It is rendered, and
+// that is all.
+//
+// It authenticates per call, like the create.
+func (c *Client) DeployStart(ctx context.Context, deployID string) (*wire.DeployStartResponse, error) {
+	var out wire.DeployStartResponse
+	if err := c.do(ctx, http.MethodPost, deployPath(deployID, "start"), nil, &out, false, c.withBearerToken()); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // AuthVerify calls POST /v1/auth/verify, the second step of the login
 // flow, and returns the bearer token for every subsequent authenticated
 // call. NEVER retried: the submitted code is consumed atomically, so a

@@ -85,6 +85,13 @@ type confirmAsk struct {
 type scriptedPrompt struct {
 	out bytes.Buffer
 
+	// results is STDOUT, and it is a SECOND buffer rather than more of
+	// the first because the stream split is a claim two sinks can make
+	// and one cannot. Narration, prompts and failures go to out; the
+	// user's own build output goes here, so "a redirected stdout collects
+	// the build log and nothing else" is something a row can check.
+	results bytes.Buffer
+
 	emails   []answer
 	lines    []answer
 	confirms []answer
@@ -114,6 +121,11 @@ type scriptedPrompt struct {
 func (s *scriptedPrompt) Step(format string, args ...any) {
 	fmt.Fprintf(&s.out, format+"\n", args...)
 	s.transcript = append(s.transcript, "said: "+fmt.Sprintf(format, args...))
+}
+
+func (s *scriptedPrompt) Result(format string, args ...any) {
+	fmt.Fprintf(&s.results, format+"\n", args...)
+	s.transcript = append(s.transcript, "printed: "+fmt.Sprintf(format, args...))
 }
 
 func (s *scriptedPrompt) Email(prompt string) (string, error) {

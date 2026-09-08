@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,20 +17,28 @@ import (
 	"github.com/curiouspub/cli/internal/pack"
 	"github.com/curiouspub/cli/internal/preflight"
 	"github.com/curiouspub/cli/internal/ui"
+	"github.com/curiouspub/cli/pkg/wire"
 )
 
 // DeployPrompter is the slice of the terminal the whole sequence needs,
-// which is the union of what its steps need: narration, a line of text,
-// an address, and a yes-or-no question.
+// which is the union of what its steps need: narration, the user's own
+// build output, a line of text, an address, and a yes-or-no question.
 //
 // It is declared HERE, by the consumer, for the same reason every other
-// seam in this package is. That it happens to have the same four methods
-// as LoginPrompter is arithmetic rather than design — this is the union
-// of four steps' requirements and that is one step's — and reusing the
-// name would mean a step that later stopped needing a method silently
+// seam in this package is. That it happens to share four methods with
+// LoginPrompter is arithmetic rather than design — this is the union of
+// five steps' requirements and that is one step's — and reusing the name
+// would mean a step that later stopped needing a method silently
 // narrowing what the sequence asks for.
+//
+// Result is the odd one and it is here because of the stream split: it
+// writes to STDOUT, and the only thing that belongs there is the build's
+// own output. Everything this program says about that output is narration
+// and goes to stderr through Step, so a redirected stdout collects the
+// build log and nothing else.
 type DeployPrompter interface {
 	Step(format string, args ...any)
+	Result(format string, args ...any)
 	Line(prompt string) (string, error)
 	Email(prompt string) (string, error)
 	Confirm(question string, defaultYes bool) (bool, error)
@@ -97,6 +106,21 @@ type DeployDeps struct {
 	// second constant: nothing here chooses a different number, and
 	// production passes none at all.
 	UploadStallTimeout time.Duration
+
+	// StreamStallTimeout is how long the build log waits for the next
+	// byte before deciding the connection has stopped talking, and
+	// StreamReconnectStep is the step of the delay schedule between
+	// attempts to pick it up again. Both optional; without them the
+	// stream's own constants apply.
+	//
+	// THEY ARE SEAMS FOR THE REASON UploadStallTimeout IS, and they are
+	// its NEIGHBOURS RATHER THAN ITS REUSE. The upload's window bounds a
+	// body being pushed at an object store; this one bounds a silence on
+	// a connection whose far end sends a keep-alive on a published
+	// interval. The two are the same shape and answer different
+	// questions, so each is chosen where it is used.
+	StreamStallTimeout  time.Duration
+	StreamReconnectStep time.Duration
 }
 
 // Handoff is what a completed run leaves in the caller's hands: the
@@ -160,10 +184,16 @@ func (h *Handoff) Release() {
 const workDirPattern = "curious-deploy-*"
 
 // stopsHere is the honest end of this release's deploy. It names what is
-// missing rather than stopping silently, because a command that packs an
-// archive and says nothing more reads as one that failed quietly.
-const stopsHere = "That is as far as this release goes — streaming the build and " +
-	"the live\nURL arrive in the next one."
+// missing rather than stopping silently, because a command that watches a
+// build finish and then says nothing more reads as one that failed
+// quietly.
+//
+// IT MOVES IN THE COMMIT THAT MOVES THE CODE. A line still saying the
+// build log is unbuilt, the day after it ships, is the same defect as one
+// describing an unbuilt feature in the present tense — running backwards,
+// and just as false.
+const stopsHere = "That is as far as this release goes — the site's own address " +
+	"arrives in\nthe next one."
 
 // Deploy runs `curious deploy` as far as this release goes: everything
 // local, then the create, then the upload.
@@ -403,6 +433,44 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		StallTimeout: deps.UploadStallTimeout,
 	}); err != nil {
 		return nil, err
+	}
+
+	// 10. THE START, sent ONCE and never again.
+	//
+	// The status it answers with INFORMS and never BRANCHES: the next
+	// action is identical for every value it can carry, so it is rendered
+	// and nothing switches on it. A value this build has never heard of
+	// renders like any other.
+	startResp, err := authed.DeployStart(ctx, resp.DeployID)
+	if err != nil {
+		return nil, startFailure(err)
+	}
+	deps.Prompt.Step("%s%s.", startNarration, ui.Sanitize(string(startResp.Status)))
+
+	// 11. THE BUILD LOG.
+	//
+	// A FAILURE HERE IS NOT A FAILED BUILD, and the copy each ending
+	// carries keeps them apart: the build is running on the server and
+	// this is only the window onto it.
+	status, err := streamBuild(ctx, streamDeps{
+		Events: func(ctx context.Context) (io.ReadCloser, error) {
+			return authed.DeployEvents(ctx, resp.DeployID)
+		},
+		Render:        deps.Prompt,
+		DeployID:      resp.DeployID,
+		StallTimeout:  deps.StreamStallTimeout,
+		ReconnectStep: deps.StreamReconnectStep,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if status == wire.StatusFailed {
+		// THE ONLY VALUE THIS CLIENT ACTS ON, and it acts on it by
+		// stopping. Everything else continues, including a value this
+		// build predates — the stream is a narrator rather than an
+		// authority, and what the output validator makes of the build is
+		// a question for the next call rather than for this one.
+		return nil, buildFailedFailure()
 	}
 
 	deps.Prompt.Step("%s", stopsHere)
