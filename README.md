@@ -19,12 +19,16 @@ The platform is not yet open. What exists here today:
 
 - **`pkg/wire`** — the `/v1` wire contract (types only, stdlib-only,
   importable as `github.com/curiouspub/cli/pkg/wire`).
+- **`curious mcp`** — the stdio MCP server, as transport and dispatch:
+  it completes a handshake, lists tools and calls them. It registers no
+  tools yet, so a client that connects today finds an empty list. Written
+  against the standard library alone — no SDK, no new dependency.
 
 What lands here next:
 
 - **`curious deploy`** — pack an Astro project, upload it, watch the
   build logs stream live, get a `*.curiously.dev` URL.
-- **`curious mcp`** — the same flow as a stdio MCP server, so Claude
+- **The MCP tools** — the same flow through `curious mcp`, so Claude
   Code, Claude Desktop, and other MCP clients can deploy for you.
 
 The trial opens in small daily batches. Get the launch note:
