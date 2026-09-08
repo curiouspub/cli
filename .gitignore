@@ -31,3 +31,17 @@ coverage.html
 
 # orchestration half of CLAUDE.md — local only, never committed
 CLAUDE.local.md
+
+# Worktree lanes. A lane is a second checkout of THIS repository living
+# inside it, and `git ls-files --others` reports it as one untracked
+# directory — which internal/guard then walks, scanning another branch's
+# files as though they were this checkout's. The visible symptom is the
+# URL-constant ceiling counting every constant twice; the quieter one is
+# that a guard's answer depends on which checkout you run it from, and
+# the lane, where the work happens, is the one that cannot see it.
+#
+# Narrow on purpose: .claude/worktrees/ rather than .claude/, so anything
+# this repository later decides to track under .claude/ is unaffected.
+# Ignoring a lane is not a hole in the leak guard — a lane is a checkout
+# of this repo, and its own CI scans it.
+.claude/worktrees/

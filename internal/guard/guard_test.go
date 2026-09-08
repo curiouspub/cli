@@ -104,6 +104,27 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 			switch d.Name() {
 			case ".git", "vendor":
 				return filepath.SkipDir
+			case ".claude":
+				// WORKTREE LANES LIVE HERE, and a lane is a second
+				// checkout of this repository inside it. Walking one
+				// makes every guard that uses this list count another
+				// branch's files as though they were ours: the URL
+				// ceiling saw four constants where the tree has two,
+				// and would have red for anybody with a lane open.
+				//
+				// .gitignore cannot fix it, and that is the part worth
+				// knowing. This walk never consults git — the citation
+				// guard one file over enumerates through
+				// `git ls-files --cached --others --exclude-standard`
+				// and therefore honours ignores, while this one honours
+				// nothing but the two names above. TWO ANSWERS TO
+				// "which files are ours", in one package, disagreeing
+				// exactly when a lane exists.
+				//
+				// This skip is the narrow fix. The real one is a single
+				// enumeration both use, which is a change with its own
+				// reasons and its own task.
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -625,7 +646,7 @@ func foldString(e *constEnv, dir string, expr ast.Expr) (string, bool) {
 // the shipped spelling made to fail — and only then was the instance
 // admitted through the allow-list. A door opened before the wall exists
 // is not a door.
-func TestAtMostTwoNamedURLConstants(t *testing.T) {
+func TestNamedURLConstantsStayUnderTheCeiling(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
 
