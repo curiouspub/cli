@@ -22,6 +22,11 @@
 // package's own tests hermetic: a test that cannot redirect the path has
 // to either read the developer's real token or skip itself.
 //
+// It names the FILE, not a directory, and it is used exactly as given —
+// a relative path stays relative, and a leading tilde is a directory
+// name rather than a home directory. A path naming a directory is
+// reported as such, with the variable that does take one; see Path.
+//
 // # What the file looks like
 //
 // A small JSON object carrying a schema version, the token, and the API
@@ -35,6 +40,14 @@
 // takes with unknown JSON, applied to our own file. Without it, running
 // an older binary once silently destroys state a newer one is relying
 // on.
+//
+// That promise is about a particular flow, and the flow is named rather
+// than assumed: LOAD, THEN SAVE ON THE VALUE LOAD RETURNED. The fields
+// being preserved are the ones the read put there, so a value built
+// fresh has none and preserves none — it writes the fields this build
+// knows and claims nothing about any others. Saving is a Config method
+// taking the token and the endpoint it was issued against together, so
+// the value carrying the file's other state is the value that writes it.
 //
 // # The endpoint the token was issued against
 //

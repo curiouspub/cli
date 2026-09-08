@@ -68,8 +68,8 @@ func TestUmaskWindowsCounterpart(t *testing.T) {
 	}
 
 	const endpoint = "https://api.example.com"
-	cfg := &Config{Token: testToken, APIURL: endpoint}
-	if err := cfg.Save(); err != nil {
+	cfg := &Config{}
+	if err := cfg.Save(testToken, endpoint); err != nil {
 		t.Fatalf("Save(): %v", err)
 	}
 
