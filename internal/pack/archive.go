@@ -192,9 +192,16 @@ func (a Archive) Remove() error {
 // uses a directory it owns so that "nothing was left behind" is a
 // question it can actually answer.
 //
-// NOTHING SURVIVES A FAILURE. Every error path removes the file before
-// returning, so a caller that got an error has nothing to clean up and
-// no path to clean it up with.
+// NOTHING THIS PROGRAM CAN REMOVE SURVIVES A FAILURE. Every error path
+// removes the file before returning, so a caller that got an error has
+// nothing to clean up and no path to clean it up with.
+//
+// The qualifier is the honest form and the sentence used to lack it: the
+// unlink is best-effort, and an unlink that itself fails leaves the file
+// behind. Reporting that failure was considered and rejected — it
+// replaces the error the caller can act on with one it cannot, and there
+// is no path handed back to retry with. What the sentence may promise is
+// what this code controls.
 func Pack(fsys FS, root, dir string, files []File) (Archive, error) {
 	// CreateTemp makes the file with mode 0600, which is the mode this
 	// archive wants for the reason given on Archive.Path — noted here
@@ -311,10 +318,8 @@ func writeEntry(tw *tar.Writer, fsys FS, root string, file File) error {
 	// walk cannot produce such a name, so nothing shipped reaches this;
 	// it is an open question about how much this function should check
 	// rather than trust, not an accepted hole.
-	if !file.Mode.IsRegular() {
-		return fmt.Errorf("%s is not a regular file (%s), and only regular files "+
-			"can be archived: a link would be followed to whatever it points at, "+
-			"and a pipe or device would block or read forever", file.Path, file.Mode)
+	if err := packable(file); err != nil {
+		return err
 	}
 
 	rc, err := fsys.Open(filepath.Join(root, filepath.FromSlash(file.Path)))
@@ -395,4 +400,33 @@ func header(f File) *tar.Header {
 		Gname:      "",
 		Format:     tar.FormatPAX,
 	}
+}
+
+// packable refuses an entry this package must not open, and it is ONE
+// PREDICATE WITH TWO CALLERS on purpose.
+//
+// The packer refuses before it opens, because Open resolves a symlink
+// and a check afterwards has already read the file it meant to refuse.
+// The compression diagnostic reads the SAME list a second time, on the
+// path that has already failed, and it did not share this — so a link
+// was followed to whatever it pointed at, and a pipe blocked a deploy
+// with nothing to read. A guard that one of two readers applies is a
+// guard the other reader is exempt from.
+//
+// WHAT IT KEYS ON, and what that does not buy: the mode the walk
+// RECORDED, not a fresh look at the disk. An entry replaced between the
+// walk and here is not caught — this package's filesystem interface has
+// no lstat to ask with, and the classification it does have comes from
+// the directory listing the walk already read. That window is the
+// packer's own, which is the argument for sharing the packer's guard
+// rather than inventing a stricter one at the second caller: two
+// different answers to "may I open this" is the defect, not the width of
+// the answer.
+func packable(file File) error {
+	if file.Mode.IsRegular() {
+		return nil
+	}
+	return fmt.Errorf("%s is not a regular file (%s), and only regular files can be "+
+		"archived: a link would be followed to whatever it points at, and a pipe or "+
+		"device would block or read forever", file.Path, file.Mode)
 }
