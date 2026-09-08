@@ -1,0 +1,1192 @@
+package flow
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/curiouspub/cli/pkg/wire"
+)
+
+// -------------------------------------------------------------------
+// The start
+// -------------------------------------------------------------------
+
+// TestTheStartIsPostedOnceAndTheStreamFollows.
+//
+// A BARE COUNT OF ONE IS SATISFIED BY ANY REQUEST AT ALL, so this asserts
+// the method, the path carrying the id THE CREATE RETURNED, the bearer
+// header, that the answer was decoded, and that the events GET came
+// after it. The id is deliberately not the harness default: a client that
+// built the path out of anything but the create's answer would still
+// produce a path of the right shape.
+func TestTheStartIsPostedOnceAndTheStreamFollows(t *testing.T) {
+	const id = "quick-koala-4f2a"
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.deployID = id
+	run.script.startBody = `{"status":"` + string(wire.StatusQueued) + `"}`
+
+	handoff, err := run.run()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+	defer handoff.Release()
+
+	startPath := deployPathPrefix + id + "/" + startAction
+	eventsPath := deployPathPrefix + id + "/" + eventsAction
+	if n := run.script.sentTo(startPath); n != 1 {
+		t.Fatalf("the start was sent %d times to %s, want exactly 1", n, startPath)
+	}
+	if n := run.script.sentTo(eventsPath); n != 1 {
+		t.Errorf("the stream was opened %d times at %s, want exactly 1", n, eventsPath)
+	}
+
+	events := run.journal.all()
+	started := indexOfEvent(events, "POST "+startPath)
+	streamed := indexOfEvent(events, "GET "+eventsPath)
+	if started < 0 || streamed < 0 || started > streamed {
+		t.Errorf("the start is at %d and the stream at %d:\n  %s",
+			started, streamed, strings.Join(events, "\n  "))
+	}
+
+	run.script.mu.Lock()
+	bearers := append([]string(nil), run.script.bearers...)
+	paths := append([]string(nil), run.script.paths...)
+	run.script.mu.Unlock()
+	for i, p := range paths {
+		if p != startPath && p != eventsPath {
+			continue
+		}
+		if !strings.HasPrefix(bearers[i], "Bearer ") || bearers[i] == "Bearer " {
+			t.Errorf("%s sent Authorization %q, want a bearer token", p, bearers[i])
+		}
+	}
+
+	// The answer was DECODED, not merely received: the status the start
+	// returned is the one rendered, and it is not the harness default.
+	if want := startNarration + string(wire.StatusQueued) + "."; !strings.Contains(run.prompt.out.String(), want) {
+		t.Errorf("the run never rendered the start's own status (%q):\n%s",
+			want, run.prompt.out.String())
+	}
+}
+
+// TestAStartThatNeverAnswersIsSentOnce is the row the no-retry rule rests
+// on, and the ambiguous failure is the shape that tempts one: the request
+// left, no answer came back, and asking again is the obvious move.
+//
+// It is the wrong move, and the reason is where the information lives.
+// After the start returns, everything the user is waiting for arrives on
+// the stream — so a client that reacts to silence by starting again is
+// asking the one surface with nothing left to tell it.
+//
+// THE FAILURE IS A DROPPED CONNECTION AND NOT A CANCELLED RUN, and that
+// is the whole instrument. The first version of this row cancelled the
+// context to make the answer never arrive, which also stops the next
+// request from leaving the machine at all — so the mutation below RAN AND
+// STAYED GREEN: the retry happened, sent nothing, and was counted
+// nowhere. A row that cannot fail for the right reason has never been
+// audited, whatever colour it has been showing.
+//
+// REQUIRED MUTATION, run 2026-09-08: retry the start when it comes back
+// with no answer. Reds on the count, 2 against 1.
+func TestAStartThatNeverAnswersIsSentOnce(t *testing.T) {
+	const id = "deploy-quiet"
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.deployID = id
+	run.script.startHangsUp = true
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err == nil {
+		t.Fatal("a start that never answered was reported as a running build")
+	}
+
+	if n := run.script.sentTo(deployPathPrefix + id + "/" + startAction); n != 1 {
+		t.Errorf("the start was sent %d times, want exactly 1", n)
+	}
+	if n := run.script.eventConnections(); n != 0 {
+		t.Errorf("the stream was opened %d times after a start that never answered, "+
+			"want none", n)
+	}
+
+	text, code := renderedBytes(t, err)
+	if code != 1 {
+		t.Errorf("a start that never answered cost %d, want 1", code)
+	}
+	// The positive half: a message that says nothing would satisfy every
+	// count above.
+	if !strings.Contains(text, buildMayBeRunning) {
+		t.Errorf("the failure never said the build may be running anyway:\n%s", text)
+	}
+}
+
+// TestTheStartStatusIsRenderedAndNeverBranchedOn drives EVERY value the
+// contract defines through the start, plus one the contract does not.
+//
+// Status INFORMS; it never BRANCHES. The client takes the identical next
+// action for every value the field can carry — go read the stream — so a
+// switch on it is the defect rather than the omission, and the row that
+// can see one is the unknown value: it comes back from the START itself,
+// because a value injected only into a done event or a phase never
+// reaches this code at all.
+//
+// EACH TOKEN IS ASSERTED DISTINCTLY, as the whole rendered line, and
+// every OTHER value's line is asserted absent. A renderer that printed
+// one fixed word would pass a row that only checked the run did not
+// error.
+//
+// REQUIRED MUTATION, run 2026-09-08: switch on the start's Status and
+// error on an unrecognised value. The "future" subtest reds — "a start
+// answering \"future\" stopped the run: The server said something curious
+// does not understand." — and the other five stay green, which is what
+// makes it a test of the additive rule rather than of the copy.
+func TestTheStartStatusIsRenderedAndNeverBranchedOn(t *testing.T) {
+	if len(wire.AllDeployStatuses) == 0 {
+		t.Fatal("the contract enumerates no statuses, so this row would drive nothing")
+	}
+
+	// The contract's own enumeration, plus a value from outside it. The
+	// unknown one is what makes this a test of the additive rule rather
+	// than of a list.
+	statuses := append(append([]wire.DeployStatus(nil), wire.AllDeployStatuses...),
+		wire.DeployStatus("future"))
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			const id = "deploy-start-status"
+			run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+			run.prompt.confirms = []answer{no()}
+			run.script.deployID = id
+			run.script.startBody = `{"status":"` + string(status) + `"}`
+
+			handoff, err := run.run()
+			defer handoff.Release()
+			if err != nil {
+				t.Fatalf("a start answering %q stopped the run: %v\n%s",
+					status, err, rendered(err))
+			}
+
+			shown := run.prompt.out.String()
+			if want := startNarration + string(status) + "."; !strings.Contains(shown, want) {
+				t.Errorf("the run never rendered %q:\n%s", want, shown)
+			}
+			for _, other := range statuses {
+				if other == status {
+					continue
+				}
+				if unwanted := startNarration + string(other) + "."; strings.Contains(shown, unwanted) {
+					t.Errorf("the run also rendered %q, so the line does not carry "+
+						"the value it was given:\n%s", unwanted, shown)
+				}
+			}
+
+			// AND THE STREAM STILL FOLLOWED. Without this the row is
+			// passed by a client that renders the status and then stops,
+			// which is exactly what a switch with an error default does.
+			if n := run.script.sentTo(deployPathPrefix + id + "/" + eventsAction); n != 1 {
+				t.Errorf("the events stream was opened %d times after a start "+
+					"answering %q, want exactly 1", n, status)
+			}
+			if n := run.script.sentTo(deployPathPrefix + id + "/" + startAction); n != 1 {
+				t.Errorf("the start was sent %d times, want exactly 1", n)
+			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------
+// The vocabularies the stream carries
+// -------------------------------------------------------------------
+
+// TestEveryPhaseIsRenderedIncludingOneTheContractDoesNotDefine. A phase
+// is a progress label, not control flow: an unknown one is RENDERED, not
+// switched on, because a display that errors on a value the server added
+// last week fails in the way that looks like nothing at all.
+func TestEveryPhaseIsRenderedIncludingOneTheContractDoesNotDefine(t *testing.T) {
+	if len(wire.AllPhases) == 0 {
+		t.Fatal("the contract enumerates no phases, so this row would drive nothing")
+	}
+	phases := append(append([]wire.Phase(nil), wire.AllPhases...), wire.Phase("future"))
+
+	for _, phase := range phases {
+		t.Run(string(phase), func(t *testing.T) {
+			run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+			run.prompt.confirms = []answer{no()}
+			run.script.eventScripts = []eventScript{{frames: []string{
+				phaseFrame(phase),
+				doneFrame(wire.StatusBuilt),
+			}}}
+
+			handoff, err := run.run()
+			defer handoff.Release()
+			if err != nil {
+				t.Fatalf("a phase of %q stopped the run: %v\n%s", phase, err, rendered(err))
+			}
+
+			shown := run.prompt.out.String()
+			if want := phaseNarration + string(phase) + "."; !strings.Contains(shown, want) {
+				t.Errorf("the run never rendered %q:\n%s", want, shown)
+			}
+			for _, other := range phases {
+				if other == phase {
+					continue
+				}
+				if unwanted := phaseNarration + string(other) + "."; strings.Contains(shown, unwanted) {
+					t.Errorf("the run also rendered %q:\n%s", unwanted, shown)
+				}
+			}
+		})
+	}
+}
+
+// TestEveryTerminalStatusIsRenderedAndOnlyFailureCosts. done carries the
+// BUILDER's claim rather than the validated truth — output validation runs
+// afterwards and can still move a deploy to failed — so this client
+// renders the status honestly and hands the question forward instead of
+// treating the stream as the authority.
+//
+// What it does decide is the cost: a build the server says failed is a
+// project problem and the log just watched is the explanation, so that
+// one exits 1. Every other value continues, and BOTH halves are in one
+// row on purpose — a client that always exits 1 passes the failure case
+// alone.
+func TestEveryTerminalStatusIsRenderedAndOnlyFailureCosts(t *testing.T) {
+	statuses := append(append([]wire.DeployStatus(nil), wire.AllDeployStatuses...),
+		wire.DeployStatus("future"))
+
+	continued := 0
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+			run.prompt.confirms = []answer{no()}
+			run.script.eventScripts = []eventScript{{frames: []string{
+				logFrame("the build said something"),
+				doneFrame(status),
+			}}}
+
+			handoff, err := run.run()
+			defer handoff.Release()
+
+			shown := run.prompt.out.String()
+			if want := finishedNarration + string(status) + "."; !strings.Contains(shown, want) {
+				t.Errorf("the run never rendered %q:\n%s", want, shown)
+			}
+			for _, other := range statuses {
+				if other == status {
+					continue
+				}
+				if unwanted := finishedNarration + string(other) + "."; strings.Contains(shown, unwanted) {
+					t.Errorf("the run also rendered %q:\n%s", unwanted, shown)
+				}
+			}
+
+			text, code := renderedBytes(t, err)
+			if status == wire.StatusFailed {
+				if err == nil {
+					t.Fatal("a build the server said failed was reported as a success")
+				}
+				if code != 1 {
+					t.Errorf("a failed build cost %d, want 1:\n%s", code, text)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a build that ended %q stopped the run: %v\n%s",
+					status, err, rendered(err))
+			}
+			if code != 0 {
+				t.Errorf("a build that ended %q cost %d, want 0", status, code)
+			}
+			continued++
+		})
+	}
+
+	if continued == 0 {
+		t.Error("every value ended the run, so the exit code above is a constant " +
+			"rather than a decision")
+	}
+}
+
+// TestAnUnknownEventTypeIsSkippedAndTheStreamKeepsReading.
+//
+// THE UNKNOWN IS PLACED BETWEEN KNOWN EVENTS and both sides are asserted
+// rendered. Put just before done, the row is satisfied by a client that
+// ignores everything except done.
+//
+// The known events are RANGED OVER the contract's own enumeration rather
+// than listed here, so a new member joins the row automatically — and the
+// helper refuses a member it does not know how to drive, which turns
+// "somebody added an event type" into a failure rather than into silent
+// under-coverage.
+func TestAnUnknownEventTypeIsSkippedAndTheStreamKeepsReading(t *testing.T) {
+	if len(wire.AllEventTypes) == 0 {
+		t.Fatal("the contract enumerates no event types, so this row would drive nothing")
+	}
+
+	const unknownMarker = "PAYLOAD-OF-AN-EVENT-THIS-BUILD-PREDATES"
+	unknown := rawFrame("cache_restored", `{"note":"`+unknownMarker+`"}`)
+
+	var frames []string
+	markers := map[wire.EventType]string{}
+	for _, kind := range wire.AllEventTypes {
+		if kind == wire.EventDone {
+			// done ends the stream, so it can only be last. Everything
+			// else is surrounded.
+			continue
+		}
+		frame, marker := frameForEventType(t, kind)
+		frames = append(frames, unknown, frame)
+		markers[kind] = marker
+	}
+	frames = append(frames, unknown, doneFrame(wire.StatusBuilt))
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{frames: frames}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("an unknown event type stopped the run: %v\n%s", err, rendered(err))
+	}
+
+	shown := run.prompt.out.String() + run.prompt.results.String()
+	for kind, marker := range markers {
+		if !strings.Contains(shown, marker) {
+			t.Errorf("the %s event either side of an unknown one was not rendered "+
+				"(%q):\n%s", kind, marker, shown)
+		}
+	}
+	if strings.Contains(shown, unknownMarker) {
+		t.Errorf("the unknown event's payload was rendered:\n%s", shown)
+	}
+	if n := run.script.eventConnections(); n != 1 {
+		t.Errorf("the stream was opened %d times, want 1 — an unknown event is "+
+			"skipped, not a reason to start again", n)
+	}
+}
+
+// frameForEventType drives one member of the contract's event vocabulary
+// and returns the text its rendering must contain.
+//
+// The default is a FAILURE rather than a skip: a member nobody here knows
+// how to drive is a row quietly covering less than its name says.
+func frameForEventType(t *testing.T, kind wire.EventType) (frame, marker string) {
+	t.Helper()
+	switch kind {
+	case wire.EventLog:
+		return logFrame("MARKER-FOR-A-LOG-LINE"), "MARKER-FOR-A-LOG-LINE"
+	case wire.EventPhase:
+		return phaseFrame(wire.PhaseInstalling),
+			phaseNarration + string(wire.PhaseInstalling) + "."
+	case wire.EventError:
+		return errorFrame(wire.CodeInternal, "MARKER-FOR-AN-ERROR-EVENT"),
+			"MARKER-FOR-AN-ERROR-EVENT"
+	case wire.EventDone:
+		return doneFrame(wire.StatusBuilt), finishedNarration + string(wire.StatusBuilt) + "."
+	}
+	t.Fatalf("the contract defines the event type %q and this row does not know how "+
+		"to drive it", kind)
+	return "", ""
+}
+
+// TestAnErrorEventExplainsAndDoesNotEndTheStream. error is DIAGNOSTIC; a
+// failed build still ends with done, so the termination condition is
+// "done arrived" and never "error arrived".
+//
+// THE FIXTURE HOLDS THE CONNECTION OPEN AFTER done, which is what makes
+// the first half real: a client that returned at the error would hang
+// here rather than pass, where closing the connection would have handed
+// it an end-of-stream it could mistake for the ending it failed to read.
+func TestAnErrorEventExplainsAndDoesNotEndTheStream(t *testing.T) {
+	t.Run("the done after it is what ends the stream", func(t *testing.T) {
+		run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+		run.prompt.confirms = []answer{no()}
+		run.script.eventScripts = []eventScript{{
+			frames: []string{
+				logFrame("BEFORE-THE-ERROR"),
+				errorFrame(wire.CodeInternal, "THE-ERROR-ITSELF"),
+				logFrame("AFTER-THE-ERROR"),
+				doneFrame(wire.StatusFailed),
+			},
+			hold: true,
+		}}
+
+		handoff, err := run.run()
+		defer handoff.Release()
+		if err == nil {
+			t.Fatal("a build that ended failed was reported as a success")
+		}
+
+		printed := run.prompt.results.String()
+		for _, want := range []string{"BEFORE-THE-ERROR", "THE-ERROR-ITSELF", "AFTER-THE-ERROR"} {
+			if !strings.Contains(printed, want) {
+				t.Errorf("the build output never carried %q:\n%s", want, printed)
+			}
+		}
+		if want := finishedNarration + string(wire.StatusFailed) + "."; !strings.Contains(run.prompt.out.String(), want) {
+			t.Errorf("the run never rendered %q:\n%s", want, run.prompt.out.String())
+		}
+		if n := run.script.eventConnections(); n != 1 {
+			t.Errorf("the stream was opened %d times, want 1 — an error event is "+
+				"not a reason to start again", n)
+		}
+	})
+
+	t.Run("a stream that ends after an error is reconnected, boundedly", func(t *testing.T) {
+		run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+		run.prompt.confirms = []answer{no()}
+		// Every connection ends the same way, because the queue's last
+		// entry repeats. An ending without done is abnormal whatever
+		// came before it.
+		run.script.eventScripts = []eventScript{{frames: []string{
+			logFrame("BEFORE-THE-ERROR"),
+			errorFrame(wire.CodeInternal, "THE-ERROR-ITSELF"),
+		}}}
+
+		handoff, err := run.run()
+		defer handoff.Release()
+		if err == nil {
+			t.Fatal("a stream that never said done was reported as a finished build")
+		}
+
+		narrated := run.prompt.out.String()
+		if !strings.Contains(narrated, streamDropped) {
+			t.Errorf("the run never said the build log was lost:\n%s", narrated)
+		}
+		if strings.Contains(narrated, streamWentQuiet) {
+			t.Errorf("a connection that closed was described as having gone "+
+				"quiet:\n%s", narrated)
+		}
+
+		want := 1 + streamReconnectAttempts
+		if n := run.script.eventConnections(); n != want {
+			t.Errorf("the stream was opened %d times, want %d — one attempt and %d "+
+				"reconnections, bounded rather than forever",
+				n, want, streamReconnectAttempts)
+		}
+
+		text, code := renderedBytes(t, err)
+		if code != 1 {
+			t.Errorf("a stream that could not be re-established cost %d, want 1", code)
+		}
+		if !strings.Contains(text, "deploy-1") {
+			t.Errorf("the failure does not name the deploy, so nobody can ask about "+
+				"it:\n%s", text)
+		}
+		if want := strconv.Itoa(streamReconnectAttempts); !strings.Contains(text, want) {
+			t.Errorf("the failure does not say how many times it tried (%s):\n%s",
+				want, text)
+		}
+	})
+}
+
+// -------------------------------------------------------------------
+// Reconnection, and what a reconnection must not do twice
+// -------------------------------------------------------------------
+
+// TestAReplayedStreamRendersEachLineExactlyOnce is the row that pays for
+// the whole de-duplication rule.
+//
+// There is no cursor — the stream implements none — so a reconnection
+// re-sends everything from the beginning. Getting this wrong duplicates
+// the entire build log on every blip, which is the failure a user reports
+// as "it printed everything twice" and nobody reproduces on a good
+// connection.
+//
+// THE SECOND RESPONSE CARRIES THE COMPLETE ORIGINAL HISTORY plus what
+// arrived after the cut. A fixture that returned only the tail would let
+// a client with no skip logic pass.
+//
+// It asserts on the RENDERED OUTPUT rather than on events received: the
+// claim is about what a person sees, and a client could count correctly
+// and print wrongly.
+//
+// REQUIRED MUTATION, run 2026-09-08: drop the already-rendered count on
+// reconnection. Reds with the whole history printed twice — "LINE-A was
+// printed 2 times, want exactly 1", and the same for B and C — and reds
+// the other replay shape below with it, which is the correct blast radius
+// for a change to the one thing both rows are about.
+func TestAReplayedStreamRendersEachLineExactlyOnce(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{
+		// Cut: three lines and no done.
+		{frames: []string{logFrame("LINE-A"), logFrame("LINE-B"), logFrame("LINE-C")}},
+		// The replay: the whole history again, then what came after.
+		{frames: []string{
+			logFrame("LINE-A"), logFrame("LINE-B"), logFrame("LINE-C"),
+			logFrame("LINE-D"), doneFrame(wire.StatusBuilt),
+		}},
+	}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	printed := run.prompt.results.String()
+	for _, line := range []string{"LINE-A", "LINE-B", "LINE-C", "LINE-D"} {
+		if n := strings.Count(printed, line); n != 1 {
+			t.Errorf("%s was printed %d times, want exactly 1:\n%s", line, n, printed)
+		}
+	}
+	if n := run.script.eventConnections(); n != 2 {
+		t.Errorf("the stream was opened %d times, want 2 — a cut stream is "+
+			"reconnected, and a reconnected one is not reconnected again", n)
+	}
+}
+
+// TestTheEvictedReplayShapeAlsoRendersEachLineExactlyOnce is the same
+// property in the OTHER replay shape, and it is the row that decides what
+// the counter counts.
+//
+// There are two shapes and they do not carry the same events. While the
+// build's history is still in memory a replay is TYPED — log, phase and
+// error as they were. Once it has been read back from storage instead,
+// every line arrives as a log, because what is stored is the text of logs
+// and errors and nothing else.
+//
+// A counter over LOG EVENTS ALONE is wrong here: it skips one fewer than
+// it should and prints a line twice. A counter over EVERY EVENT is wrong
+// too: phase is not persisted, so it counts something the replay does not
+// contain and skips past real output. Counting exactly what the server
+// persists is right in both, which is why the counter is defined that
+// way — and this row fails both of the other two.
+//
+// THAT DEFINITION IS A COUPLING TO THE SERVER and naming it is the point:
+// if what the far end persists ever widens, this de-duplication breaks
+// silently. So the assertion is the OBSERVABLE property — each line
+// rendered exactly once — rather than the mechanism, because a mechanism
+// row would stay green against a server that had changed underneath it.
+func TestTheEvictedReplayShapeAlsoRendersEachLineExactlyOnce(t *testing.T) {
+	const errText = "ERROR-LINE-E"
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{
+		// Typed, and cut: a phase among the lines, and an error among
+		// them.
+		{frames: []string{
+			logFrame("LINE-A"),
+			phaseFrame(wire.PhaseBuilding),
+			errorFrame(wire.CodeInternal, errText),
+			logFrame("LINE-B"),
+		}},
+		// Read back from storage: every line a log, the phase gone
+		// because it was never written down, then what came after.
+		{frames: []string{
+			logFrame("LINE-A"),
+			logFrame(errText),
+			logFrame("LINE-B"),
+			logFrame("LINE-C"),
+			doneFrame(wire.StatusBuilt),
+		}},
+	}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	printed := run.prompt.results.String()
+	for _, line := range []string{"LINE-A", errText, "LINE-B", "LINE-C"} {
+		n := strings.Count(printed, line)
+		switch {
+		case n == 0:
+			t.Errorf("%s never reached the terminal — a counter over EVERY event "+
+				"skips past it:\n%s", line, printed)
+		case n > 1:
+			t.Errorf("%s reached the terminal %d times — a counter over LOG events "+
+				"alone prints it again:\n%s", line, n, printed)
+		}
+	}
+	if n := run.script.eventConnections(); n != 2 {
+		t.Errorf("the stream was opened %d times, want 2", n)
+	}
+}
+
+// TestAPayloadThatWillNotDecodeStillCountsTowardsTheReplay is the third
+// shape of the same rule, and it is the one a careful implementation gets
+// wrong.
+//
+// The count means "how many persisted events has this connection
+// delivered". The server persisted an event whether or not this client
+// could read its payload — so counting only what DECODES leaves the tally
+// one short, and the next reconnection re-renders a line the reader has
+// already seen. Being careful about the wrong thing reaches the exact
+// failure the tally exists to prevent.
+//
+// THE REPLAY MUST BE READABLE WHERE THE ORIGINAL WAS NOT, or this row
+// cannot see the difference at all — measured, after a first version that
+// replayed the same broken frame and left the mutation GREEN. With the
+// same payload on both connections the two orders agree, because the
+// tally is ASSIGNED from the count rather than incremented and the next
+// readable event absorbs the gap. The shapes only diverge when the replay
+// carries something this client can read, which is the ordinary case
+// rather than a contrived one: the stored form of a line is text, and it
+// decodes when a mangled typed event did not.
+//
+// REQUIRED MUTATION, run 2026-09-08: count a log event only after its
+// payload decodes. Reds — "LINE-B reached the terminal 2 times".
+func TestAPayloadThatWillNotDecodeStillCountsTowardsTheReplay(t *testing.T) {
+	// An event of a type this client knows, carrying a payload it cannot
+	// read. A server that grew a field is not this; this is a bug at the
+	// far end, and the question is only what it costs here.
+	broken := rawFrame(string(wire.EventLog), `{"line": `)
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{
+		{frames: []string{broken, logFrame("LINE-B")}},
+		{frames: []string{
+			logFrame("LINE-A-READABLE-THIS-TIME"),
+			logFrame("LINE-B"), logFrame("LINE-C"),
+			doneFrame(wire.StatusBuilt),
+		}},
+	}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("a payload that would not decode stopped the run: %v\n%s",
+			err, rendered(err))
+	}
+
+	printed := run.prompt.results.String()
+	for _, line := range []string{"LINE-B", "LINE-C"} {
+		if n := strings.Count(printed, line); n != 1 {
+			t.Errorf("%s reached the terminal %d times, want exactly 1:\n%s",
+				line, n, printed)
+		}
+	}
+	// The event the first connection could not read is one the reader has
+	// already been counted as having seen, so its readable replacement is
+	// skipped rather than shown late. That is the cost of this rule, and
+	// it is stated here rather than left to be discovered: one line of a
+	// build log, lost to a payload the server sent wrong.
+	if strings.Contains(printed, "LINE-A-READABLE-THIS-TIME") {
+		t.Errorf("a replayed line the reader was already counted as having seen "+
+			"was shown late:\n%s", printed)
+	}
+	if n := run.script.eventConnections(); n != 2 {
+		t.Errorf("the stream was opened %d times, want 2", n)
+	}
+}
+
+// -------------------------------------------------------------------
+// Liveness
+// -------------------------------------------------------------------
+
+// TestAStreamThatStopsTalkingIsReconnected. Liveness is a STALL, not a
+// duration: a build that is quiet is a build that is working, and no
+// deadline can tell one from a connection that has died. The window
+// bounds the gap between two bytes, and nothing bounds the whole.
+//
+// REQUIRED MUTATION, run 2026-09-08: remove the stall watchdog. The row
+// then hangs on a connection nobody is going to close and dies of the
+// test binary's own timeout — "panic: test timed out after 15s, running
+// tests: TestAStreamThatStopsTalkingIsReconnected" — which IS the failure
+// it is about: without this rule a finished build waits for ever.
+//
+// THE FIRST ATTEMPT AT THAT MUTATION WAS NOT ONE. Changing only the
+// timer's initial duration left the row green, because the timer is also
+// reset on every line that arrives, so the first frame armed it again at
+// the real window. A mutation that removes half a mechanism measures the
+// other half; both the arming and the reset have to go.
+func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
+	const stall = 100 * time.Millisecond
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.deps.StreamStallTimeout = stall
+	run.script.eventScripts = []eventScript{
+		// Alive, then silent, and never closed: nothing about this
+		// connection is broken, which is why only a stall rule can see
+		// it.
+		{frames: []string{logFrame("LINE-A")}, hold: true},
+		{frames: []string{logFrame("LINE-A"), logFrame("LINE-B"), doneFrame(wire.StatusBuilt)}},
+	}
+
+	started := time.Now()
+	handoff, err := run.run()
+	defer handoff.Release()
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	if n := run.script.eventConnections(); n != 2 {
+		t.Fatalf("the stream was opened %d times, want 2 — a stream that stopped "+
+			"talking is reconnected", n)
+	}
+	if elapsed < stall {
+		t.Errorf("the run took %v, which is under the %v window — it cannot have "+
+			"given up because of the stall rule", elapsed, stall)
+	}
+	printed := run.prompt.results.String()
+	for _, line := range []string{"LINE-A", "LINE-B"} {
+		if n := strings.Count(printed, line); n != 1 {
+			t.Errorf("%s was printed %d times, want exactly 1:\n%s", line, n, printed)
+		}
+	}
+
+	// AND IT SAYS WHICH ENDING THIS WAS. A connection that is still up and
+	// has gone silent is a different thing to be told about from one that
+	// went away, and the pair of assertions is what stops the two
+	// sentences collapsing into one — the other half is on the row about a
+	// stream that ends after an error.
+	narrated := run.prompt.out.String()
+	if !strings.Contains(narrated, streamWentQuiet) {
+		t.Errorf("the run never said the build log had gone quiet:\n%s", narrated)
+	}
+	if strings.Contains(narrated, streamDropped) {
+		t.Errorf("a connection that was still up was described as lost:\n%s", narrated)
+	}
+}
+
+// TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered is the other half
+// of the pair, and without it the stall rule could be satisfied by a
+// client that gives up on any quiet connection.
+//
+// The comment frames a stream sends are the only thing crossing the
+// connection for most of a slow build. They are consumed as evidence and
+// never shown.
+//
+// THE MARGIN IS MEASURED RATHER THAN ASSUMED, and the fixture reports the
+// quantity the row actually depends on: the widest gap between two of its
+// own flushes. A red is then readable — a gap past the window means this
+// machine paused and the row measured the runner, not the client. Sizing
+// the window against the fixture's own pacing knob alone is how a timing
+// row becomes a flake with a schedule.
+//
+// REQUIRED MUTATION, run 2026-09-08: count only EVENTS as proof of life,
+// not comment frames. Reds — "a stream carrying nothing but keep-alives
+// was abandoned" — after the run spends its whole reconnect budget on a
+// connection that was never broken.
+//
+// THAT MUTATION FIRST RAN GREEN, and the cause was in the fixture rather
+// than in the client. A comment frame was being written with a blank line
+// after it, which it does not need — nothing is dispatched — and the
+// blank line is ordinary traffic to a reader that is not counting
+// comments as traffic. The fixture was measuring a property the client
+// did not have to have. A row is only as good as the bytes it sends.
+func TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered(t *testing.T) {
+	// THE STREAM MUST STAY QUIET FOR LONGER THAN THE WINDOW, or this row
+	// cannot see anything: forty beats at fifteen milliseconds is 600ms of
+	// nothing but comment frames against a 300ms window, so a client that
+	// did not count them as proof of life would have given up twice over.
+	//
+	// THE MARGIN THE OTHER WAY IS MEASURED RATHER THAN COMPUTED FROM THE
+	// PACE. What the client depends on is not the 15ms this row asks for
+	// but the interval it actually gets, which includes whatever the
+	// scheduler and the loopback stack add. Instrumented over 25 runs: the
+	// widest gap is 17.3ms, against a 300ms window — a margin of about
+	// seventeen, on the real quantity rather than on the knob.
+	//
+	// MEASURED ON ONE ENVIRONMENT, macOS on arm64, and carried unmeasured
+	// to the other two legs this project gates on. Scheduling granularity
+	// is a property of the kernel and the runner, so there is no reason the
+	// number transfers — which is why the fixture reports its own widest
+	// gap on every run and refuses rather than flakes when that gap has
+	// eaten the margin.
+	const stall = 300 * time.Millisecond
+	const pace = 15 * time.Millisecond
+	const beats = 40
+
+	frames := make([]string, 0, beats+1)
+	for i := 0; i < beats; i++ {
+		frames = append(frames, commentFrame())
+	}
+	frames = append(frames, doneFrame(wire.StatusBuilt))
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.deps.StreamStallTimeout = stall
+	run.script.eventScripts = []eventScript{{frames: frames, pace: pace}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("a stream carrying nothing but keep-alives was abandoned: %v\n%s",
+			err, rendered(err))
+	}
+
+	widest := run.script.widestGap()
+	// THE MEASUREMENT IS PRINTED, not only compared. A margin nobody can
+	// read is a margin nobody can check has stopped being one — and this
+	// number is a property of the runner rather than of this code, so it
+	// is the number a red on another machine would be about.
+	t.Logf("the fixture's widest gap between flushes was %v, against a %v window "+
+		"and a %v pace", widest, stall, pace)
+	if widest >= stall {
+		t.Fatalf("the fixture itself paused %v between flushes, past the %v window "+
+			"— this row measured the machine rather than the client", widest, stall)
+	}
+	if n := run.script.eventConnections(); n != 1 {
+		t.Errorf("the stream was opened %d times over %v of keep-alives, want 1 — "+
+			"a comment frame is proof of life", n, beats*pace)
+	}
+	if printed := run.prompt.results.String(); strings.Contains(printed, "keep-alive") {
+		t.Errorf("a keep-alive frame was rendered:\n%s", printed)
+	}
+	if shown := run.prompt.out.String(); strings.Contains(shown, "keep-alive") {
+		t.Errorf("a keep-alive frame was narrated:\n%s", shown)
+	}
+}
+
+// -------------------------------------------------------------------
+// The reader's bound
+// -------------------------------------------------------------------
+
+// TestALineLargerThanTheDefaultScannerBufferArrivesWhole.
+//
+// THE FAILURE BEING GUARDED IS NOT A LOST LINE. The standard line scanner
+// gives up at 64 KiB by reporting no more input, which is byte-identical
+// to a clean end of stream — and this client treats a stream that ends
+// without done as abnormal and reconnects. So a hidden cap is an infinite
+// loop over a build that has already finished: reconnect, replay from the
+// start, hit the same line, stop, reconnect. A cap nobody chose is still
+// a cap, and it fails in the shape that looks like success.
+//
+// The row therefore asserts three things: the line arrives whole, the
+// done AFTER it is received, and NO reconnection happened.
+//
+// REQUIRED MUTATION, run 2026-09-08: read the stream with the standard
+// scanner at its default buffer. Reds, and reds AS THE LOOP rather than
+// as a lost line: "a build log line of 65547 bytes stopped the run:
+// curious lost the build log and could not pick it up again ... 5
+// attempts to re-establish it did not last either". The build had already
+// finished. The only reason that run ended at all is the reconnect budget
+// this task also bounds — which is the two rules holding each other up,
+// and the reason the row asserts no reconnection happened rather than
+// only that the line arrived.
+func TestALineLargerThanTheDefaultScannerBufferArrivesWhole(t *testing.T) {
+	// One byte past the size at which the standard scanner gives up.
+	const oversize = 64*1024 + 1
+	line := "HEAD-" + strings.Repeat("x", oversize) + "-TAIL"
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{
+		frames: []string{logFrame(line), doneFrame(wire.StatusBuilt)},
+		hold:   true,
+	}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("a build log line of %d bytes stopped the run: %v\n%s",
+			len(line), err, rendered(err))
+	}
+
+	printed := run.prompt.results.String()
+	if !strings.Contains(printed, line) {
+		t.Errorf("the %d-byte line did not arrive whole: %d bytes were printed, "+
+			"head %q tail %q", len(line), len(printed),
+			printed[:min(40, len(printed))],
+			printed[max(0, len(printed)-40):])
+	}
+	if n := run.script.eventConnections(); n != 1 {
+		t.Errorf("the stream was opened %d times, want 1 — an oversized line that "+
+			"ends the read looks exactly like a finished stream, and gets retried "+
+			"for ever", n)
+	}
+}
+
+// -------------------------------------------------------------------
+// The sanitiser, end to end
+// -------------------------------------------------------------------
+
+// EVERY ROW BELOW PUSHES ITS BYTES THROUGH THE STREAM and asserts on the
+// output sink. A unit row on the escaping helper alone stays green when
+// the call is removed from this path, which would make two of this task's
+// mutations prove nothing. The helper has its own rows next door for the
+// questions a JSON payload cannot carry — a lone byte above 0x7F is not
+// valid UTF-8 and cannot travel in one.
+
+// TestEveryControlByteIsEscapedBeforeItReachesTheTerminal ranges the set
+// rather than listing bytes, so one cannot be missed by being forgotten.
+//
+// EVERY ASSERTION IS TWO-SIDED. "The raw byte is absent" is satisfied by
+// a client that dropped the line, so each line must also arrive with its
+// two ordinary characters and something printable between them.
+//
+// REQUIRED MUTATION, run 2026-09-08: remove the escaping call from the
+// stream's path to the terminal — the CALL SITE, not the helper, because
+// deleting the helper is a compile error and proves nothing about whether
+// this path uses it. Reds here and on the two rows below it; the
+// plain-line control stays green, and so does every row on the helper
+// itself next door, which is the whole reason these are end to end.
+//
+// It reds EARLIER than predicted and the correction is worth keeping. The
+// prediction was the per-byte assertion. What actually reports first is
+// the line count — "the terminal received 34 lines, want one per control
+// byte (33)" — because an unescaped newline in somebody's build output
+// silently becomes a second line. A stricter assertion firing first, and
+// a defect the per-byte check would not have named.
+func TestEveryControlByteIsEscapedBeforeItReachesTheTerminal(t *testing.T) {
+	var control []byte
+	for b := 0x00; b < 0x20; b++ {
+		control = append(control, byte(b))
+	}
+	control = append(control, 0x7f)
+	if len(control) != 33 {
+		t.Fatalf("the row built %d control bytes, want 33", len(control))
+	}
+
+	frames := make([]string, 0, len(control)+1)
+	for _, b := range control {
+		frames = append(frames, logFrame("a"+string([]byte{b})+"z"))
+	}
+	frames = append(frames, doneFrame(wire.StatusBuilt))
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{frames: frames}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	printed := run.prompt.results.String()
+	lines := strings.Split(strings.TrimSuffix(printed, "\n"), "\n")
+	if len(lines) != len(control) {
+		t.Fatalf("the terminal received %d lines, want one per control byte (%d):\n%q",
+			len(lines), len(control), printed)
+	}
+	for i, b := range control {
+		line := lines[i]
+		if line == "az" {
+			t.Errorf("byte %#02x was dropped rather than escaped: %q — deleting the "+
+				"byte satisfies an absence check and loses what it said", b, line)
+			continue
+		}
+		if !strings.HasPrefix(line, "a") || !strings.HasSuffix(line, "z") {
+			t.Errorf("byte %#02x took its neighbours with it: %q", b, line)
+			continue
+		}
+		for j := 0; j < len(line); j++ {
+			if line[j] < 0x20 || line[j] == 0x7f {
+				t.Errorf("byte %#02x reached the terminal unescaped: %q", b, line)
+				break
+			}
+		}
+	}
+}
+
+// TestACSISequenceRendersInertWithItsSurroundingsIntact. ESC is the
+// injection vector: everything a terminal OBEYS begins with it, so this
+// is the byte the whole mechanism exists for.
+//
+// "INERT" IS OTHERWISE SATISFIED BY DROPPING THE LINE, so the row asserts
+// both words survive and that the rest of the sequence arrives as
+// ordinary printable text.
+//
+// REQUIRED MUTATION, run 2026-09-08: remove the ESC entry alone from the
+// escape table. Reds here — "a raw ESC reached the terminal:
+// \"before\x1b[2Jafter\n\"" — and reds exactly ONE of the 33 assertions in
+// the ranged row above, "byte 0x1b reached the terminal unescaped", with
+// the other 32 green. That is what stops the ranged row passing on
+// aggregate.
+func TestACSISequenceRendersInertWithItsSurroundingsIntact(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{frames: []string{
+		logFrame("before\x1b[2Jafter"),
+		doneFrame(wire.StatusBuilt),
+	}}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	printed := run.prompt.results.String()
+	if strings.ContainsRune(printed, 0x1b) {
+		t.Errorf("a raw ESC reached the terminal: %q", printed)
+	}
+	for _, want := range []string{"before", "after", "[2J"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("the line lost %q — an escape must be made inert, not "+
+				"deleted: %q", want, printed)
+		}
+	}
+	if strings.Contains(printed, "beforeafter") {
+		t.Errorf("the escape was dropped rather than rendered: %q", printed)
+	}
+}
+
+// TestAnOrdinaryLineReachesTheTerminalUnchanged is the positive control
+// for every escaping row: without it, a client that escaped or dropped
+// everything would pass all of them. Multibyte text is included because
+// escaping BYTES rather than runes is what keeps it intact.
+func TestAnOrdinaryLineReachesTheTerminalUnchanged(t *testing.T) {
+	lines := []string{
+		"[build] 12 pages built in 1.20s",
+		"düğüm — 日本語 — 🚀",
+		`C:\Users\build\output`,
+	}
+	frames := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		frames = append(frames, logFrame(line))
+	}
+	frames = append(frames, doneFrame(wire.StatusBuilt))
+
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{frames: frames}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	want := strings.Join(lines, "\n") + "\n"
+	if got := run.prompt.results.String(); got != want {
+		t.Errorf("ordinary build output was rewritten on its way out:\n got %q\nwant %q",
+			got, want)
+	}
+}
+
+// TestALineAlreadyEscapedIsNotEscapedAgain drives idempotence through the
+// whole path, twice: what the terminal received the first time is fed
+// back through the stream, and the second rendering must be
+// byte-identical.
+//
+// The far end escapes the same vocabulary, so a line arriving here has
+// almost always been through an instance of this already. On clean input
+// an identity function would pass, which is why the fixture carries a
+// real ESC and other control bytes and why the first result is asserted
+// to differ from the input before the second is compared with it.
+func TestALineAlreadyEscapedIsNotEscapedAgain(t *testing.T) {
+	const dirty = "before\x1b[2Jafter\x00\x07\x7f end"
+
+	once := renderOneLine(t, dirty)
+	if once == dirty+"\n" {
+		t.Fatalf("the fixture came through unchanged, so this row is about clean "+
+			"input: %q", once)
+	}
+	if strings.ContainsRune(once, 0x1b) {
+		t.Fatalf("the first pass left a raw ESC: %q", once)
+	}
+
+	twice := renderOneLine(t, strings.TrimSuffix(once, "\n"))
+	if twice != once {
+		t.Errorf("a line the far end had already escaped was mangled again:\n"+
+			"  once:  %q\n  twice: %q", once, twice)
+	}
+}
+
+// renderOneLine pushes one build log line through a whole deploy and
+// returns exactly what the terminal received.
+func renderOneLine(t *testing.T, line string) string {
+	t.Helper()
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{frames: []string{
+		logFrame(line), doneFrame(wire.StatusBuilt),
+	}}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+	return run.prompt.results.String()
+}
+
+// -------------------------------------------------------------------
+// The stream split
+// -------------------------------------------------------------------
+
+// TestTheBuildLogGoesToStdoutAndTheNarrationToStderr. A redirected stdout
+// collects the build log and nothing else, which is the property that
+// makes `curious deploy > build.log` mean something.
+func TestTheBuildLogGoesToStdoutAndTheNarrationToStderr(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
+	run.prompt.confirms = []answer{no()}
+	run.script.eventScripts = []eventScript{{frames: []string{
+		phaseFrame(wire.PhaseBuilding),
+		logFrame("BUILD-OUTPUT-LINE"),
+		doneFrame(wire.StatusBuilt),
+	}}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+
+	printed, narrated := run.prompt.results.String(), run.prompt.out.String()
+	if !strings.Contains(printed, "BUILD-OUTPUT-LINE") {
+		t.Errorf("the build's own output did not reach stdout:\n%s", printed)
+	}
+	if strings.Contains(narrated, "BUILD-OUTPUT-LINE") {
+		t.Errorf("the build's own output was also narrated to stderr:\n%s", narrated)
+	}
+	for _, want := range []string{
+		phaseNarration + string(wire.PhaseBuilding) + ".",
+		finishedNarration + string(wire.StatusBuilt) + ".",
+	} {
+		if !strings.Contains(narrated, want) {
+			t.Errorf("this client's own narration (%q) did not reach stderr:\n%s",
+				want, narrated)
+		}
+		if strings.Contains(printed, want) {
+			t.Errorf("this client's own narration (%q) went to stdout, which is "+
+				"the build log's:\n%s", want, printed)
+		}
+	}
+}
+
+// TestTheStreamsFailureNamesTheDeployAndNeverTheToken. The stream is the
+// one authenticated call built outside the shared request path, which is
+// exactly where a credential gets formatted into a message by whoever
+// adds the next branch.
+func TestTheStreamsFailureNamesTheDeployAndNeverTheToken(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "valid"))
+	run.storedToken(streamTestToken, run.srv.URL)
+	// Every connection is refused by the server with an envelope it
+	// wrote, so the failure travels the path that has the token in hand.
+	run.script.eventScripts = []eventScript{{frames: []string{
+		logFrame("LINE-A"),
+	}}}
+
+	handoff, err := run.run()
+	defer handoff.Release()
+	if err == nil {
+		t.Fatal("a stream that never said done was reported as a finished build")
+	}
+
+	text, _ := renderedBytes(t, err)
+	surfaces := map[string]string{
+		"the rendered failure": text,
+		"what the run printed": run.prompt.out.String(),
+		"the build log":        run.prompt.results.String(),
+	}
+	for name, surface := range surfaces {
+		if strings.Contains(surface, streamTestToken) {
+			t.Errorf("%s carries the bearer token:\n%s", name, surface)
+		}
+	}
+	// The positive half. Without it an empty message satisfies the above.
+	if !strings.Contains(text, "deploy-1") {
+		t.Errorf("the failure names no deploy, so the absences above are also "+
+			"satisfied by silence:\n%s", text)
+	}
+}
+
+// streamTestToken is a fixture value and names no real credential.
+const streamTestToken = "stream-bearer-sentinel-value"

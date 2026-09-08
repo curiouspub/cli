@@ -98,7 +98,8 @@ The finished product is one binary with two faces:
 
 **What exists in the tree right now is smaller than that, and this
 section says so on purpose.** Today `curious` dispatches `version`, a
-`deploy` that runs everything up to and including the upload, and an
+`deploy` that runs everything up to and including the streamed build
+log, and an
 `mcp` server that is **transport and dispatch with NO TOOLS REGISTERED**
 — a client connects, completes a handshake and receives an empty tool
 list, because the callables an agent would actually use land in a later
@@ -112,23 +113,47 @@ moves the code.
 `deploy` resolves the directory, reads any stored login, walks the
 project once, runs the pre-flight checks and the local limits over that
 one walk, checks capacity and logs in when there is no usable token,
-packs the archive, asks the server for somewhere to send it, and uploads
-it — **and then stops, with the archive removed and a line saying so.**
-Streaming the build and the published URL are the next change. The
+packs the archive, asks the server for somewhere to send it, uploads it,
+asks the server to build, and renders the build log until the build
+finishes — **and then stops, with the archive removed and a line saying
+so.** Publishing the built site and printing its address are the next
+change. The
 ordering is the product rather than an implementation detail: everything
 free and local runs first, so **a project that cannot deploy makes zero
 network calls**, and nobody is walked through email verification before
 being told there is no `package.json`.
 
-Two properties of that last pair are worth stating here, because both are
-easy to undo by accident. **Authentication is per CALL, not per client**:
-the create sends the bearer token and the four unauthenticated endpoints
-cannot, and the upload cannot either — the presigned link IS the
-credential, and adding a second one sends it to an origin that never
-asked. And **the upload's failure copy never quotes the link**: every
-transport failure net/http produces carries the whole signed URL, so the
-single error constructor and the redacted host are what keep a credential
-out of a message.
+Four properties of the network half are worth stating here, because each
+is easy to undo by accident.
+
+**Authentication is per CALL, not per client**: the create, the start and
+the event stream send the bearer token, the four unauthenticated
+endpoints cannot, and the upload cannot either — the presigned link IS
+the credential, and adding a second one sends it to an origin that never
+asked.
+
+**The upload's failure copy never quotes the link**: every transport
+failure net/http produces carries the whole signed URL, so the single
+error constructor and the redacted host are what keep a credential out of
+a message.
+
+**Neither long-running step takes a total deadline, and that is one
+ruling applied twice rather than a habit.** The upload waits for the next
+BYTE and the stream waits for the next byte too; nothing bounds either as
+a whole. A deadline cannot express "is this making progress", and the
+same 30 seconds that is generous for a small request and a small answer
+kills a large upload on an ordinary uplink and any build quieter than
+half a minute. A constant carries its number and not the reason the
+number was chosen, so each of these windows is picked where it is used
+and says what it bounds there.
+
+**Everything the build prints is escaped before it reaches the
+terminal.** The build log is arbitrary program output — the package
+manager and the site builder pass through whatever a project prints — and
+a terminal obeys some of those bytes. The service escapes the same set at
+its end; this client escapes it again, because a local safety property
+must not rest on a remote guarantee it cannot verify, watch regress, or
+version-check.
 
 The split between the server and its tools is deliberate rather than a
 staging accident: a server with no tools is testable against the protocol

@@ -3,9 +3,21 @@
 // together into what a person running `curious deploy` sees.
 //
 // The sequence is here now and `curious deploy` runs it. It stops with a
-// formed request in hand: the archive is packed and the upload, the log
-// stream and the published URL arrive in a later change, so Deploy hands
-// its caller a Handoff rather than a live site.
+// built deploy in hand: the archive is packed, uploaded and built, and
+// the log of that build has been rendered — but publishing the result and
+// printing its address arrive in a later change, so Deploy hands its
+// caller a Handoff rather than a site anybody can visit.
+//
+// # Why the stream is a narrator and not an authority
+//
+// The event stream's terminating event carries the BUILDER's own claim.
+// Output validation runs after it, and can still refuse what the build
+// produced — so a client that treated that event as the settled truth
+// would tell somebody their build succeeded and then report a failure at
+// the next step, which is a description of the wrong event. This package
+// renders what the stream said, stops only on a build the server says
+// failed, and leaves the rest of the question to the call that can
+// actually answer it.
 //
 // This is where the DECISIONS about a result are made rather than where
 // the result is produced — what a warning costs, what a hard stop costs,

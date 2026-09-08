@@ -72,6 +72,11 @@ func (p *journalPrompt) Step(format string, args ...any) {
 	p.scriptedPrompt.Step(format, args...)
 }
 
+func (p *journalPrompt) Result(format string, args ...any) {
+	p.journal.note("printed: " + fmt.Sprintf(format, args...))
+	p.scriptedPrompt.Result(format, args...)
+}
+
 func (p *journalPrompt) Line(prompt string) (string, error) {
 	p.journal.note("asked: " + prompt)
 	return p.scriptedPrompt.Line(prompt)
@@ -217,16 +222,212 @@ type deployScript struct {
 	// the run re-authenticate and try again — and watch it stop when a
 	// second refusal follows the fresh login.
 	refuseCreatesUntil int
+
+	// startOutcome scripts the start's answer and startBody is the
+	// success body it sends, written as raw JSON so a row can return a
+	// status this build has never heard of — which is the only way to
+	// drive the render-unknown obligation from the endpoint that
+	// actually carries it.
+	startOutcome outcome
+	startBody    string
+
+	// startHangsUp makes the start receive the request and then drop the
+	// connection without answering, which is how a row produces "the
+	// request left this process and no answer came back" WITH THE RUN
+	// STILL ALIVE.
+	//
+	// A CANCELLED CONTEXT WILL NOT DO, and finding that out is what this
+	// field is for. Cancelling the run to make an answer never arrive
+	// also makes every subsequent request fail before it leaves the
+	// machine — so a client that retried would send nothing, the server
+	// would count nothing, and a row asserting "sent exactly once" would
+	// pass against exactly the client it exists to refuse. Measured: the
+	// mutation that adds a retry left that row green.
+	startHangsUp bool
+
+	// eventScripts is the queue of connections the event stream serves:
+	// the first GET gets the first entry, the second the second, and once
+	// the queue is exhausted the LAST entry repeats. That last part is
+	// what lets a row say "every reconnection meets the same broken
+	// stream" without writing the same script six times.
+	eventScripts []eventScript
+	eventGETs    int
+
+	// eventGaps is the interval between the handler's own flushes, every
+	// connection's collected together. A timing row reads it to say
+	// whether it measured the client or the machine: a fixture that
+	// itself paused past the window under test has measured the runner.
+	eventGaps []time.Duration
+
+	// release is closed when the test ends, so a connection held open on
+	// purpose cannot outlive its row.
+	release chan struct{}
+}
+
+// eventScript is ONE connection to the event stream: the frames it
+// writes, and what it does when it has written them.
+type eventScript struct {
+	// frames are written and flushed in order, so a client sees them
+	// arrive rather than finding them all in one read.
+	frames []string
+
+	// pace is how long the handler waits between frames. It is what
+	// makes a stream that is merely slow distinguishable from one that
+	// has stopped.
+	pace time.Duration
+
+	// hold keeps the connection OPEN after the last frame instead of
+	// closing it, until the test ends or the client goes away.
+	//
+	// IT IS THE INSTRUMENT FOR TWO OPPOSITE ROWS. After a terminating
+	// event it means a client that ignored that event HANGS rather than
+	// passing: closing the connection would hand such a client an
+	// end-of-stream it could mistake for the ending it failed to read.
+	// After no terminating event it is a stream that has gone quiet with
+	// nothing broken, which is what a liveness rule has to see.
+	hold bool
+}
+
+// eventsPathSuffix and startPathSuffix name the two per-deploy endpoints
+// this double serves. They are matched as a SHAPE rather than as whole
+// paths because the id in the middle is the create's to choose, and a row
+// asserting the id arrived is the point.
+const (
+	startAction      = "start"
+	eventsAction     = "events"
+	deployPathPrefix = "/v1/deploys/"
+)
+
+// deployAction splits a per-deploy path into the id and the action, and
+// reports whether the path had that shape at all.
+func deployAction(path string) (id, action string, ok bool) {
+	if !strings.HasPrefix(path, deployPathPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(path, deployPathPrefix)
+	id, action, found := strings.Cut(rest, "/")
+	if !found || id == "" || action == "" {
+		return "", "", false
+	}
+	return id, action, true
+}
+
+// eventScriptFor is the connection the nth event GET is served, with the
+// last entry repeating once the queue runs out. The default — nothing
+// scripted at all — is one line of build output and a build that
+// finished, so every row in this file that is about something else still
+// runs a deploy to its end.
+func (s *deployScript) eventScriptFor(n int) eventScript {
+	if len(s.eventScripts) == 0 {
+		return eventScript{frames: []string{
+			logFrame("astro build finished"),
+			doneFrame(wire.StatusBuilt),
+		}}
+	}
+	if n > len(s.eventScripts) {
+		n = len(s.eventScripts)
+	}
+	return s.eventScripts[n-1]
+}
+
+// serveEvents writes one scripted connection.
+//
+// IT RUNS WITHOUT THE SCRIPT'S MUTEX, and that is not an optimisation: a
+// held-open stream keeps this goroutine for the life of the row, and
+// holding the mutex with it would deadlock every assertion made
+// afterwards — including the ones about the start that ran before it.
+func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, script eventScript, release <-chan struct{}) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	flusher, canFlush := w.(http.Flusher)
+	if canFlush {
+		flusher.Flush()
+	}
+
+	last := time.Now()
+	var gaps []time.Duration
+	for _, frame := range script.frames {
+		if script.pace > 0 {
+			select {
+			case <-time.After(script.pace):
+			case <-release:
+				return
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if _, err := io.WriteString(w, frame); err != nil {
+			return
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+		now := time.Now()
+		gaps = append(gaps, now.Sub(last))
+		last = now
+	}
+
+	s.mu.Lock()
+	s.eventGaps = append(s.eventGaps, gaps...)
+	s.mu.Unlock()
+
+	if script.hold {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}
 }
 
 func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.requests++
 	s.paths = append(s.paths, r.URL.Path)
 	s.bearers = append(s.bearers, r.Header.Get("Authorization"))
 	s.journal.note(r.Method + " " + r.URL.Path)
+
+	if _, action, ok := deployAction(r.URL.Path); ok && action == eventsAction {
+		s.eventGETs++
+		script, release := s.eventScriptFor(s.eventGETs), s.release
+		s.mu.Unlock()
+		s.serveEvents(w, r, script, release)
+		return
+	}
+
+	defer s.mu.Unlock()
+
+	if _, action, ok := deployAction(r.URL.Path); ok {
+		if action != startAction {
+			s.strays = append(s.strays, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if s.startHangsUp {
+			// The request arrived and is not answered: the connection
+			// goes away underneath it.
+			if hijacker, ok := w.(http.Hijacker); ok {
+				if conn, _, hijackErr := hijacker.Hijack(); hijackErr == nil {
+					_ = conn.Close()
+					return
+				}
+			}
+			panic("this server cannot drop a connection, so the row that needs one " +
+				"would silently be measuring something else")
+		}
+		if s.startOutcome.code != "" {
+			s.reply(w, s.startOutcome, nil)
+			return
+		}
+		body := s.startBody
+		if body == "" {
+			body = `{"status":"` + string(wire.StatusBuilding) + `"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, body)
+		return
+	}
 
 	switch r.URL.Path {
 	case "/v1/capacity":
@@ -510,6 +711,85 @@ const storeErrorDocument = `<?xml version="1.0" encoding="UTF-8"?>` +
 	`<Message>Do not render me.</Message>` +
 	`<RequestId>abc123</RequestId></Error>`
 
+// -------------------------------------------------------------------
+// The event frames
+// -------------------------------------------------------------------
+
+// The frame builders below write REAL Server-Sent Events: an event name,
+// a data line carrying the contract's own JSON, and the blank line that
+// dispatches it. They go through encoding/json rather than through a
+// hand-written string, so a control byte in a fixture is escaped the way
+// a server would escape it and the client decodes what a server would
+// really have sent.
+
+// rawFrame is the general form, for the two shapes the contract's Go
+// types cannot express: an event type this build has never heard of, and
+// a field value outside the vocabulary an enum can hold.
+func rawFrame(name, data string) string {
+	return "event: " + name + "\ndata: " + data + "\n\n"
+}
+
+// commentFrame is a keep-alive: no event, no data, nothing to render. The
+// stream sends these so a connection with nothing to say still proves it
+// is there.
+//
+// IT IS ONE LINE AND NOT TWO, and the difference turned out to matter. A
+// comment needs no blank line after it — it dispatches nothing — and
+// writing one anyway hands the client an ordinary empty line, which is
+// enough to look like traffic to a reader that is not counting comments
+// as traffic. Measured: with the trailing blank line, the mutation that
+// makes only EVENTS count as proof of life left this row green.
+func commentFrame() string { return ": keep-alive\n" }
+
+func logFrame(line string) string {
+	data, err := json.Marshal(wire.LogEvent{Line: line})
+	if err != nil {
+		// Unreachable for a struct of strings. Panicking rather than
+		// swallowing keeps a broken fixture from producing a frame the
+		// client would then be blamed for.
+		panic(err)
+	}
+	return rawFrame(string(wire.EventLog), string(data))
+}
+
+func phaseFrame(phase wire.Phase) string {
+	return rawFrame(string(wire.EventPhase), `{"phase":"`+string(phase)+`"}`)
+}
+
+func errorFrame(code wire.ErrorCode, message string) string {
+	data, err := json.Marshal(wire.Error{Code: code, Message: message})
+	if err != nil {
+		panic(err)
+	}
+	return rawFrame(string(wire.EventError), string(data))
+}
+
+func doneFrame(status wire.DeployStatus) string {
+	return rawFrame(string(wire.EventDone), `{"status":"`+string(status)+`"}`)
+}
+
+// eventConnections is how many times the stream was opened.
+func (s *deployScript) eventConnections() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.eventGETs
+}
+
+// widestGap is the longest interval the fixture itself left between two
+// flushes. A timing row reads it to tell "the client gave up too early"
+// from "this machine paused", which are otherwise the same red.
+func (s *deployScript) widestGap() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var widest time.Duration
+	for _, g := range s.eventGaps {
+		if g > widest {
+			widest = g
+		}
+	}
+	return widest
+}
+
 func (s *deployScript) sent() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -574,9 +854,15 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 		capacity: wire.CapacityResponse{Open: true, AccountsLeft: 200},
 		token:    "issued-token",
 		store:    store,
+		release:  make(chan struct{}),
 	}
 	srv := httptest.NewServer(script)
 	t.Cleanup(srv.Close)
+	// The release closes FIRST, so a stream held open on purpose is let
+	// go before srv.Close waits for it. Cleanups run
+	// last-registered-first, which is the same order the object store
+	// next door relies on.
+	t.Cleanup(func() { close(script.release) })
 	t.Cleanup(func() {
 		script.mu.Lock()
 		defer script.mu.Unlock()
@@ -602,6 +888,13 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 		TempDir: run.tempParent,
 		FS:      run.fsys,
 		Now:     func() time.Time { return fixedNowLocal },
+		// THE RECONNECT DELAY IS INJECTED FOR EVERY ROW, not only the
+		// ones about reconnecting, for the same reason the clock is: the
+		// shipped schedule is seconds and a row that reconnects five
+		// times would spend all of them waiting. Nothing here chooses a
+		// different SCHEDULE — the shape and the attempt count are the
+		// shipped ones — only a step short enough to run in a suite.
+		StreamReconnectStep: time.Millisecond,
 		Interrupts: func(cleanup func()) func() {
 			journal.note("interrupt handler installed")
 			run.installs++
@@ -688,6 +981,10 @@ func landmarks(events []string) []string {
 			step = "create"
 		case e == "PUT (object store)":
 			step = "upload"
+		case strings.HasPrefix(e, "POST "+deployPathPrefix) && strings.HasSuffix(e, "/"+startAction):
+			step = "start"
+		case strings.HasPrefix(e, "GET "+deployPathPrefix) && strings.HasSuffix(e, "/"+eventsAction):
+			step = "stream"
 		default:
 			continue
 		}
@@ -787,7 +1084,8 @@ func TestTheSequenceRunsInTheOrderTheSpecSets(t *testing.T) {
 	}
 	defer handoff.Release()
 
-	want := []string{"walk", "pre-flight", "capacity", "login", "pack", "create", "upload"}
+	want := []string{"walk", "pre-flight", "capacity", "login", "pack", "create",
+		"upload", "start", "stream"}
 	if got := landmarks(run.journal.all()); !equalEvents(got, want) {
 		t.Errorf("the run happened in the order %v, want %v\n\nfull journal:\n  %s",
 			got, want, strings.Join(run.journal.all(), "\n  "))
