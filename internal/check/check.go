@@ -167,6 +167,36 @@ type Finding struct {
 	What string
 	Why  string
 	Next string
+
+	// Sizes are the measurements that go with Paths, in bytes, one per
+	// path and in the same order. Empty when the paths carry no
+	// measurement, which is most findings.
+	//
+	// IT IS A PARALLEL SLICE RATHER THAN PROSE, and the reason is the
+	// one that made Paths a field in the first place. A check with sizes
+	// to report used to render its own table into What — "5.2 MB
+	// public/hero.png", laid out by hand — and then ALSO set Paths,
+	// because the machine-readable surface needs them. The renderer
+	// appends Paths under the Why unconditionally, so the offenders
+	// appeared twice in the one hard stop a user most needs to read:
+	// once measured, once bare.
+	//
+	// The alternative was a flag telling the renderer the message had
+	// already named them. That is a trust-me field: it says nothing a
+	// reader can check and nothing the type can enforce, and it goes
+	// stale the first time somebody edits the message without it. This
+	// carries the FACTS instead, and one renderer formats them once.
+	//
+	// A machine reading this result gets a number it can compare rather
+	// than a string it has to parse back out of English, which is the
+	// deciding argument: the agent-facing surface is not a rendering of
+	// the human one, and a measurement folded into prose is a
+	// measurement only a person can use.
+	//
+	// Combine refuses a finding whose Sizes are present and do not match
+	// its Paths one for one, so a reader may pair them by index without
+	// checking.
+	Sizes []int64
 }
 
 // HasCopy reports whether this Finding carries product copy of its own.

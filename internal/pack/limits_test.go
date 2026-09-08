@@ -214,10 +214,20 @@ func TestTheFileSizeBoundaryIsInclusive(t *testing.T) {
 			// instead of the defect.
 			continue
 		}
-		text := wholeFinding(found[0])
-		if !strings.Contains(text, "public/asset.bin") {
-			t.Errorf("a file of %d bytes: the message does not name the file:\n%s", row.size, text)
+		// THE PATH IS READ FROM Paths, NOT FROM THE PROSE. The finding
+		// carries its offenders as facts and the renderer formats them;
+		// a row grepping the copy for a filename would go green the day
+		// somebody reworded a sentence and red the day the list broke,
+		// which is the wrong way round.
+		if !reflect.DeepEqual(found[0].Paths, []string{"public/asset.bin"}) {
+			t.Errorf("a file of %d bytes: Paths = %v, want the offender",
+				row.size, found[0].Paths)
 		}
+		if !reflect.DeepEqual(found[0].Sizes, []int64{row.size}) {
+			t.Errorf("a file of %d bytes: Sizes = %v, want the measurement beside it",
+				row.size, found[0].Sizes)
+		}
+		text := wholeFinding(found[0])
 		if !strings.Contains(text, "5.0 MB") {
 			t.Errorf("a file of %d bytes: the message does not restate the limit "+
 				"in the reader's units:\n%s", row.size, text)
@@ -259,8 +269,12 @@ func TestEveryOversizeFileIsReportedInOneRun(t *testing.T) {
 	if !reflect.DeepEqual(found[0].Paths, want) {
 		t.Errorf("Paths = %v, want %v — largest first", found[0].Paths, want)
 	}
-	if pos := listedInOrder(found[0].What, want); pos != "" {
-		t.Errorf("the message lists the files out of order: %s\n%s", pos, found[0].What)
+	// Sizes travel with the paths, in the same order, so a reader can
+	// pair them by index — which is the contract the gate enforces.
+	wantSizes := []int64{18_900_000, 12_400_000, 6_000_000, 5_200_000}
+	if !reflect.DeepEqual(found[0].Sizes, wantSizes) {
+		t.Errorf("Sizes = %v, want %v — largest first, beside their paths",
+			found[0].Sizes, wantSizes)
 	}
 	if strings.Contains(wholeFinding(found[0]), "public/small.png") {
 		t.Errorf("the message names a file that is within the limit:\n%s", found[0].What)
@@ -274,8 +288,12 @@ func TestEveryOversizeFileIsReportedInOneRun(t *testing.T) {
 // again.
 //
 // REQUIRED MUTATION, run 2026-09-08: drop the "and N more" line from
-// sizedList. Reds on the count sentence while the ten-line assertion
-// stays green, which is the half of the property that has no other row.
+// andMore. Reds on the count sentence while the ten-path assertion stays
+// green, which is the half of the property that has no other row.
+//
+// THE COUNT STAYS IN THE COPY WHILE THE LIST MOVED OUT, and that split
+// is deliberate: the renderer knows how many paths it was handed, and
+// only this check knows how many there were.
 func TestTheOversizeListStopsAtTenAndSaysHowManyMore(t *testing.T) {
 	var files []File
 	for i := 0; i < 42; i++ {
@@ -289,10 +307,14 @@ func TestTheOversizeListStopsAtTenAndSaysHowManyMore(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("findings = %v, want one", found)
 	}
-	if n := strings.Count(found[0].What, "public/blob-"); n != listedOffenders {
-		t.Errorf("the message names %d files, want %d", n, listedOffenders)
+	if n := len(found[0].Paths); n != listedOffenders {
+		t.Errorf("the finding carries %d paths, want %d", n, listedOffenders)
 	}
-	if !strings.Contains(found[0].What, "and 32 more.") {
+	if n := len(found[0].Sizes); n != listedOffenders {
+		t.Errorf("the finding carries %d sizes, want %d — the gate refuses a "+
+			"finding whose two lists disagree", n, listedOffenders)
+	}
+	if !strings.Contains(found[0].What, "and 32 more") {
 		t.Errorf("the message does not say how many were left out:\n%s", found[0].What)
 	}
 	if !strings.Contains(found[0].Message, "42 files are larger") {
@@ -364,14 +386,19 @@ func TestTheTotalMessageNamesTheLargestFiles(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("findings = %v, want one", found)
 	}
-	if n := strings.Count(found[0].What, "assets/"); n != listedOffenders {
-		t.Errorf("the message names %d files, want the %d largest", n, listedOffenders)
+	if n := len(found[0].Paths); n != listedOffenders {
+		t.Errorf("the finding carries %d paths, want the %d largest", n, listedOffenders)
 	}
-	if !strings.Contains(found[0].What, "assets/00.bin") {
-		t.Errorf("the message does not start with the largest:\n%s", found[0].What)
+	if len(found[0].Paths) > 0 && found[0].Paths[0] != "assets/00.bin" {
+		t.Errorf("Paths[0] = %q, want the largest first", found[0].Paths[0])
 	}
-	if strings.Contains(found[0].What, "assets/13.bin") {
-		t.Errorf("the message names the smallest file:\n%s", found[0].What)
+	if !reflect.DeepEqual(found[0].Sizes[:1], []int64{3_000_000}) {
+		t.Errorf("Sizes[0] = %v, want the largest file's measurement", found[0].Sizes[:1])
+	}
+	for _, p := range found[0].Paths {
+		if p == "assets/13.bin" {
+			t.Errorf("the finding names the smallest file: %v", found[0].Paths)
+		}
 	}
 }
 

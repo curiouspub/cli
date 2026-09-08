@@ -266,13 +266,21 @@ func fileSizeFinding(files []File) (check.Finding, bool) {
 	headline := fmt.Sprintf("%s larger than %s, which is the most any single file may be.",
 		countOf(len(over), "file is", "files are"), units.Bytes(wire.MaxSourceFileBytes))
 
+	listed := capped(over)
 	return check.Finding{
 		CheckID:  check.IDLimitFileSize,
 		Severity: check.SeverityHardStop,
 		Message:  headline,
-		What:     headline + "\n\nLargest first:\n" + sizedList(over),
-		Paths:    check.NewPaths(pathsOfFiles(capped(over))...),
-		Why:      alreadyExcluded(),
+		// THE TABLE IS NOT WRITTEN HERE ANY MORE. This used to lay the
+		// offenders out in What and also set Paths, so the renderer
+		// printed them twice — once measured, once bare. The facts now
+		// travel as facts and one renderer formats them, which is also
+		// what puts a number on the agent-facing surface instead of an
+		// English sentence a machine has to parse back.
+		What:  headline + "\n\nLargest first:" + andMore(len(over)),
+		Paths: check.NewPaths(pathsOfFiles(listed)...),
+		Sizes: sizesOfFiles(listed),
+		Why:   alreadyExcluded(),
 		Next: "Shrink or remove each one, or add it to .gitignore if the site does not " +
 			"need it, then run `curious deploy` again.",
 	}, true
@@ -301,12 +309,14 @@ func totalSizeFinding(files []File) (check.Finding, bool) {
 		"This project is %s of source, and %s is the most one deploy can carry.",
 		units.Bytes(total), units.Bytes(wire.MaxSourceTotalBytes))
 
+	listed := capped(largest)
 	return check.Finding{
 		CheckID:  check.IDLimitTotal,
 		Severity: check.SeverityHardStop,
 		Message:  headline,
-		What:     headline + "\n\nThe largest files:\n" + sizedList(largest),
-		Paths:    check.NewPaths(pathsOfFiles(capped(largest))...),
+		What:     headline + "\n\nThe largest files:" + andMore(len(largest)),
+		Paths:    check.NewPaths(pathsOfFiles(listed)...),
+		Sizes:    sizesOfFiles(listed),
 		Why:      alreadyExcluded(),
 		Next: "Add whatever the site does not need to .gitignore, or move large assets " +
 			"out of the project, then run `curious deploy` again.",
@@ -542,15 +552,27 @@ func (c *byteCounter) Write(p []byte) (int, error) {
 // down. Paths vary in length and putting them first pushes every number
 // to a different place on the line, which is the difference between a
 // list and a table.
-func sizedList(files []File) string {
-	var b strings.Builder
-	for _, f := range capped(files) {
-		fmt.Fprintf(&b, "\n  %10s  %s", units.Bytes(f.Size), f.Path)
+// sizesOfFiles is the measurement half of a finding's path list, in the
+// same order, so the two can be read by index.
+func sizesOfFiles(files []File) []int64 {
+	sizes := make([]int64, len(files))
+	for i, f := range files {
+		sizes[i] = f.Size
 	}
-	if rest := len(files) - listedOffenders; rest > 0 {
-		fmt.Fprintf(&b, "\n\n  and %s more.", units.Count(rest))
+	return sizes
+}
+
+// andMore is the sentence that follows a capped list, or nothing.
+//
+// It stays in the copy rather than moving to the renderer with the
+// table, because it is a statement about what this check MEASURED and
+// chose not to list. The renderer knows how many paths it was handed; it
+// does not know how many there were.
+func andMore(total int) string {
+	if rest := total - listedOffenders; rest > 0 {
+		return fmt.Sprintf("\n\n(and %s more, not listed)", units.Count(rest))
 	}
-	return b.String()
+	return ""
 }
 
 func capped(files []File) []File {
