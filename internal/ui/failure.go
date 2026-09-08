@@ -61,29 +61,28 @@ func NewFailure(what, why, next string) *Failure {
 	return &Failure{What: what, Why: why, Next: next}
 }
 
-// NoLockfile and NotAnAstroProject are the two worked examples, kept
-// here so the checks that own those conditions render the same words
-// rather than each writing its own. Copy that exists in two places
-// diverges, and the divergence shows up as two halves of one program
-// telling a user different stories.
-var (
-	NoLockfile = &Failure{
-		What: "No lockfile found.",
-		Why: "curious installs your dependencies from a lockfile, so it builds the\n" +
-			"exact versions you tested. Your project has package.json but no\n" +
-			"package-lock.json, npm-shrinkwrap.json or pnpm-lock.yaml.",
-		Next: "Run `npm install` (or `pnpm install`), commit the lockfile it\n" +
-			"creates, and try again.",
-	}
-
-	NotAnAstroProject = &Failure{
-		What: "This doesn't look like an Astro project.",
-		Why: "curious deploys Astro sites, and package.json here doesn't list\n" +
-			"astro as a dependency.",
-		Next: "If this is the wrong folder, pass the right one:\n" +
-			"`curious deploy ./my-site`.",
-	}
-)
+// THE TWO WORKED EXAMPLES USED TO LIVE HERE, and where they went is
+// worth a paragraph because this is the file a reader looks in for them.
+//
+// They were three-part copy about a missing lockfile and a project that
+// declares no Astro dependency, sitting in this package with nothing but
+// its own tests reading it — because a pre-flight finding could carry
+// only a one-line summary, and there was no way to deliver three
+// paragraphs from the check that met the condition to the person
+// standing in front of it. A finding now carries optional What, Why and
+// Next, and a lone hard finding renders its own copy, so the words went
+// to the checks that own those conditions.
+//
+// The centralising instinct was right and it picked the wrong package.
+// Copy in two places diverges, and the divergence shows up as two halves
+// of one program telling a user different stories — but the second place
+// was never this one. It was the CONDITION, which lives with the check,
+// and words and condition are what had to stop being two things.
+//
+// What stays here is copy this package itself is the author of: the
+// failures below belong to situations this package meets on its own —
+// a prompt with no terminal, a prompt nobody answered, a door held shut
+// — and there is no check anywhere that owns them.
 
 // notInteractiveFailure is the fallback rendering for a prompt reached
 // with no terminal. It is deliberately generic: only the caller knows
@@ -135,6 +134,29 @@ var serverClosedFailure = &Failure{
 	Why: "The server is closed to this run — not because of anything wrong with\n" +
 		"your project, and not because of anything you did.",
 	Next: "Try again a little later. Nothing has been uploaded.",
+}
+
+// publishedFailures is every standing Failure this package can put in
+// front of a person, keyed by the name it is declared under.
+//
+// IT EXISTS BECAUSE A HAND-TYPED LIST IS NOT A SET. The row that asserts
+// every published failure names an action used to carry its own literal
+// of three names under a comment claiming it checked them "as a SET". It
+// was true when it was written and stopped being true the day
+// serverClosedFailure was added — nobody edits a test in another package
+// while adding copy, and nothing made them. That is a closed list built
+// by a pattern, unable to contain the members that arrive after the
+// pattern was chosen.
+//
+// So the set has one home, here, beside the values — and
+// TestPublishedFailureSetIsComplete reads this package's own source to
+// prove it holds every one of them. Adding a Failure without adding it
+// here reds. That is what makes serverClosedFailure the last member a
+// list ever silently drops.
+var publishedFailures = map[string]*Failure{
+	"notInteractiveFailure": notInteractiveFailure,
+	"noAnswerFailure":       noAnswerFailure,
+	"serverClosedFailure":   serverClosedFailure,
 }
 
 // Fail writes a Failure to stderr — never stdout, because a failure is

@@ -1,0 +1,7 @@
+{
+  "name": "lockfile-bun-only-fixture",
+  "private": true,
+  "dependencies": {
+    "astro": "^5.0.0"
+  }
+}

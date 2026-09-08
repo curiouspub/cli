@@ -171,6 +171,28 @@ func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(na
 // alone if none does — the ambiguity note used to be decided inside the
 // pages-dir path, and was therefore silently dropped on every project
 // whose pages directory was already where Astro expects it.
+// AstroConfigCheck is the pages-dir and build-format rows as the engine
+// registers them — one check answering two questions off one parse of
+// one file.
+//
+// IT LIVES IN PRODUCTION RATHER THAN IN A TEST, which is a correction.
+// This value existed only as a helper inside the engine's own suite, so
+// the single piece of wiring that connects the finished check to the
+// finished engine was a thing no shipped binary could reach — the suite
+// proved the seam fits and nothing proved anybody had used it.
+//
+// NEITHER ID EVER HARD-STOPS. A missing pages directory does not fail an
+// Astro build, and an integration that injects its own routes ships
+// without one, so refusing a deploy here would be wrong more often than
+// right. Both rows warn, and one of them declines when the config builds
+// its value at run time.
+func AstroConfigCheck() Check {
+	return Check{
+		IDs: []string{check.IDPagesDir, check.IDBuildFormat},
+		Run: CheckAstroConfig,
+	}
+}
+
 func CheckAstroConfig(fsys FS, root string) Result {
 	defaultPagesDir := filepath.Join(root, "src", "pages")
 	pagesDir := isDir(fsys, defaultPagesDir)
@@ -394,29 +416,20 @@ func findConfig(fsys FS, root string) (winner string, extra, unchecked []string,
 // fixing is that this comment claimed a guarantee the code does not
 // have: "never opens a FIFO" is true of every ordinary run and is not a
 // property, and a comment that states a property is read as one.
+//
+// THE READ ITSELF IS SHARED, and only the sentinel is this check's own.
+// Two checks in this package now read a bounded file off the user's
+// disk, and one bounded reader with a limit parameter is one place for
+// the read-then-re-check subtlety to live. What does not travel with it
+// is the WORDING: errConfigTooLarge names this check's own limit and
+// reaches a person through a pages-dir message, so it stays here beside
+// the number it describes.
 func readConfigCapped(fsys FS, name string) ([]byte, error) {
-	info, err := fsys.Stat(name)
-	if err != nil {
-		return nil, err
-	}
-	if info.Size() > maxConfigBytes {
+	data, err := readCapped(fsys, name, maxConfigBytes)
+	if errors.Is(err, errTooLarge) {
 		return nil, errConfigTooLarge
 	}
-
-	f, err := fsys.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxConfigBytes {
-		return nil, errConfigTooLarge
-	}
-	return data, nil
+	return data, err
 }
 
 // astroConfig is what parseAstroConfig extracts from one config file:

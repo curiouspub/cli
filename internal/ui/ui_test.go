@@ -71,7 +71,7 @@ func TestStreamSplit(t *testing.T) {
 // rather than whichever call the author happened to pick.
 func renderSample(u *UI) {
 	u.Step("packing 12 files")
-	u.Fail(NoLockfile)
+	u.Fail(&threePartSample)
 	u.Cancelled()
 }
 
@@ -234,7 +234,7 @@ func TestProgressOutputIsPlainLines(t *testing.T) {
 	u, _, errOut := testUI("", true, nil)
 	u.Step("packing 12 files")
 	u.Step("uploading")
-	u.Fail(NoLockfile)
+	u.Fail(&threePartSample)
 
 	if hasCursorControl(errOut.String()) {
 		t.Errorf("output carries a carriage return or a cursor sequence: %q", errOut.String())

@@ -445,7 +445,20 @@ var schemeFragmentPattern = regexp.MustCompile(`^https?:?/{0,2}$`)
 // maxNamedURLConstants is the guard's own stated ceiling, not a count
 // read from anywhere else — a guard whose allowance can be widened by
 // editing the same file that trips it is not a guard.
-const maxNamedURLConstants = 2
+//
+// THAT SENTENCE AND THE ALLOWANCE BELOW RECONCILE, they do not trade, and
+// the axis is WHO rather than WHEN. **Self-service widening is
+// forbidden**: an author raising this number, or adding a line below, as
+// part of getting their own change green is the guard loosening itself
+// on behalf of the thing that tripped it, and no interval makes that
+// legitimate. **Desk-ruled widening with a recorded reason is the
+// allowance working** — it is precisely the deliberate, reviewable act
+// the map below describes, and refusing it would leave the only exit a
+// spelling that hides the value from the check.
+//
+// Different actors, not different days. Raised to 3 on 2026-09-08 by a
+// ruling, for the needle the pre-flight development-URL scan greps for.
+const maxNamedURLConstants = 3
 
 // allowedURLConstants pins the VALUE of every permitted named URL
 // constant, because a ceiling of two says nothing about WHICH two.
@@ -461,6 +474,15 @@ const maxNamedURLConstants = 2
 // no scheme, so it is not a URL literal and never reaches this map.
 var allowedURLConstants = map[string]string{
 	"https://api.curious.pub": "the default control-plane API base",
+
+	// Ruled 2026-09-08: a NEEDLE, never a destination. The pre-flight
+	// development-URL check greps source files for this string and does
+	// nothing else with it; its package imports no network package. It
+	// arrived first as two constants joined at package level — a spelling
+	// that passed only because the split detector read literal operands
+	// and not folded values, which is the hole this entry exists instead
+	// of. The entry is the door; the folding is the wall.
+	"http://localhost": "the string the development-URL pre-flight check searches for",
 }
 
 // allowedHosts is the same list the leak scan enforces, and it exists
@@ -489,6 +511,78 @@ var hostLiteralPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a
 // `make ci` seeing a scheme anywhere.
 var embedDirectivePattern = regexp.MustCompile(`^\s*//go:embed\s+(.+)$`)
 
+// constEnv is every package-level string constant and variable in the
+// module whose value is a plain literal, keyed twice: by directory for
+// same-package references, and by package name for qualified ones.
+//
+// It exists so a URL assembled out of NAMED pieces can be folded back to
+// the string it actually is. The scheme-fragment net below reads literal
+// operands only, which is one indirection short: moving each half behind
+// a constant produced a compiled-in `http://localhost` that no grep for
+// `://` could find, and the guard passed. Judging the FOLDED VALUE closes
+// that, because the value is what ends up in the binary regardless of how
+// many names it was spelled with.
+type constEnv struct {
+	byDir map[string]string // dir + "\x00" + name
+	byPkg map[string]string // package name + "." + name
+}
+
+func newConstEnv() *constEnv {
+	return &constEnv{byDir: map[string]string{}, byPkg: map[string]string{}}
+}
+
+func (e *constEnv) add(dir, pkg, name, value string) {
+	e.byDir[dir+"\x00"+name] = value
+	e.byPkg[pkg+"."+name] = value
+}
+
+// foldString evaluates a constant string expression to its value.
+//
+// WHAT IT DOES NOT SEE, said here rather than left to be found, because a
+// guard with an undocumented blind spot reads as total coverage and ends
+// the search. The environment holds literal values only, so a constant
+// defined as another concatenation (`const a = b + "x"`) does not resolve
+// and its users fold to nothing — one level, not a fixpoint. Anything
+// involving a variable, a function call or a cross-module import folds to
+// nothing as well. Those all fall through to the fragment net, which is
+// why both are kept rather than one replacing the other.
+func foldString(e *constEnv, dir string, expr ast.Expr) (string, bool) {
+	switch n := expr.(type) {
+	case *ast.ParenExpr:
+		return foldString(e, dir, n.X)
+	case *ast.BasicLit:
+		if n.Kind != token.STRING {
+			return "", false
+		}
+		v, err := strconv.Unquote(n.Value)
+		return v, err == nil
+	case *ast.Ident:
+		v, ok := e.byDir[dir+"\x00"+n.Name]
+		return v, ok
+	case *ast.SelectorExpr:
+		pkg, ok := n.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		v, ok := e.byPkg[pkg.Name+"."+n.Sel.Name]
+		return v, ok
+	case *ast.BinaryExpr:
+		if n.Op != token.ADD {
+			return "", false
+		}
+		left, ok := foldString(e, dir, n.X)
+		if !ok {
+			return "", false
+		}
+		right, ok := foldString(e, dir, n.Y)
+		if !ok {
+			return "", false
+		}
+		return left + right, true
+	}
+	return "", false
+}
+
 // TestAtMostTwoNamedURLConstants parses every non-test source file's AST
 // and classifies each http(s) string literal it finds into one of two
 // buckets:
@@ -507,6 +601,30 @@ var embedDirectivePattern = regexp.MustCompile(`^\s*//go:embed\s+(.+)$`)
 // comment or a doc string out of scope, without needing to say so
 // anywhere: go/ast represents a comment as its own node kind, never as a
 // *ast.BasicLit, so nothing here ever visits one.
+//
+// CONSTANT FOLDING, added 2026-09-08, and the hole it closes was live.
+// The fragment net below reads LITERAL operands of a `+`. Moving each
+// half of a URL behind a named constant leaves no literal for it to see,
+// so `scheme + "//" + host` passed while the same value written as one
+// literal failed — a compiled-in URL that no grep for `://` could find,
+// which is the exact property this guard exists to keep. Pass two now
+// folds constant expressions to their value and judges the VALUE, the
+// same way a literal's is judged.
+//
+// REQUIRED MUTATION, RUN IN THIS ORDER on 2026-09-08 and both halves
+// observed. Restore the pre-ruling world: put the assembly back in
+// internal/preflight/localhost.go —
+//
+//	const devURLScheme = "http:"
+//	const devURLHost   = "localhost"
+//	var devURLNeedle = devURLScheme + "//" + devURLHost
+//
+// and delete "http://localhost" from allowedURLConstants. With folding,
+// that reds here naming the folded value; without folding, it passed.
+// The order matters and is the ruling's: the class was killed first —
+// the shipped spelling made to fail — and only then was the instance
+// admitted through the allow-list. A door opened before the wall exists
+// is not a door.
 func TestAtMostTwoNamedURLConstants(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
@@ -515,19 +633,29 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 	var named []string
 	var unapproved []string
 	var split []string
+	var assembled []string
 	var hosts []string
 	var embedded []string
 
+	// PASS ONE: parse everything and collect the module's string
+	// constants. It is two passes rather than one because a name folds
+	// against a declaration that may live in a file this walk has not
+	// reached yet, or in another package altogether.
+	type parsedFile struct {
+		path string
+		dir  string
+		f    *ast.File
+	}
+	var files []parsedFile
+	env := newConstEnv()
 	for _, path := range goFiles(t, root, false) {
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			t.Fatalf("parsing %s: %v", path, err)
 		}
+		dir := filepath.Dir(path)
+		files = append(files, parsedFile{path: path, dir: dir, f: f})
 
-		// Every BasicLit that is the sole value of a single-name,
-		// top-level const or var declaration — the shape a URL must have
-		// to be a "named constant" rather than a bare literal.
-		namedLits := map[*ast.BasicLit]string{}
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
@@ -538,16 +666,67 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 				if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
 					continue
 				}
-				if lit, ok := vs.Values[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					namedLits[lit] = vs.Names[0].Name
+				lit, ok := vs.Values[0].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
 				}
+				v, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					continue
+				}
+				env.add(dir, f.Name.Name, vs.Names[0].Name, v)
+			}
+		}
+	}
+
+	// PASS TWO: classify.
+	for _, pf := range files {
+		f, path, dir := pf.f, pf.path, pf.dir
+
+		// Every expression that is the sole value of a single-name,
+		// top-level const or var declaration — the shape a URL must have
+		// to be a "named constant" rather than a bare literal. It is
+		// keyed by EXPRESSION rather than by literal because a folded
+		// concatenation is named in exactly the same way, and a value
+		// spelled with three names is no less compiled in than one.
+		namedExprs := map[ast.Expr]string{}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
+					continue
+				}
+				namedExprs[vs.Values[0]] = vs.Names[0].Name
 			}
 		}
 
 		ast.Inspect(f, func(n ast.Node) bool {
-			// A URL assembled from pieces: flag the concatenation itself,
-			// since no single operand looks like a URL.
+			// A URL assembled from pieces: fold it FIRST, because a
+			// concatenation of named constants has no literal operand
+			// for the fragment net below to see, and folding is what
+			// makes the value judged the same way a literal's is.
 			if be, ok := n.(*ast.BinaryExpr); ok && be.Op == token.ADD {
+				if value, folded := foldString(env, dir, be); folded &&
+					urlBearingPattern.MatchString(value) {
+					pos := fset.Position(be.Pos())
+					loc := fmt.Sprintf("%s:%d", displayPath(root, path), pos.Line)
+					if name, isNamed := namedExprs[be]; isNamed {
+						named = append(named, fmt.Sprintf("%s = %q (%s)", name, value, loc))
+						if _, allowed := allowedURLConstants[value]; !allowed {
+							unapproved = append(unapproved,
+								fmt.Sprintf("%s = %q (%s)", name, value, loc))
+						}
+					} else {
+						assembled = append(assembled, fmt.Sprintf("%q (%s)", value, loc))
+					}
+					// The operands are pieces of a value already judged;
+					// descending would report the same URL twice.
+					return false
+				}
 				for _, operand := range []ast.Expr{be.X, be.Y} {
 					l, ok := operand.(*ast.BasicLit)
 					if !ok || l.Kind != token.STRING {
@@ -582,7 +761,7 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 			}
 			pos := fset.Position(lit.Pos())
 			loc := fmt.Sprintf("%s:%d", displayPath(root, path), pos.Line)
-			if name, isNamed := namedLits[lit]; isNamed {
+			if name, isNamed := namedExprs[lit]; isNamed {
 				named = append(named, fmt.Sprintf("%s = %q (%s)", name, unquoted, loc))
 				if _, allowed := allowedURLConstants[unquoted]; !allowed {
 					unapproved = append(unapproved,
@@ -657,6 +836,15 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 			strings.Join(split, "; "))
 	}
 
+	if len(assembled) > 0 {
+		sort.Strings(assembled)
+		t.Errorf("found a URL assembled from named constants: %s\n"+
+			"Folded to its value, that is a compiled-in URL that no grep for a "+
+			"scheme can find — which is the property this guard exists to keep. "+
+			"Declare it as one named constant and have it approved.",
+			strings.Join(assembled, "; "))
+	}
+
 	if len(unapproved) > 0 {
 		sort.Strings(unapproved)
 		t.Errorf("found a named URL constant whose VALUE is not approved: %s\n"+
@@ -670,9 +858,11 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 	if len(named) > maxNamedURLConstants {
 		sort.Strings(named)
 		t.Errorf("found %d named URL constants, want at most %d: %s\n"+
-			"This repo allows exactly two: the default API base and the site base "+
-			"domain the client assembles a published URL from. A third is a widened "+
-			"guard, and a guard loosened by the thing that trips it is not a guard.",
+			"The budget is the control-plane API base and the development-URL "+
+			"needle, with one space spare. Widening it to green your own change "+
+			"is the guard loosening itself on behalf of the thing that tripped "+
+			"it; a widening ruled at the desk, with its reason written into "+
+			"allowedURLConstants, is the allowance working as designed.",
 			len(named), maxNamedURLConstants, strings.Join(named, "; "))
 	}
 }
