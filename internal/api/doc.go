@@ -1,9 +1,15 @@
 // Package api is the HTTP client this CLI uses to talk to the public
-// /v1 API: capacity checks and the email + code login flow today, and —
-// in a later change — deploy creation, upload, and the build-log event
+// /v1 API: capacity checks, the email + code login flow, deploy
+// creation, the call that starts a build, and the build-log event
 // stream. It knows only pkg/wire's types; it never reshapes them into a
 // second, "nicer" shape, and it never invents an endpoint the contract
 // does not define.
+//
+// The upload is deliberately NOT here. It goes to a link the server
+// signed, at an origin this client holds no credential for and answers in
+// a vocabulary the /v1 contract does not define, so it belongs to the
+// sequence that owns the archive rather than to the client that speaks
+// this API.
 //
 // # Construction
 //
@@ -33,5 +39,18 @@
 // auth/start and auth/verify are never retried: the first spends part of
 // a per-identity hourly send budget on every attempt, and the second
 // consumes its code atomically, so a retry after an ambiguous timeout
-// could report failure for a call that had already succeeded.
+// could report failure for a call that had already succeeded. The create
+// is never retried because a repeat makes a second deploy record, and
+// the start is never retried because everything a caller is waiting for
+// afterwards arrives on the event stream — see DeployStart.
+//
+// # The event stream is not a request in that sense
+//
+// DeployEvents is the one call that does not go through the shared path,
+// and it takes NO deadline of any kind. Every other call here is bounded
+// end to end by the per-request timeout, which is right for a small
+// request and a small answer and fatal for a connection held open for the
+// whole of a build: a total deadline cannot express "is this making
+// progress", and a server's keep-alive frames cannot extend one. What
+// ends that request is the caller's context.
 package api
