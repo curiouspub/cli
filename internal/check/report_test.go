@@ -464,3 +464,91 @@ func TestCombineAcceptsAFindingThatSaysSomething(t *testing.T) {
 		t.Errorf("findings = %+v, want both", report.Findings())
 	}
 }
+
+// TestTheReportKeepsItsOwnCopyWhenACallerMutatesWhatItHandsOut is the
+// outbound half of the same symmetry.
+//
+// Combine deep-copies on the way IN, so a producer cannot reach into a
+// validated report afterwards. Findings copied only the outer slice on
+// the way OUT, so a caller could reach into the report itself — and
+// mutate Sizes and Paths into exactly the length disagreement the gate
+// exists to refuse. A validated article that its readers can invalidate
+// is not one.
+//
+// THE EXISTING ROW CANNOT SEE THIS. It mutates through the accessor and
+// asserts the PRODUCER is untouched, which the inbound copy already
+// guarantees; it says nothing about the report. Same call, different
+// subject, and the difference is the whole finding.
+//
+// REQUIRED MUTATION: restore the shallow copy in Findings — copy the
+// outer slice and return it. Reds on both fields.
+func TestTheReportKeepsItsOwnCopyWhenACallerMutatesWhatItHandsOut(t *testing.T) {
+	report, err := Combine(Results{
+		Manifest: everyDeclaredID(),
+		Findings: []Finding{{
+			CheckID:  IDLimitFileSize,
+			Severity: SeverityHardStop,
+			Message:  "two files are too large",
+			Paths:    []string{"a.bin", "b.bin"},
+			Sizes:    []int64{6_000_000, 7_000_000},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Combine: %v", err)
+	}
+
+	handed := report.Findings()
+	handed[0].Paths[0] = "CLOBBERED"
+	handed[0].Sizes[0] = -1
+
+	again := report.Findings()
+	if again[0].Paths[0] != "a.bin" {
+		t.Errorf("Paths inside the report were changed through what it handed out: %v",
+			again[0].Paths)
+	}
+	if again[0].Sizes[0] != 6_000_000 {
+		t.Errorf("Sizes inside the report were changed through what it handed out: %v",
+			again[0].Sizes)
+	}
+}
+
+// TestCombineDeepCopiesSizes mirrors TestCombineDeepCopiesPaths, and it
+// is about the producer rather than the report.
+//
+// Combine copies a finding's slices on the way in so that a producer
+// still holding its own Results cannot reach into a validated report
+// afterwards — and the report cannot reach back into the producer. The
+// Paths half has had that row since the field existed. The Sizes half was
+// written with the same care and no row at all: deleting its branch from
+// copyFinding left every package green.
+//
+// WHY THE OUTBOUND ROW IS NOT THIS ROW. Findings now deep-copies too, so
+// mutating through the accessor reds without this — but it reds on the
+// REPORT being changed, not on the producer being reached. Same
+// mechanism, two subjects, and only a row per subject can tell which one
+// broke.
+//
+// REQUIRED MUTATION, RUN: delete the Sizes branch from copyFinding. Reds
+// here, on the producer's own slice.
+func TestCombineDeepCopiesSizes(t *testing.T) {
+	producer := Results{
+		Manifest: everyDeclaredID(),
+		Findings: []Finding{{
+			CheckID:  IDLimitFileSize,
+			Severity: SeverityHardStop,
+			Message:  "one file is too large",
+			Paths:    []string{"a.bin", "b.bin"},
+			Sizes:    []int64{6_000_000, 7_000_000},
+		}},
+	}
+
+	report, err := Combine(producer)
+	if err != nil {
+		t.Fatalf("Combine: %v", err)
+	}
+	report.Findings()[0].Sizes[0] = -1
+
+	if got := producer.Findings[0].Sizes; !reflect.DeepEqual(got, []int64{6_000_000, 7_000_000}) {
+		t.Errorf("the producer's own Sizes were reached through the report: %v", got)
+	}
+}
