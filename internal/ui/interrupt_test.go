@@ -45,7 +45,10 @@ func interruptUI() (u *UI, out *recorder, events *[]string, exited *[]int) {
 	// Recording the code here keeps every assertion below meaning what
 	// it meant, while the platform behaviour is asserted separately by
 	// the rows that can actually see it.
-	u.endInterrupted = func() { codes = append(codes, interruptExitCode) }
+	u.endInterrupted = func() {
+		seq = append(seq, "end")
+		codes = append(codes, interruptExitCode)
+	}
 
 	// The closures above append to the local slices, so the UI's fields
 	// and these pointers see the same growth.
@@ -65,7 +68,7 @@ func TestTheInterruptHandlerRestoresThenExits130(t *testing.T) {
 
 	finished := make(chan struct{})
 	go func() {
-		u.watchInterrupts(signals, done)
+		u.watchInterrupts(signals, done, nil)
 		close(finished)
 	}()
 
@@ -119,7 +122,7 @@ func TestStoppingTheWatchDoesNotExit(t *testing.T) {
 
 	finished := make(chan struct{})
 	go func() {
-		u.watchInterrupts(signals, done)
+		u.watchInterrupts(signals, done, nil)
 		close(finished)
 	}()
 
@@ -151,13 +154,103 @@ func TestStoppingTheWatchDoesNotExit(t *testing.T) {
 func TestInterruptsInstallsAndReleasesTheSignal(t *testing.T) {
 	u, _, _, exited := interruptUI()
 
-	stop := u.Interrupts()
+	stop := u.Interrupts(nil)
 	stop()
 	stop()
 
 	if len(*exited) != 0 {
 		t.Errorf("installing and releasing the handler exited the process with %v", *exited)
 	}
+}
+
+// TestTheInterruptHandlerRunsTheCleanupBeforeItEndsTheProcess is the row
+// the whole cleanup parameter exists for.
+//
+// THE ORDER IS THE PROPERTY, not that the function was called. The
+// terminator lets the signal kill the process, so anything running after
+// it does not run at all — a cleanup invoked one line later would look
+// correct here, pass a call-counting assertion, and remove nothing on a
+// real Ctrl-C. So the sequence is read, and the cleanup has to appear
+// before the end.
+//
+// The second half is the negative control, and it is what keeps the
+// first honest: a UI that ran the cleanup on installation, or on every
+// wake-up, would satisfy "it was called" perfectly.
+//
+// REQUIRED MUTATION, run 2026-09-08: move the cleanup call in
+// interrupted below u.endInterrupted. Reds on the ordering assertion
+// while the call-count one stays green — which is the asymmetry that
+// shows which of the two is measuring the property.
+func TestTheInterruptHandlerRunsTheCleanupBeforeItEndsTheProcess(t *testing.T) {
+	u, _, events, _ := interruptUI()
+
+	cleanups := 0
+	cleanup := func() {
+		cleanups++
+		*events = append(*events, "cleanup")
+	}
+
+	signals := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	defer close(done)
+
+	finished := make(chan struct{})
+	go func() {
+		u.watchInterrupts(signals, done, cleanup)
+		close(finished)
+	}()
+
+	signals <- os.Interrupt
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the interrupt handler never ran")
+	}
+
+	if cleanups != 1 {
+		t.Errorf("the cleanup ran %d times, want exactly 1", cleanups)
+	}
+	if got := indexOf(*events, "cleanup"); got < 0 {
+		t.Fatalf("event order was %v, and the cleanup is not in it", *events)
+	} else if end := indexOf(*events, "end"); end < 0 || got > end {
+		t.Errorf("event order was %v, want the cleanup before the end — the terminator "+
+			"lets the signal kill the process, so nothing after it runs at all", *events)
+	}
+
+	t.Run("stopping the watch runs no cleanup", func(t *testing.T) {
+		u, _, _, _ := interruptUI()
+		ran := 0
+
+		signals := make(chan os.Signal, 1)
+		done := make(chan struct{})
+		finished := make(chan struct{})
+		go func() {
+			u.watchInterrupts(signals, done, func() { ran++ })
+			close(finished)
+		}()
+
+		close(done)
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the watcher did not return when it was stopped")
+		}
+		if ran != 0 {
+			t.Errorf("stopping the watch ran the cleanup %d times — a handler that "+
+				"removes a run's files on the way OUT of an ordinary run is worse "+
+				"than one that never removes them", ran)
+		}
+	})
+}
+
+// indexOf is where a recorded event first happened, or -1.
+func indexOf(events []string, want string) int {
+	for i, e := range events {
+		if e == want {
+			return i
+		}
+	}
+	return -1
 }
 
 // interruptHelperEnv selects the helper-process mode. A test binary
@@ -190,7 +283,7 @@ func TestInterruptHelperProcess(t *testing.T) {
 		// they are meant to.
 		u.endInterrupted = func() { os.Exit(interruptExitCode) }
 	}
-	stop := u.Interrupts()
+	stop := u.Interrupts(nil)
 	defer stop()
 
 	fmt.Println("ready")

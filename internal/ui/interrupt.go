@@ -53,8 +53,32 @@ const interruptExitCode = 130
 // interactive stretch gives the signal back to the runtime rather than
 // leaving a goroutine holding it.
 //
+// # cleanup, and why a defer will not do
+//
+// cleanup is the caller's own tidy-up: whatever this run has put on the
+// machine that must not survive it. It runs on the interrupt path only,
+// after the terminal has been handed back and the message written, and
+// BEFORE the process is ended. nil means there is nothing to remove.
+//
+// IT IS A PARAMETER RATHER THAN A defer AT THE CALL SITE, and that is
+// forced by the paragraph above rather than chosen. This handler ends
+// the process by letting the signal kill it, so no deferred function
+// anywhere in the process runs — the same is true of the default
+// disposition, and true of an exit on Windows. A caller that wrote
+// `defer os.Remove(archive)` and installed this handler would leave the
+// archive behind on exactly the path it was worried about. So the
+// interrupt path is handed the tidy-up explicitly, and the ordinary
+// paths keep their defer: one function, called from two places that
+// cannot share a mechanism.
+//
+// It runs on the goroutine the signal woke, with the process about to
+// end: it must return, and quickly. Nothing here contains a panic or
+// bounds the time — a recover() would swallow a programming error in
+// code this package does not own, and a deadline would be this package
+// inventing one for work whose cost only the caller knows.
+//
 // Calling stop more than once is safe.
-func (u *UI) Interrupts() (stop func()) {
+func (u *UI) Interrupts(cleanup func()) (stop func()) {
 	// Buffered, because signal.Notify never blocks: an unbuffered
 	// channel with a slow receiver drops the signal silently, which is
 	// the one failure this handler cannot report.
@@ -62,7 +86,7 @@ func (u *UI) Interrupts() (stop func()) {
 	signal.Notify(signals, os.Interrupt)
 
 	done := make(chan struct{})
-	go u.watchInterrupts(signals, done)
+	go u.watchInterrupts(signals, done, cleanup)
 
 	var once sync.Once
 	return func() {
@@ -85,10 +109,10 @@ func (u *UI) Interrupts() (stop func()) {
 // holds on every platform.) A rule about what happens on Ctrl-C should
 // hold where this program is hardest to get right, not only where the
 // test is easiest to write.
-func (u *UI) watchInterrupts(signals <-chan os.Signal, done <-chan struct{}) {
+func (u *UI) watchInterrupts(signals <-chan os.Signal, done <-chan struct{}, cleanup func()) {
 	select {
 	case <-signals:
-		u.interrupted()
+		u.interrupted(cleanup)
 	case <-done:
 	}
 }
@@ -97,12 +121,22 @@ func (u *UI) watchInterrupts(signals <-chan os.Signal, done <-chan struct{}) {
 // terminal back BEFORE writing anything, since writing to a terminal
 // still in a modified state is what produces the mangled last line
 // people screenshot.
-func (u *UI) interrupted() {
+//
+// THE CALLER'S CLEANUP GOES BETWEEN THE MESSAGE AND THE END, and both
+// halves of that position are decisions. After the message, because
+// removing a file the user cannot see is not worth delaying the one line
+// that tells them the program noticed them. Before the end, because
+// there is no after: the terminator lets the signal kill this process,
+// and nothing deferred anywhere runs once it has.
+func (u *UI) interrupted(cleanup func()) {
 	u.restore()
 	// A newline first: the terminal has just echoed the interrupt
 	// character with no line ending of its own, so without this the
 	// message lands on the same line as it.
 	fmt.Fprintln(u.err)
 	u.Cancelled()
+	if cleanup != nil {
+		cleanup()
+	}
 	u.endInterrupted()
 }
