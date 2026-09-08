@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/curiouspub/cli/internal/pack"
+	"github.com/curiouspub/cli/internal/timing"
 	"github.com/curiouspub/cli/internal/ui"
 	"github.com/curiouspub/cli/pkg/wire"
 )
@@ -1007,16 +1008,16 @@ func readFileString(t *testing.T, path string) string {
 // bulkyProject is a deployable project whose archive is far larger than
 // any socket buffer between this client and a store on loopback.
 //
-// THE SIZE IS THE POINT, and it was MEASURED rather than guessed. A small
+// THE SIZE IS THE POINT, and it is sized against a MEASUREMENT. A small
 // body is swallowed whole by the kernel's socket buffers, so the client
 // finishes writing before the store has read anything and the rows below
 // would measure nothing — a "slow" store the client never waited for, and
-// a "wedged" one it had already finished with. On this machine those
-// buffers hold about 4 MiB: a probe on the client's own progress showed
-// it hand over exactly 4,194,304 bytes and then block. Twelve MiB is
-// comfortably past that in three files, each under the per-file cap. The
-// content is random so the packer's gzip cannot shrink it back to
-// nothing.
+// a "wedged" one it had already finished with. The bytes the client hands
+// over before it blocks — the block point — is recorded per leg in
+// internal/timing, beside the window it governs; twelve MiB is comfortably
+// past every block point recorded there, in three files, each under the
+// per-file cap. The content is random so the packer's gzip cannot shrink
+// it back to nothing.
 func bulkyProject(t *testing.T) string {
 	t.Helper()
 	files := astroProject(nil)
@@ -1040,15 +1041,16 @@ func bulkyProject(t *testing.T) string {
 // hang; under a stall timer it is exactly what an ordinary uplink and a
 // large project look like, and it must succeed.
 //
-// THE NUMBERS COME FROM A MEASUREMENT, and the first set did not. A
-// 250 ms window failed roughly one run in six, and instrumenting the
-// client's own progress said why: the gap between two bytes is not the
-// store's pause but the time for the kernel's socket buffers to free
-// enough space, which on this machine ran to 88-110 ms at a 20 ms pace
-// and spiked past 250 under load. The window is now 600 ms — five times
-// the observed worst gap — and the paced phase is long enough that the
-// upload still spends several windows. A timing row whose margin is
-// smaller than the thing it did not measure is a flake with a schedule.
+// THE WINDOW IS NOT WRITTEN HERE, and that is the mechanism rather than
+// a tidiness preference. It lives in internal/timing with the quantity
+// it bounds, the reader it was measured through, the worst gap seen on
+// each leg, the run count and the date — because a number written
+// inline carries its value and not the reason it was chosen, and four of
+// this repository's five stall windows were once numbers somebody
+// picked. The first window here was one of them: 250 ms, sized against
+// the store fixture's own pacing knob, failing roughly one run in six.
+// A timing row whose margin is smaller than the thing it did not measure
+// is a flake with a schedule.
 //
 // The paced phase covers the first half of the body and the rest is
 // drained at full speed. The tail must exceed the socket buffers: once
@@ -1056,27 +1058,9 @@ func bulkyProject(t *testing.T) string {
 // report, so a paced drain of a bufferful would look like a stall the
 // client did not cause.
 //
-// WHERE THE MEASUREMENT WAS TAKEN, and where it was not. The 88-110 ms
-// worst gap and the 4 MiB the client hands over before it blocks were
-// measured on ONE environment: local macOS on arm64. That is not even
-// one of the three legs this project's gate runs — those are Linux,
-// macOS and Windows runners, and the macOS one is different hardware.
-//
-// So the margin is measured on one environment and CARRIED UNMEASURED to
-// three. Socket buffer sizes and their autotuning are a property of the
-// kernel and the runner, and Windows in particular has neither the same
-// defaults nor the same behaviour, so there is no reason the numbers
-// transfer. This is the same shape as the defect that produced this
-// round — a value measured at one site and reused at another without
-// asking what the new site does — one artefact along, and it is written
-// here rather than left implicit because the alternative is a margin
-// nobody knows the size of on two thirds of the gate. Twenty runs per
-// leg with this row's own instrumentation is what would settle it; a
-// follow-up carries that.
-//
 // REQUIRED MUTATION: stop resetting the watchdog on progress.
 func TestASlowUploadIsNotAStalledOne(t *testing.T) {
-	const stall = 600 * time.Millisecond
+	stall := timing.UploadSlowIsNotStalled.Window
 
 	run := newDeployRun(t, bulkyProject(t)).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
@@ -1120,7 +1104,7 @@ func TestASlowUploadIsNotAStalledOne(t *testing.T) {
 //
 // REQUIRED MUTATION: collapse the stall branch into the unreachable one.
 func TestAWedgedUploadStopsAndSaysSo(t *testing.T) {
-	const stall = 600 * time.Millisecond
+	stall := timing.UploadWedgedStops.Window
 
 	run := newDeployRun(t, bulkyProject(t)).scriptedLogin()
 	run.prompt.confirms = []answer{no()}

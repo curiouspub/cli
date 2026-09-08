@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curiouspub/cli/internal/timing"
 	"github.com/curiouspub/cli/pkg/wire"
 )
 
@@ -702,7 +703,7 @@ func TestAPayloadThatWillNotDecodeStillCountsTowardsTheReplay(t *testing.T) {
 // the real window. A mutation that removes half a mechanism measures the
 // other half; both the arming and the reset have to go.
 func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
-	const stall = 100 * time.Millisecond
+	stall := timing.StreamGoesQuiet.Window
 
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
@@ -760,12 +761,14 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // connection for most of a slow build. They are consumed as evidence and
 // never shown.
 //
-// THE MARGIN IS MEASURED RATHER THAN ASSUMED, and the fixture reports the
-// quantity the row actually depends on: the widest gap between two of its
-// own flushes. A red is then readable — a gap past the window means this
-// machine paused and the row measured the runner, not the client. Sizing
-// the window against the fixture's own pacing knob alone is how a timing
-// row becomes a flake with a schedule.
+// THE MARGIN IS MEASURED RATHER THAN ASSUMED, and the evidence is in
+// internal/timing rather than in this comment: the window, the quantity
+// it bounds, the reader it was measured through, the worst gap on each
+// leg, the run count and the date. The fixture ALSO reports the widest
+// gap between two of its own flushes, which is a different number and a
+// cheaper one — it says whether this particular run measured the client
+// or the machine. Sizing the window against the fixture's own pacing
+// knob alone is how a timing row becomes a flake with a schedule.
 //
 // REQUIRED MUTATION, run 2026-09-08: count only EVENTS as proof of life,
 // not comment frames. Reds — "a stream carrying nothing but keep-alives
@@ -780,26 +783,31 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // did not have to have. A row is only as good as the bytes it sends.
 func TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered(t *testing.T) {
 	// THE STREAM MUST STAY QUIET FOR LONGER THAN THE WINDOW, or this row
-	// cannot see anything: forty beats at fifteen milliseconds is 600ms of
-	// nothing but comment frames against a 300ms window, so a client that
-	// did not count them as proof of life would have given up twice over.
+	// cannot see anything: forty beats at fifteen milliseconds is twice
+	// the window in nothing but comment frames, so a client that did not
+	// count them as proof of life would have given up twice over. The
+	// row asserts that relation below rather than assuming it, because
+	// the window now comes from the registry and could be raised there
+	// by a leg this machine is not.
 	//
 	// THE MARGIN THE OTHER WAY IS MEASURED RATHER THAN COMPUTED FROM THE
-	// PACE. What the client depends on is not the 15ms this row asks for
+	// PACE. What the client depends on is not the pace this row asks for
 	// but the interval it actually gets, which includes whatever the
-	// scheduler and the loopback stack add. Instrumented over 25 runs: the
-	// widest gap is 17.3ms, against a 300ms window — a margin of about
-	// seventeen, on the real quantity rather than on the knob.
-	//
-	// MEASURED ON ONE ENVIRONMENT, macOS on arm64, and carried unmeasured
-	// to the other two legs this project gates on. Scheduling granularity
-	// is a property of the kernel and the runner, so there is no reason the
-	// number transfers — which is why the fixture reports its own widest
-	// gap on every run and refuses rather than flakes when that gap has
-	// eaten the margin.
-	const stall = 300 * time.Millisecond
+	// scheduler and the loopback stack add — and that measurement, per
+	// leg, is in internal/timing. The fixture still reports its own
+	// widest gap on every run, so this row refuses rather than flakes
+	// when that gap has eaten the margin.
+	stall := timing.StreamKeepAlivesAreProofOfLife.Window
 	const pace = 15 * time.Millisecond
 	const beats = 40
+
+	// The quiet the row buys must outlast the window, whatever the
+	// registry currently says the window is.
+	if quiet := beats * pace; quiet <= stall {
+		t.Fatalf("the fixture is quiet for %v against a %v window — this row cannot "+
+			"see a client that stopped counting keep-alives as proof of life",
+			quiet, stall)
+	}
 
 	frames := make([]string, 0, beats+1)
 	for i := 0; i < beats; i++ {
@@ -1184,7 +1192,7 @@ func splitEvenly(s string, n int) []string {
 // REQUIRED MUTATION: reset the watchdog on the completed line instead of
 // on the read.
 func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
-	const stall = 60 * time.Millisecond
+	stall := timing.StreamPartialLineIsNotAStall.Window
 
 	frame := logFrame("A-LINE-DELIVERED-IN-PIECES")
 	frames := splitEvenly(frame, 10)
