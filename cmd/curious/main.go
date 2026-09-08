@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/curiouspub/cli/internal/flow"
 	"github.com/curiouspub/cli/internal/mcp"
+	"github.com/curiouspub/cli/internal/ui"
 )
 
 // version, commit and date are overridden at build time via
@@ -145,19 +148,46 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runDeploy is a stub: the actual deploy sequence — pre-flight, pack,
-// upload, stream — lands in a later change. Until then this exits
-// non-zero so nothing downstream can mistake a stub for a real deploy.
+// runDeploy runs the deploy sequence and returns the exit code it cost.
 //
-// It accepts one optional operand, the directory, so the stub already has
-// the argument shape the real command will.
+// THE SEQUENCE ITSELF IS NOT HERE, and that is the layout rule rather
+// than a preference: this package is dispatch, and the order the steps
+// run in is a product decision with reasons that want testing without a
+// terminal, a real endpoint or a subprocess. What this function owns is
+// the wiring — which directory, which terminal, and who removes the
+// archive.
+//
+// THE TWO WRITERS PARSE THE FLAGS AND NOTHING ELSE, which is worth
+// saying because every other subcommand here uses them throughout. The
+// run's own output goes through the terminal type, which owns the split
+// between narration and machine-readable output, the decision about
+// whether a question may be asked at all, and the colour question — none
+// of which a pair of buffers can answer, and all of which would have to
+// be answered twice if this wrote to them directly.
+//
+// ONE OPTIONAL OPERAND, THE DIRECTORY. It is a positional argument
+// rather than a flag because it is the thing being deployed; empty means
+// the directory the user is standing in.
+//
+// Release is deferred rather than called at the end: it removes the
+// archive on the way out of every ordinary path, and it is safe on the
+// nil hand-off a refused run returns. The interrupt path cannot use it —
+// nothing deferred runs once a signal has killed the process — which is
+// why the handler is handed its own copy of the same tidy-up.
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
 	if code, done := parseSubcommand(fs, args, 1, deployUsage, stdout, stderr); done {
 		return code
 	}
-	fmt.Fprintln(stderr, "curious deploy: not implemented yet")
-	return 1
+
+	u := ui.New()
+	handoff, err := flow.Deploy(context.Background(), flow.DeployDeps{
+		Dir:        fs.Arg(0),
+		Prompt:     u,
+		Interrupts: u.Interrupts,
+	})
+	defer handoff.Release()
+	return u.ExitCode(err)
 }
 
 // runMCP serves the Model Context Protocol on this process's own pipes
