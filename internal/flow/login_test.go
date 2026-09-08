@@ -40,15 +40,24 @@ var errScriptExhausted = errors.New("the scripted terminal ran out of answers")
 
 // answer is one scripted reply. Text and Yes are read by different
 // prompts; Err is how a row spells Ctrl-D or a broken pipe.
+//
+// blank is the one that needs a word. A bare newline at a yes/no prompt
+// resolves to whatever DEFAULT the caller asked with, and that
+// resolution belongs to the terminal rather than to this flow — so the
+// double performs it here too. Without that, a row named for a bare
+// newline would be measuring the answer the script happened to write
+// down, and would keep passing with the default inverted.
 type answer struct {
-	text string
-	yes  bool
-	err  error
+	text  string
+	yes   bool
+	blank bool
+	err   error
 }
 
 func says(s string) answer { return answer{text: s} }
 func yes() answer          { return answer{yes: true} }
 func no() answer           { return answer{yes: false} }
+func blank() answer        { return answer{blank: true} }
 func aborts() answer       { return answer{err: ui.ErrAborted} }
 
 // confirmAsk records one yes/no question exactly as it was put: the
@@ -125,6 +134,11 @@ func (s *scriptedPrompt) Confirm(question string, defaultYes bool) (bool, error)
 	next, ok := pop(&s.confirms)
 	if !ok {
 		return false, errScriptExhausted
+	}
+	if next.blank {
+		// What the real prompt does with an empty line, so a row can say
+		// "a bare newline" and mean it.
+		return defaultYes, next.err
 	}
 	return next.yes, next.err
 }
@@ -546,7 +560,8 @@ func TestLoginConsentDefaultsToNo(t *testing.T) {
 		reply answer
 		want  bool
 	}{
-		{name: "a bare newline takes the default", reply: no(), want: false},
+		{name: "a bare newline takes the default", reply: blank(), want: false},
+		{name: "an explicit no opts out", reply: no(), want: false},
 		{name: "an explicit yes opts in", reply: yes(), want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
