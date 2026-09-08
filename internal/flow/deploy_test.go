@@ -182,6 +182,41 @@ type deployScript struct {
 	verifyOutcome   outcome
 	token           string
 	waitlisted      []wire.WaitlistRequest
+
+	// store is the object store this API hands upload links to. The
+	// API SIGNS the length it was told, so the store can refuse a body
+	// that does not match it — the whole point of the pair being two
+	// servers rather than one.
+	store *objectStore
+
+	// signSkew is added to the declared size before it is signed, so a
+	// row can produce the one failure a correct client cannot make on
+	// its own: a signature that does not cover the body being sent.
+	signSkew int64
+
+	// deployOutcome, deployID and expiresAt script the create.
+	// expiresAt is ZERO by default and the response then OMITS the
+	// field entirely, because that is what the server sends today — so
+	// the ambiguous branch is the one the default harness exercises.
+	deployOutcome outcome
+	deployID      string
+	expiresAt     time.Time
+	creates       []wire.DeployCreateRequest
+	createBearers []string
+
+	// onCreate runs while the create is being served, before the reply.
+	// It is how a row makes an answer never arrive.
+	onCreate func(*http.Request)
+
+	// uploadOverride replaces the link this API hands out, for the rows
+	// that need one nothing answers on.
+	uploadOverride string
+
+	// refuseCreatesUntil is how many creates are answered "not
+	// authenticated" before one is allowed through, so a row can watch
+	// the run re-authenticate and try again — and watch it stop when a
+	// second refusal follows the fresh login.
+	refuseCreatesUntil int
 }
 
 func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +240,27 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.reply(w, outcome{}, wire.AuthStartResponse{})
 	case "/v1/auth/verify":
 		s.reply(w, s.verifyOutcome, wire.AuthVerifyResponse{Token: s.token})
+	case "/v1/deploys":
+		var req wire.DeployCreateRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		s.creates = append(s.creates, req)
+		s.createBearers = append(s.createBearers, r.Header.Get("Authorization"))
+		if s.onCreate != nil {
+			s.onCreate(r)
+		}
+		if len(s.creates) <= s.refuseCreatesUntil {
+			s.reply(w, fails(http.StatusUnauthorized, wire.CodeUnauthorized,
+				"this request was not authenticated"), nil)
+			return
+		}
+		if s.deployOutcome.code != "" {
+			s.reply(w, s.deployOutcome, nil)
+			return
+		}
+		if s.store != nil {
+			s.store.sign(req.Bytes + s.signSkew)
+		}
+		s.replyCreated(w, req)
 	default:
 		s.strays = append(s.strays, r.URL.Path)
 		w.WriteHeader(http.StatusNotFound)
@@ -231,6 +287,228 @@ func (s *deployScript) reply(w http.ResponseWriter, o outcome, success any) {
 		Error: wire.Error{Code: o.code, Message: o.message},
 	})
 }
+
+// replyCreated writes the create's success body. It writes the JSON by
+// hand for one reason: a ZERO expiry must be ABSENT from the body rather
+// than encoded as the zero instant, because "the server did not tell me"
+// and "the server told me the epoch" are the two readings this client
+// must never confuse, and only an omitted key models the first.
+func (s *deployScript) replyCreated(w http.ResponseWriter, req wire.DeployCreateRequest) {
+	uploadURL := s.uploadOverride
+	if uploadURL == "" && s.store != nil {
+		uploadURL = s.store.url
+	}
+	id := s.deployID
+	if id == "" {
+		id = "deploy-1"
+	}
+	body := map[string]any{"deploy_id": id, "upload_url": uploadURL}
+	if !s.expiresAt.IsZero() {
+		body["expires_at"] = s.expiresAt.Format(time.RFC3339Nano)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(body)
+	_ = req
+}
+
+// -------------------------------------------------------------------
+// The object store
+// -------------------------------------------------------------------
+
+// objectStore is the SECOND in-process server, and its separateness is
+// the instrument. The upload leaves this client for a different origin,
+// carries no bearer token, and answers with a status and a body the /v1
+// contract does not define — so a single double could not tell a row
+// which of the two was talked to, which is the one thing several rows
+// here are entirely about.
+type objectStore struct {
+	mu      sync.Mutex
+	journal *deployJournal
+
+	// url is the "presigned" target the create hands out.
+	url string
+
+	// signed is the exact Content-Length this store's signature covers,
+	// and signedSet says whether one was ever issued. A store that
+	// checks nothing makes a wrong length look correctly refused, so
+	// the check is MODELLED here rather than assumed.
+	signed    int64
+	signedSet bool
+
+	// status, when non-zero, is the answer whatever the length is. body
+	// is the store's own error document, and location turns the answer
+	// into a redirect.
+	status   int
+	body     string
+	location string
+
+	// acceptAnyLength turns the signature check off. A row whose
+	// subject is the number the CREATE declared wants it: a store that
+	// refuses the upload turns a wrong declaration into a refusal, and
+	// then the row reds on the refusal without ever saying which of the
+	// two sizes was sent.
+	acceptAnyLength bool
+
+	puts []storePut
+
+	// readChunk and readPause make this store SLOW BUT PROGRESSING: it
+	// consumes the body readChunk bytes at a time, pausing readPause
+	// between them. A row uses it to spend several stall windows on one
+	// upload while never letting the gap between two bytes reach one.
+	readChunk int
+	readPause time.Duration
+
+	// pauseUntil is how many bytes are consumed at the paced rate before
+	// the rest is drained at full speed. The tail matters: once the
+	// client has handed its last byte to the socket there is no progress
+	// left to report, so a paced drain of the remainder would look like a
+	// stall to a client that had done nothing wrong.
+	pauseUntil int64
+
+	// stopReadingAfter makes it WEDGED: it consumes that many bytes and
+	// then stops reading, holding the request open without ever
+	// finishing it. That is the failure a total deadline and a stall
+	// timer tell apart, and the only shape that can show the difference.
+	stopReadingAfter int64
+
+	// release is closed when the test ends, so a wedged handler cannot
+	// outlive its row.
+	release chan struct{}
+
+	srv *httptest.Server
+}
+
+// storePut is one request this store actually received.
+type storePut struct {
+	method        string
+	contentLength int64
+	bodyLength    int64
+	authorization string
+	status        int
+}
+
+func newObjectStore(t *testing.T, journal *deployJournal) *objectStore {
+	t.Helper()
+	store := &objectStore{journal: journal, release: make(chan struct{})}
+	srv := httptest.NewServer(store)
+	store.srv = srv
+	// The release closes FIRST, so a wedged handler is let go before
+	// srv.Close waits for it. Cleanups run last-registered-first.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(store.release) })
+	// A query string carrying something signature-shaped, because the
+	// rule this client keeps is about a credential in a query string
+	// and a target with none could not show it being kept.
+	store.url = srv.URL + "/o/source.tgz?Sig=" + storeSignature
+	return store
+}
+
+// storeSignature is the sentinel every row uses to ask "did the signed
+// URL reach anywhere it should not". It is a fixture value and names no
+// real credential.
+const storeSignature = "SENTINEL-SIGNATURE-VALUE"
+
+// closeNow shuts this store down before the run that would talk to it,
+// which is how a row gets an address nothing answers on without naming a
+// host or needing a resolver.
+func (s *objectStore) closeNow() { s.srv.Close() }
+
+func (s *objectStore) sign(length int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signed = length
+	s.signedSet = true
+}
+
+func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The reading policy is snapshotted under the lock and the body is
+	// then read WITHOUT it: a wedged handler holds this goroutine for the
+	// life of the row, and holding the mutex too would deadlock every
+	// assertion the row makes afterwards.
+	s.mu.Lock()
+	chunk, pause, stopAfter, release := s.readChunk, s.readPause, s.stopReadingAfter, s.release
+	pauseUntil := s.pauseUntil
+	s.mu.Unlock()
+
+	var body []byte
+	switch {
+	case stopAfter > 0:
+		_, _ = io.CopyN(io.Discard, r.Body, stopAfter)
+		<-release
+		return
+	case pause > 0 && chunk > 0:
+		buf := make([]byte, chunk)
+		var paced int64
+		for paced < pauseUntil {
+			n, err := io.ReadFull(r.Body, buf)
+			body = append(body, buf[:n]...)
+			paced += int64(n)
+			if err != nil {
+				break
+			}
+			select {
+			case <-time.After(pause):
+			case <-release:
+				return
+			}
+		}
+		rest, _ := io.ReadAll(r.Body)
+		body = append(body, rest...)
+	default:
+		body, _ = io.ReadAll(r.Body)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status := http.StatusOK
+	switch {
+	case s.status != 0:
+		status = s.status
+	case s.signedSet && !s.acceptAnyLength && r.ContentLength != s.signed:
+		// The one refusal a real store makes for a body whose length
+		// does not match what was signed. It is the SAME status a
+		// closed window gets, which is the whole reason this client
+		// cannot read the cause off the response.
+		status = http.StatusForbidden
+	}
+
+	s.puts = append(s.puts, storePut{
+		method:        r.Method,
+		contentLength: r.ContentLength,
+		bodyLength:    int64(len(body)),
+		authorization: r.Header.Get("Authorization"),
+		status:        status,
+	})
+	if s.journal != nil {
+		s.journal.note(r.Method + " (object store)")
+	}
+
+	if s.location != "" {
+		w.Header().Set("Location", s.location)
+	}
+	w.WriteHeader(status)
+	if status != http.StatusOK && s.body != "" {
+		_, _ = w.Write([]byte(s.body))
+	}
+}
+
+// received is every request this store actually saw.
+func (s *objectStore) received() []storePut {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]storePut(nil), s.puts...)
+}
+
+// storeErrorDocument is a well-formed error document of the shape an
+// object store answers with. It exists so a row can prove the rendered
+// message is the AUTHORED one rather than something read out of a body
+// this client has no business parsing.
+const storeErrorDocument = `<?xml version="1.0" encoding="UTF-8"?>` +
+	`<Error><Code>RefusedByTheStore</Code>` +
+	`<Message>Do not render me.</Message>` +
+	`<RequestId>abc123</RequestId></Error>`
 
 func (s *deployScript) sent() int {
 	s.mu.Lock()
@@ -262,6 +540,7 @@ type deployRun struct {
 	journal *deployJournal
 	prompt  *journalPrompt
 	script  *deployScript
+	store   *objectStore
 	fsys    *countingFS
 	srv     *httptest.Server
 
@@ -289,10 +568,12 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 	t.Setenv("CURIOUS_API_URL", "")
 
 	journal := &deployJournal{}
+	store := newObjectStore(t, journal)
 	script := &deployScript{
 		journal:  journal,
 		capacity: wire.CapacityResponse{Open: true, AccountsLeft: 200},
 		token:    "issued-token",
+		store:    store,
 	}
 	srv := httptest.NewServer(script)
 	t.Cleanup(srv.Close)
@@ -309,6 +590,7 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 		journal:    journal,
 		prompt:     &journalPrompt{journal: journal},
 		script:     script,
+		store:      store,
 		fsys:       &countingFS{root: root, journal: journal},
 		srv:        srv,
 		tempParent: t.TempDir(),
@@ -342,6 +624,15 @@ func (r *deployRun) storedToken(token, issuedAgainst string) *deployRun {
 	if err := cfg.Save(ui.Secret(token), issuedAgainst); err != nil {
 		r.t.Fatalf("storing a token: %v", err)
 	}
+	return r
+}
+
+// uploadingTo points this run's create at a store somebody else owns,
+// so two runs can be observed by ONE handler. "The store received both"
+// is not a claim two separate handlers can make.
+func (r *deployRun) uploadingTo(store *objectStore) *deployRun {
+	r.script.store = store
+	r.store = store
 	return r
 }
 
@@ -393,6 +684,10 @@ func landmarks(events []string) []string {
 			step = "capacity"
 		case e == "POST /v1/auth/verify":
 			step = "login"
+		case e == "POST /v1/deploys":
+			step = "create"
+		case e == "PUT (object store)":
+			step = "upload"
 		default:
 			continue
 		}
@@ -492,7 +787,7 @@ func TestTheSequenceRunsInTheOrderTheSpecSets(t *testing.T) {
 	}
 	defer handoff.Release()
 
-	want := []string{"walk", "pre-flight", "capacity", "login", "pack"}
+	want := []string{"walk", "pre-flight", "capacity", "login", "pack", "create", "upload"}
 	if got := landmarks(run.journal.all()); !equalEvents(got, want) {
 		t.Errorf("the run happened in the order %v, want %v\n\nfull journal:\n  %s",
 			got, want, strings.Join(run.journal.all(), "\n  "))
@@ -1030,7 +1325,7 @@ func TestTheHandoffIsTheFormedRequest(t *testing.T) {
 		t.Fatal("the hand-off carries no client")
 	}
 
-	// The wire request this feeds carries ONE of these five fields.
+	// The wire request this feeds carries ONE of these six fields.
 	if req := (wire.DeployCreateRequest{Bytes: handoff.Bytes}); req.Bytes != info.Size() {
 		t.Errorf("the wire request would declare %d bytes, want %d", req.Bytes, info.Size())
 	}

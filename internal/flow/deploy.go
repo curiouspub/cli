@@ -84,18 +84,32 @@ type DeployDeps struct {
 
 	// Now is the clock. Optional.
 	Now func() time.Time
+
+	// UploadStallTimeout is how long the upload waits for the next byte
+	// before giving up. Optional; without one the upload's own constant
+	// applies.
+	//
+	// IT IS A SEAM FOR THE SAME REASON Now IS. The behaviour it governs
+	// is "a slow upload must survive and a stopped one must not", and
+	// the only way to see either at the real thirty seconds is to spend
+	// thirty seconds. Injecting it lets a row prove both in
+	// milliseconds. It is the one constant arriving by argument, not a
+	// second constant: nothing here chooses a different number, and
+	// production passes none at all.
+	UploadStallTimeout time.Duration
 }
 
-// Handoff is the formed deploy request: everything the upload step needs
-// and nothing it does not.
+// Handoff is what a completed run leaves in the caller's hands: the
+// archive to release, what was measured on the way, and the deploy the
+// server recorded.
 //
 // IT IS AN INTERNAL TYPE RATHER THAN A WIRE ONE, because it is a
 // different thing rather than a nicer spelling of one. The wire request
-// carries a single field — the packed size — and this carries five, four
+// carries a single field — the packed size — and this carries six, four
 // of which the server never sees: where the archive is on this machine,
 // what it hashes to, how many entries went into it, and the client that
-// will send it. Reshaping a wire type into a roomier internal one is how
-// two copies of a contract drift; this is not that, because there is no
+// sent it. Reshaping a wire type into a roomier internal one is how two
+// copies of a contract drift; this is not that, because there is no
 // second copy of anything the contract defines.
 //
 // THE ARCHIVE OUTLIVES Deploy AND THE CALLER OWNS IT from the moment
@@ -118,6 +132,12 @@ type Handoff struct {
 
 	// Client is the API client carrying this run's bearer token.
 	Client *api.Client
+
+	// DeployID is the record the server created for this archive, and
+	// the handle every later call in the sequence names. NOTHING
+	// PERSISTS IT: it belongs to this run, and a create whose upload
+	// never starts leaves a record the server discards on its own.
+	DeployID string
 
 	release func()
 }
@@ -142,11 +162,11 @@ const workDirPattern = "curious-deploy-*"
 // stopsHere is the honest end of this release's deploy. It names what is
 // missing rather than stopping silently, because a command that packs an
 // archive and says nothing more reads as one that failed quietly.
-const stopsHere = "That is as far as this release goes — uploading the archive and " +
-	"streaming\nthe build arrive in the next one."
+const stopsHere = "That is as far as this release goes — streaming the build and " +
+	"the live\nURL arrive in the next one."
 
-// Deploy runs the local half of `curious deploy` and returns the formed
-// request for the upload step.
+// Deploy runs `curious deploy` as far as this release goes: everything
+// local, then the create, then the upload.
 //
 // # The order, and why it is the order
 //
@@ -156,7 +176,8 @@ const stopsHere = "That is as far as this release goes — uploading the archive
 //  4. Pre-flight and 5. the local limits, over that one walk.
 //  6. Only with no usable token: the capacity check, then the login.
 //  7. Pack.
-//  8. Hand back the formed request.
+//  8. Create the deploy.
+//  9. Upload the archive.
 //
 // LOCAL TRUTHS BEFORE GLOBAL STATE, and the consequence is the sentence
 // worth keeping: A PROJECT THAT CANNOT DEPLOY MAKES ZERO NETWORK CALLS.
@@ -256,45 +277,10 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 
 	// 6. CAPACITY, THEN THE LOGIN — only with no usable token.
 	if token == "" {
-		client, err := api.New(endpoint)
+		token, err = authenticate(ctx, deps, endpoint, now)
 		if err != nil {
-			return nil, endpointUnusableFailure()
-		}
-		// HaveToken is left at false because this branch is the only way
-		// in: the question it asks was answered one line above, and
-		// asking it again here would be a second answer that could
-		// disagree with the first.
-		if err := CapacityGate(ctx, CapacityDeps{
-			Prompt: deps.Prompt,
-			API:    client,
-			Now:    now,
-		}); err != nil {
 			return nil, err
 		}
-
-		// The token is CAUGHT ON ITS WAY TO DISK rather than read back
-		// afterwards. Re-loading the file would be a second answer to
-		// "which token does this run hold", and the two could differ —
-		// another process writing between them is all it takes.
-		var issued ui.Secret
-		save := func(tok ui.Secret, issuedAgainst string) error {
-			if err := defaultTokenWriter(tok, issuedAgainst); err != nil {
-				return err
-			}
-			issued = tok
-			return nil
-		}
-		if err := Login(ctx, LoginDeps{
-			Prompt:   deps.Prompt,
-			Auth:     client,
-			Endpoint: endpoint,
-			Save:     save,
-			Offer:    NewWaitlistOffer(deps.Prompt, client, now),
-			Now:      now,
-		}); err != nil {
-			return nil, err
-		}
-		token = issued
 	}
 
 	authed, err := api.New(endpoint, api.WithToken(token))
@@ -367,6 +353,58 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	}
 
 	deps.Prompt.Step("%s", prepared.Receipt)
+
+	// 8. THE CREATE.
+	//
+	// THE DECLARED SIZE COMES FROM THE PACK, not from a second stat.
+	// prepared.Archive.Size was read back off the file the packer had
+	// just closed; measuring it again here would be a second answer to
+	// one question, free to disagree with the first — and the server
+	// signs the upload link with this exact number, so a disagreement
+	// is not a warning, it is every upload refused.
+	resp, err := createDeploy(ctx, createDeps{
+		Client: authed,
+		Reauthenticate: func(ctx context.Context) (deployCreator, error) {
+			// THE WHOLE FRONT OF THE SEQUENCE, re-entered — capacity
+			// first, then the login — rather than a bare second verify.
+			// The daily cap counts accounts and an account is spent at
+			// the verify step, so skipping the gate here would spend
+			// one the server had already said it had no room for.
+			fresh, err := authenticate(ctx, deps, endpoint, now)
+			if err != nil {
+				return nil, err
+			}
+			client, err := api.New(endpoint, api.WithToken(fresh))
+			if err != nil {
+				return nil, endpointUnusableFailure()
+			}
+			authed = client
+			return client, nil
+		},
+		Bytes: prepared.Archive.Size,
+		Now:   now,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// 9. THE UPLOAD.
+	//
+	// A FAILURE HERE LEAVES A CREATED DEPLOY RECORD, which is the
+	// server's to expire. This step adds no state and no file of its
+	// own, and the copy says so rather than implying it cleaned up.
+	if err := uploadArchive(ctx, uploadDeps{
+		URL:          resp.UploadURL,
+		ArchivePath:  prepared.Archive.Path,
+		Bytes:        prepared.Archive.Size,
+		ExpiresAt:    resp.ExpiresAt,
+		Transport:    authed.Transport(),
+		Now:          now,
+		StallTimeout: deps.UploadStallTimeout,
+	}); err != nil {
+		return nil, err
+	}
+
 	deps.Prompt.Step("%s", stopsHere)
 
 	handedOver = true
@@ -376,8 +414,59 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		Bytes:       prepared.Archive.Size,
 		Entries:     prepared.Archive.Entries,
 		Client:      authed,
+		DeployID:    resp.DeployID,
 		release:     release,
 	}, nil
+}
+
+// authenticate runs the capacity check and then the login, and returns
+// the token that was stored.
+//
+// IT IS ONE FUNCTION BECAUSE IT IS ENTERED TWICE — once when a run holds
+// no usable token, and once when the server refuses the one it holds.
+// The order is the load-bearing half: the daily cap counts ACCOUNTS and
+// an account is spent at the verify step, so the gate belongs
+// immediately before the login it gates, on both routes in.
+func authenticate(ctx context.Context, deps DeployDeps, endpoint string, now func() time.Time) (ui.Secret, error) {
+	client, err := api.New(endpoint)
+	if err != nil {
+		return "", endpointUnusableFailure()
+	}
+
+	// HaveToken is left at false because every way in here is a run
+	// with no token the server will accept. Asking the question again
+	// would be a second answer that could disagree with the first.
+	if err := CapacityGate(ctx, CapacityDeps{
+		Prompt: deps.Prompt,
+		API:    client,
+		Now:    now,
+	}); err != nil {
+		return "", err
+	}
+
+	// The token is CAUGHT ON ITS WAY TO DISK rather than read back
+	// afterwards. Re-loading the file would be a second answer to
+	// "which token does this run hold", and the two could differ —
+	// another process writing between them is all it takes.
+	var issued ui.Secret
+	save := func(tok ui.Secret, issuedAgainst string) error {
+		if err := defaultTokenWriter(tok, issuedAgainst); err != nil {
+			return err
+		}
+		issued = tok
+		return nil
+	}
+	if err := Login(ctx, LoginDeps{
+		Prompt:   deps.Prompt,
+		Auth:     client,
+		Endpoint: endpoint,
+		Save:     save,
+		Offer:    NewWaitlistOffer(deps.Prompt, client, now),
+		Now:      now,
+	}); err != nil {
+		return "", err
+	}
+	return issued, nil
 }
 
 // deployChecks is the pre-flight set this sequence runs, over the walked

@@ -98,23 +98,37 @@ The finished product is one binary with two faces:
 
 **What exists in the tree right now is smaller than that, and this
 section says so on purpose.** Today `curious` dispatches `version`, a
-`deploy` that runs the whole LOCAL half of the sequence, and an `mcp`
-server that is **transport and dispatch with NO TOOLS REGISTERED** — a
-client connects, completes a handshake and receives an empty tool list,
-because the callables an agent would actually use land in a later change.
-A repository describing unbuilt features in the present tense has told
-its reader something false, and this one is read by strangers deciding
-whether to trust it.
+`deploy` that runs everything up to and including the upload, and an
+`mcp` server that is **transport and dispatch with NO TOOLS REGISTERED**
+— a client connects, completes a handshake and receives an empty tool
+list, because the callables an agent would actually use land in a later
+change. A repository describing unbuilt features in the present tense has
+told its reader something false, and this one is read by strangers
+deciding whether to trust it. **The reverse is no smaller an error**: a
+line still saying the upload is unbuilt, the day after it ships, is the
+same defect running backwards, so this paragraph moves in the commit that
+moves the code.
 
 `deploy` resolves the directory, reads any stored login, walks the
 project once, runs the pre-flight checks and the local limits over that
-one walk, checks capacity and logs in when there is no usable token, and
-packs the archive — **and then stops, with the archive removed and a line
-saying so.** The upload, the streamed build and the published URL are the
-next change. The ordering is the product rather than an implementation
-detail: everything free and local runs first, so **a project that cannot
-deploy makes zero network calls**, and nobody is walked through email
-verification before being told there is no `package.json`.
+one walk, checks capacity and logs in when there is no usable token,
+packs the archive, asks the server for somewhere to send it, and uploads
+it — **and then stops, with the archive removed and a line saying so.**
+Streaming the build and the published URL are the next change. The
+ordering is the product rather than an implementation detail: everything
+free and local runs first, so **a project that cannot deploy makes zero
+network calls**, and nobody is walked through email verification before
+being told there is no `package.json`.
+
+Two properties of that last pair are worth stating here, because both are
+easy to undo by accident. **Authentication is per CALL, not per client**:
+the create sends the bearer token and the four unauthenticated endpoints
+cannot, and the upload cannot either — the presigned link IS the
+credential, and adding a second one sends it to an origin that never
+asked. And **the upload's failure copy never quotes the link**: every
+transport failure net/http produces carries the whole signed URL, so the
+single error constructor and the redacted host are what keep a credential
+out of a message.
 
 The split between the server and its tools is deliberate rather than a
 staging accident: a server with no tools is testable against the protocol

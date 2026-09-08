@@ -177,11 +177,38 @@ func WithTimeout(d time.Duration) Option {
 }
 
 // WithToken sets the bearer token this Client attaches to a call that
-// takes one. None of this epic's four calls do — auth/verify RETURNS a
-// token, it does not spend one — so this has no visible effect against
-// them; it exists for the calls a later change adds to this Client.
+// takes one. The four unauthenticated calls do not — auth/verify RETURNS
+// a token, it does not spend one — so this has no visible effect against
+// them; what reads it is a call that asks for it, per call, through
+// withBearerToken below.
 func WithToken(t ui.Secret) Option {
 	return func(c *Client) { c.Token = t }
+}
+
+// callOption tunes ONE request rather than the Client that sends it.
+//
+// AUTHENTICATION IS PER CALL, NOT PER CLIENT, and this type is the whole
+// mechanism. A token attached inside attempt — even guarded on the token
+// being non-empty — would go out on every call this client makes,
+// including the four that are unauthenticated by contract, and a bearer
+// credential sent to an endpoint that never asked for one is a
+// credential disclosed for nothing. The rule is enforced from outside
+// too: TestToken_NeverSentOnUnauthenticatedCalls builds a client WITH a
+// token and asserts the four send none, so wiring the header into the
+// shared path reds it.
+type callOption func(*http.Request)
+
+// withBearerToken attaches this Client's token to a single request.
+//
+// It is the ONE place the wrapped value is converted back to a string.
+// ui.Secret has no accessor by design, so the string() conversion is the
+// only way out and it lives at the call site that genuinely needs it —
+// which is what keeps a leak from hiding behind something that looks
+// like a getter.
+func (c *Client) withBearerToken() callOption {
+	return func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+string(c.Token))
+	}
 }
 
 // Client is this CLI's handle onto the public /v1 API.
@@ -321,7 +348,7 @@ func retryBackoff(attempt int) time.Duration {
 // idempotent gates retrying at all: auth/start and auth/verify pass
 // false, because retrying either spends something a retry cannot safely
 // spend twice — see the package doc.
-func (c *Client) do(ctx context.Context, method, path string, reqBody, out any, idempotent bool) error {
+func (c *Client) do(ctx context.Context, method, path string, reqBody, out any, idempotent bool, opts ...callOption) error {
 	var payload []byte
 	if reqBody != nil {
 		var err error
@@ -346,7 +373,7 @@ func (c *Client) do(ctx context.Context, method, path string, reqBody, out any, 
 			}
 		}
 
-		retryable, err := c.attempt(ctx, method, path, payload, out)
+		retryable, err := c.attempt(ctx, method, path, payload, out, opts...)
 		if err == nil {
 			return nil
 		}
@@ -363,7 +390,7 @@ func (c *Client) do(ctx context.Context, method, path string, reqBody, out any, 
 // connection-level failure or a 5xx status, false for everything else
 // (a successful decode, or a non-2xx response this client can already
 // fully explain).
-func (c *Client) attempt(ctx context.Context, method, path string, payload []byte, out any) (retryable bool, err error) {
+func (c *Client) attempt(ctx context.Context, method, path string, payload []byte, out any, opts ...callOption) (retryable bool, err error) {
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -378,6 +405,12 @@ func (c *Client) attempt(ctx context.Context, method, path string, payload []byt
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
+	// The per-call options come LAST, after the headers every call
+	// shares, so what one call asks for is visibly its own rather than
+	// something the shared path decided on its behalf.
+	for _, opt := range opts {
+		opt(req)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

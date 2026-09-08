@@ -23,16 +23,16 @@ The platform is not yet open. What exists here today:
   it completes a handshake, lists tools and calls them. It registers no
   tools yet, so a client that connects today finds an empty list. Written
   against the standard library alone — no SDK, no new dependency.
-- **`curious deploy`** — the local half: it checks your project, logs
-  you in if it has to, and packs the archive. It stops there and says
-  so, because the upload is not built yet. Everything it can answer
-  without the network it answers first, so a project that cannot deploy
-  never sends a byte.
+- **`curious deploy`** — it checks your project, logs you in if it has
+  to, packs the archive and uploads it. It stops there and says so,
+  because the build stream and the live URL are not built yet.
+  Everything it can answer without the network it answers first, so a
+  project that cannot deploy never sends a byte.
 
 What lands here next:
 
-- **The rest of `curious deploy`** — upload the archive, watch the build
-  logs stream live, get a `*.curiously.dev` URL.
+- **The rest of `curious deploy`** — watch the build logs stream live,
+  get a `*.curiously.dev` URL.
 - **The MCP tools** — the same flow through `curious mcp`, so Claude
   Code, Claude Desktop, and other MCP clients can deploy for you.
 
