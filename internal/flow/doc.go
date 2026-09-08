@@ -2,14 +2,25 @@
 // sequence that ties pre-flight, packing, upload and log streaming
 // together into what a person running `curious deploy` sees.
 //
-// The pre-flight renderer and the login machine are here today; the
-// sequence around them lands in a later change, and nothing in this
-// package is wired into `curious deploy` yet. This is where the
-// DECISIONS about a result are made rather than where the result is
-// produced — what a warning costs, what a hard stop costs, and what to
-// do when there is nobody to ask — which is the split that lets the
-// agent-facing surface be a second renderer instead of a second set of
-// checks.
+// The sequence is here now and `curious deploy` runs it. It stops with a
+// formed request in hand: the archive is packed and the upload, the log
+// stream and the published URL arrive in a later change, so Deploy hands
+// its caller a Handoff rather than a live site.
+//
+// This is where the DECISIONS about a result are made rather than where
+// the result is produced — what a warning costs, what a hard stop costs,
+// and what to do when there is nobody to ask — which is the split that
+// lets the agent-facing surface be a second renderer instead of a second
+// set of checks.
+//
+// # Why the sequence lives here and not in the command
+//
+// The order the steps run in is a product decision with reasons — local
+// truths before global state, the capacity check beside the login it
+// gates, one walk feeding three readers — and every one of those reasons
+// is testable without a terminal, a real endpoint or a subprocess. In
+// the command it would be reachable only by running the binary, which is
+// how an ordering rule comes to have no row that can see it.
 //
 // # Why the login is a state machine and not a function
 //
