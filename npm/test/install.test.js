@@ -59,13 +59,31 @@ test('the download URL carries the tag path and the release spelling of the arch
   assert.ok(!asked.includes('x64'), `asked for ${asked}`);
 });
 
-test('nothing in the install script reaches for the newest release', () => {
+test('nothing this package ships reaches for the newest release', () => {
   // The partner of the row above, and useless without it: this one
   // cannot see a runtime constant, and that one cannot see a fallback
   // never taken.
-  const source = fs.readFileSync(path.join(h.PACKAGE_ROOT, 'install.js'), 'utf8');
-  assert.ok(!/\blatest\b/.test(source),
-    'the install script mentions the newest release; it must only ever fetch its own version');
+  //
+  // IT SCANS THE SHARED MODULE TOO, not only the script that builds the
+  // address today. Scoped to one file, the row is satisfied by moving
+  // the construction one require away — which is a rule with a field of
+  // view rather than a rule.
+  //
+  // THE ONE PERMITTED MENTION is the refusal copy telling somebody on
+  // an unsupported platform how to build the tool from source with the
+  // Go toolchain. It is a different subject entirely, so the waiver is
+  // per LINE and names what makes the line acceptable, rather than
+  // exempting a file.
+  for (const file of ['install.js', path.join('lib', 'platform.js')]) {
+    const lines = fs.readFileSync(path.join(h.PACKAGE_ROOT, file), 'utf8').split('\n');
+    lines.forEach((line, at) => {
+      if (!/\blatest\b/.test(line) || line.includes('go install')) {
+        return;
+      }
+      assert.fail(`${file}:${at + 1} reaches for the newest release: ${line.trim()}\n` +
+        'This package must only ever fetch the release matching its own version.');
+    });
+  }
 });
 
 test('an unsupported platform fails the install before any network call', async (t) => {
