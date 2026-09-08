@@ -374,3 +374,120 @@ func TestLoadRefusesTwoSpellingsOfTheEndpointToo(t *testing.T) {
 		t.Errorf("the file is gone after a refused load: %v", err)
 	}
 }
+
+// TestLoadRefusesTwoSpellingsOfANYField is the rule widened past the
+// fields this build happens to know.
+//
+// The narrow version asked the question only of the three known keys,
+// which leaves the identical trap sitting in the file for whichever
+// build learns a fourth. That build ships, meets a file carrying two
+// fold-equal spellings of its new field, fills the struct from one and
+// preserves the other, and is back to a value that is used and written
+// back — with nothing in the older binaries able to have warned anybody,
+// because the older binaries are already out.
+//
+// The accepted cost is stated rather than hidden: a file this build
+// could have round-tripped faithfully is refused. Two keys the format
+// folds together are ambiguous to any decoder that knows the field, so
+// refusing now is refusing early rather than refusing wrongly.
+//
+// REQUIRED MUTATION: in ambiguousSpellings (config.go), iterate
+// knownKeys instead of the file's own keys. The first two rows here red
+// and TestLoadRefusesTwoSpellingsOfOneField stays green — which is the
+// pair, since the narrow rule satisfies every row about the token field.
+// Run, observed red, and the file restored from a checksum-verified
+// copy.
+func TestLoadRefusesTwoSpellingsOfANYField(t *testing.T) {
+	const endpoint = "https://api.example.com"
+
+	// THE LOOK-ALIKES ARE BYTES, and the premise of each is asserted
+	// below rather than trusted. The first draft of this row reached for
+	// a capital-K-shaped character and got U+212B ANGSTROM SIGN, which
+	// folds onto a letter A and not onto a K at all — so the row would
+	// have gone on passing while testing nothing it claimed to. That is
+	// the same trap the token table beside this one is built from bytes
+	// to avoid, arriving in the file that documents it.
+	kelvin := string([]byte{0xe2, 0x84, 0xaa}) + "eep"   // U+212A, folds onto k
+	angstrom := string([]byte{0xe2, 0x84, 0xab}) + "eep" // U+212B, folds onto a ring A
+
+	if !strings.EqualFold(kelvin, "keep") {
+		t.Fatalf("the fold-equal fixture %+q is not fold-equal to \"keep\", so the "+
+			"row below asserts nothing it claims to", kelvin)
+	}
+	if strings.EqualFold(angstrom, "keep") {
+		t.Fatalf("the distinctness fixture %+q folds onto \"keep\" after all, so the "+
+			"row below cannot tell a refusal from a false alarm", angstrom)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		extra   string
+		refused bool
+		names   []string
+	}{
+		{
+			name:    "two spellings of a field no release has defined yet",
+			extra:   `"refresh_token":"a","REFRESH_TOKEN":"b"`,
+			refused: true,
+			names:   []string{`"REFRESH_TOKEN"`, `"refresh_token"`},
+		},
+		{
+			name:    "two spellings that differ only by a Unicode fold",
+			extra:   `"` + kelvin + `":"a","keep":"b"`,
+			refused: true,
+			names:   []string{`"keep"`, `"\u212aeep"`},
+		},
+		// The distinctness rows. A rule over every key must not become a
+		// rule against having more than one.
+		{
+			name:    "a look-alike that folds onto something else entirely",
+			extra:   `"` + angstrom + `":"a","keep":"b"`,
+			refused: false,
+		},
+		{
+			name:    "two genuinely different unknown fields",
+			extra:   `"future_a":1,"future_b":2`,
+			refused: false,
+		},
+		{
+			name:    "an unknown field with a known field's prefix",
+			extra:   `"tokens":["a"],"token_kind":"bearer"`,
+			refused: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := hermeticPath(t)
+			writeConfigFile(t, path, fmt.Sprintf(
+				`{"version":1,"token":%q,"api_url":%q,%s}`, testToken, endpoint, tc.extra))
+
+			loaded, err := Load(endpoint)
+			if err != nil {
+				t.Fatalf("Load(): %v", err)
+			}
+			if !tc.refused {
+				if loaded.NoTokenReason != nil {
+					t.Fatalf("a file whose keys are all distinct was refused: %v",
+						loaded.NoTokenReason)
+				}
+				if string(loaded.Token) != testToken {
+					t.Errorf("the token was not returned")
+				}
+				return
+			}
+			if loaded.NoTokenReason == nil {
+				t.Fatalf("a file carrying two spellings of one field was accepted, and " +
+					"the field this build does not know is exactly the one no later " +
+					"build can be warned about")
+			}
+			if loaded.Token != "" {
+				t.Errorf("a token came back out of a file nobody can read the intent of")
+			}
+			msg := loaded.NoTokenReason.Error()
+			for _, want := range tc.names {
+				if !strings.Contains(msg, want) {
+					t.Errorf("the message does not name the spelling %s: %q", want, msg)
+				}
+			}
+		})
+	}
+}
