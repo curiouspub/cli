@@ -3,9 +3,12 @@
 package pack
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // namedPipeFixture builds a tree holding one regular file and one real
@@ -36,4 +39,43 @@ func ignoreFilePipeFixture(t *testing.T) (string, bool) {
 		t.Fatalf("creating the named-pipe fixture: %v", err)
 	}
 	return root, true
+}
+
+// TestPackRefusesANamedPipeBeforeOpeningIt is the third hostile input,
+// and the only one whose failure mode is a HANG rather than a wrong
+// archive.
+//
+// Opening a FIFO blocks until somebody writes to it. A packer that
+// checked the entry's kind after opening the file — or not at all —
+// would stop a deploy on a file the user forgot was in their project,
+// with no output and nothing to read. So the refusal is measured with a
+// DEADLINE OF ITS OWN: this row cannot express "did not hang" by
+// returning, only by returning in time.
+//
+// REQUIRED MUTATION, RUN: delete the IsRegular check from writeEntry.
+// This row does not fail — it HANGS, and the deadline below is what
+// turns that into a red rather than a suite that never finishes.
+func TestPackRefusesANamedPipeBeforeOpeningIt(t *testing.T) {
+	root, _ := namedPipeFixture(t)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Pack(OSFileSystem{}, root, t.TempDir(), []File{
+			{Path: "pipe", Size: 0, Mode: os.ModeNamedPipe | 0o644},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Pack accepted a named pipe")
+		}
+		if !strings.Contains(err.Error(), "pipe") {
+			t.Errorf("error = %q, want it to name the entry", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Pack did not return within five seconds — it opened the pipe and " +
+			"is waiting for a writer, which is a deploy stopped with nothing to read")
+	}
 }

@@ -1137,3 +1137,132 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	r.left -= n
 	return n, err
 }
+
+// ---------------------------------------------------------------------
+// Hostile inputs, driven DIRECTLY
+// ---------------------------------------------------------------------
+
+// TestPackRefusesEveryNonRegularEntry gives Pack the inputs the walk
+// would never hand it, which is the only way to reach the property.
+//
+// WHY THESE ROWS EXIST AT ALL. The path-safety row above builds its
+// fixture with writeTree and packs through packTree, so every path it
+// feeds Pack came from the walk — ordinary relative names. It looks like
+// the row that guards this class and it cannot see it: with no hostile
+// input, deleting the refusal leaves it green. That is the never-run
+// family's fourth face, a row whose INPUTS cannot reach the property it
+// appears to guard, and the fix is inputs rather than assertions.
+//
+// The symlink row is the one that measured a real consequence before the
+// refusal existed: handed a link, Pack FOLLOWED it — Open resolves one —
+// and packed the target's bytes under a regular-file entry. Content from
+// outside the project, in the upload, with no link entry anywhere for
+// anyone to notice.
+//
+// REQUIRED MUTATION, RUN: delete the IsRegular check from writeEntry.
+// The symlink and directory rows red; the FIFO row HANGS rather than
+// failing, which is its own half of the argument and why it carries a
+// deadline of its own.
+func TestPackRefusesEveryNonRegularEntry(t *testing.T) {
+	// The positive control first: an ordinary regular file through the
+	// same door packs, so these rows cannot pass against a Pack that
+	// refuses everything.
+	t.Run("positive control: a regular file is still packed", func(t *testing.T) {
+		root := writeTree(t, []entry{{path: "index.html", body: "<html>"}})
+		archive := mustPack(t, OSFileSystem{}, root, []File{
+			{Path: "index.html", Size: 6, Mode: 0o644},
+		})
+		defer func() { _ = archive.Remove() }()
+		if got := namesOf(readArchive(t, archive.Path)); len(got) != 1 {
+			t.Fatalf("entries = %v, want the one regular file", got)
+		}
+	})
+
+	t.Run("a symlink is refused, and its target is never read", func(t *testing.T) {
+		root := t.TempDir()
+		secret := filepath.Join(t.TempDir(), "secret.txt")
+		if err := os.WriteFile(secret, []byte("SECRET-CONTENT"), 0o600); err != nil {
+			t.Fatalf("writing the fixture's out-of-tree file: %v", err)
+		}
+		if err := os.Symlink(secret, filepath.Join(root, "link.txt")); err != nil {
+			t.Skipf("this runner cannot create a symbolic link, so the input this row needs cannot exist: %v", err)
+		}
+
+		_, err := Pack(OSFileSystem{}, root, t.TempDir(), []File{
+			{Path: "link.txt", Size: 14, Mode: os.ModeSymlink | 0o777},
+		})
+		if err == nil {
+			t.Fatal("Pack accepted a symbolic link — it would be followed to whatever it points at")
+		}
+		if !strings.Contains(err.Error(), "link.txt") {
+			t.Errorf("error = %q, want it to name the entry", err)
+		}
+	})
+
+	// THE DIRECTORY ROW ASSERTS THE SPECIFIC REFUSAL, and it has to.
+	// Written as "an error came back" it passed under the mutation that
+	// deletes the check — a directory opens fine and fails later at the
+	// read, so the row was satisfied by the wrong error and proved
+	// nothing about the refusal. Measured, not reasoned about: it went
+	// green under M-A until this assertion named what it wanted.
+	t.Run("a directory is refused, by the refusal and not by a later read", func(t *testing.T) {
+		root := writeTree(t, []entry{{path: "assets/"}})
+		_, err := Pack(OSFileSystem{}, root, t.TempDir(), []File{
+			{Path: "assets", Size: 0, Mode: os.ModeDir | 0o755},
+		})
+		if err == nil {
+			t.Fatal("Pack accepted a directory entry, which the extractor refuses the whole archive over")
+		}
+		if !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("error = %q, want the refusal — an error from further down the "+
+				"path means this row is satisfied by something other than the check "+
+				"it exists for", err)
+		}
+	})
+}
+
+// TestTheArchiveOrderIsThePackersOwn. The walk sorts, but a packer that
+// wrote whatever order it was handed made determinism a property of the
+// PIPELINE — the same file set in two orders produced two digests, and
+// nothing in this package said so.
+//
+// REQUIRED MUTATION, RUN: range over files rather than
+// sortedByPath(files) in Pack. Both assertions red.
+func TestTheArchiveOrderIsThePackersOwn(t *testing.T) {
+	root := writeTree(t, []entry{
+		{path: "a.html", body: "a"},
+		{path: "b.html", body: "b"},
+		{path: "c.html", body: "c"},
+	})
+	forward := []File{
+		{Path: "a.html", Size: 1, Mode: 0o644},
+		{Path: "b.html", Size: 1, Mode: 0o644},
+		{Path: "c.html", Size: 1, Mode: 0o644},
+	}
+	backward := []File{forward[2], forward[1], forward[0]}
+
+	one := mustPack(t, OSFileSystem{}, root, forward)
+	defer func() { _ = one.Remove() }()
+	two := mustPack(t, OSFileSystem{}, root, backward)
+	defer func() { _ = two.Remove() }()
+
+	if one.SHA256 != two.SHA256 {
+		t.Errorf("two orders of one file set produced two digests:\n %s\n %s\n"+
+			"determinism has to be this function's own fact, not its caller's",
+			one.SHA256, two.SHA256)
+	}
+
+	// The caller's slice is left alone: reordering somebody else's list
+	// as a side effect of packing is a surprise three callers away.
+	if backward[0].Path != "c.html" {
+		t.Errorf("Pack reordered the caller's slice: %v", namesOfFiles(backward))
+	}
+}
+
+func namesOfFiles(files []File) []string {
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = f.Path
+	}
+	return out
+}
