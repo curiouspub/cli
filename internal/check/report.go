@@ -227,6 +227,22 @@ func (e *SizeMismatchError) Error() string {
 //     replacing by id IS replacing by that producer. The rule needs no
 //     producer field because the gate already made ids unique.
 //
+// WHAT THE NARROWING ACTUALLY GUARDS, dated 2026-09-08 so the next reader
+// weighs it rather than inherits it. The check is "this id is CURRENTLY
+// DECLINED" and nothing more. Producer identity is DERIVED from the
+// duplicate gate rather than checked here, so in principle any holder of
+// a Report can supersede any declined id in it — the type does not know
+// which producer declined, only that one did.
+//
+// That is fine while a Report lives inside one process and is passed
+// between packages that were compiled together: the set of holders is the
+// set of callers, and they are all in this module. **Revisit if a report
+// ever crosses a process boundary** — serialised to an agent, returned
+// over a socket, reconstructed from JSON — because at that point "the
+// producer that declined it" stops being derivable and starts needing to
+// be carried. Stated as posture, not as a defect: nothing today can reach
+// the case, and a guard against it now would be a field nothing sets.
+//
 // Findings from the later results join the report, and the whole thing
 // goes back through the same enforcements Combine applies — a superseded
 // report is validated by the same rules or it is not validated at all.
