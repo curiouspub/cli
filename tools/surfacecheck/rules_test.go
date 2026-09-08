@@ -1,0 +1,282 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// ---------------------------------------------------------------------
+// A repository to check, built here rather than borrowed.
+// ---------------------------------------------------------------------
+
+// fixture is a small real repository. The rows below drive the same git
+// commands the checker runs in a workflow, because the seam this check
+// fails at is precisely the one between what git was asked and what it
+// answered — and a fake answering plausibly cannot fail that way.
+type fixture struct {
+	t    *testing.T
+	dir  string
+	repo repo
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	dir := t.TempDir()
+	f := &fixture{t: t, dir: dir, repo: repo{dir: dir}}
+	f.git("init", "--quiet")
+	// Named rather than inherited: the initial branch git chooses depends
+	// on its version and on the operator's own configuration, and a row
+	// about a default branch cannot be written against a name that
+	// changes per machine.
+	f.git("symbolic-ref", "HEAD", "refs/heads/main")
+	f.git("config", "user.name", "surface check fixture")
+	f.git("config", "user.email", "fixture@example.invalid")
+	f.git("config", "commit.gpgsign", "false")
+	return f
+}
+
+func (f *fixture) git(args ...string) string {
+	f.t.Helper()
+	out, err := f.repo.run(args...)
+	if err != nil {
+		f.t.Fatalf("fixture: %v", err)
+	}
+	return out
+}
+
+func (f *fixture) write(path, content string) {
+	f.t.Helper()
+	full := filepath.Join(f.dir, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		f.t.Fatalf("fixture: %v", err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		f.t.Fatalf("fixture: %v", err)
+	}
+}
+
+// commit stages the named paths and nothing else, then writes the
+// message through a file so a multi-line body survives intact.
+func (f *fixture) commit(message string, paths ...string) string {
+	f.t.Helper()
+	f.git(append([]string{"add", "--"}, paths...)...)
+	messageFile := filepath.Join(f.t.TempDir(), "message")
+	if err := os.WriteFile(messageFile, []byte(message), 0o644); err != nil {
+		f.t.Fatalf("fixture: %v", err)
+	}
+	f.git("commit", "--quiet", "--allow-empty", "--file", messageFile)
+	return strings.TrimSpace(f.git("rev-parse", "HEAD"))
+}
+
+// realRuleFile reads one of this repository's own rule files.
+func realRuleFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), filepath.FromSlash(path)))
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// withoutLine returns a rule file with exactly one data line removed, and
+// fails if that line was not there — an edit that changed nothing is not
+// a narrowing, and a row resting on one proves nothing.
+func withoutLine(t *testing.T, text, line string) string {
+	t.Helper()
+	var kept []string
+	removed := 0
+	for _, l := range strings.Split(text, "\n") {
+		if strings.TrimSpace(l) == line {
+			removed++
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if removed != 1 {
+		t.Fatalf("removing %q from the rule file took out %d line(s), want exactly 1", line, removed)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// narrowedRepo builds a repository whose BASE declares this project's
+// real rule files and whose HEAD has one pattern line taken out, with a
+// commit in between whose message only that line would have caught.
+//
+// That is the shape of the attack the union exists for: one push deletes
+// the line that would catch it and adds the message, together.
+func narrowedRepo(t *testing.T) (f *fixture, base, head, phrase, removed string) {
+	t.Helper()
+	rules := realRules(t)
+	phrase, removed = aCitedPhrase(t, rules)
+
+	patterns := realRuleFile(t, citationPatternsPath)
+	vendor := realRuleFile(t, vendorTermsPath)
+
+	f = newFixture(t)
+	f.write(citationPatternsPath, patterns)
+	f.write(vendorTermsPath, vendor)
+	base = f.commit("the rules as they stand", citationPatternsPath, vendorTermsPath)
+
+	f.write(citationPatternsPath, withoutLine(t, patterns, removed))
+	head = f.commit("tidy the walk\n\nas "+phrase+" says\n", citationPatternsPath)
+	return f, base, head, phrase, removed
+}
+
+// ---------------------------------------------------------------------
+// The rule files are READ, at both ends.
+// ---------------------------------------------------------------------
+
+// TestTheRuleFilesAreReadAtBothEnds is the pair of properties this whole
+// loader exists for, and each is asserted in both directions.
+//
+// MUTATIONS RUN AGAINST THE REAL LOADER, with what each one ACTUALLY
+// reddened rather than what it was expected to. The files were preserved
+// by copy and the restores verified by checksum.
+//
+//   - unionOf given its own inlined pattern list for the citation file,
+//     reading neither end -> "deleting a line measurably changes what is
+//     caught" reds on its ABSENCE half, saying the phrase is still
+//     reported with the line removed. It was predicted to go GREEN, on
+//     the reasoning that an inlined copy makes the deletion invisible.
+//     It cannot: the row asserts both directions, and an inlined copy
+//     satisfies the presence half while destroying the absence half. A
+//     row that only asked for "different output" would indeed have gone
+//     green, which is why it does not ask that. Four further rows red
+//     with it — both narrowing rows, the empty-file refusal, and the
+//     self-test's own historical half, that last because a vocabulary
+//     cut down to one pattern no longer catches the message it must.
+//
+//   - unionOf returning head's lines alone -> exactly two rows here red:
+//     "a line deleted inside the range still catches" and "a narrowing is
+//     reported with its line named". End to end, the same mutation makes
+//     the whole command print "clean." and exit 0 on a push that deletes
+//     the catching line and adds the message together. The self-test
+//     stays green through it, which is the reason these are separate
+//     controls: the historical message is caught by a pattern head still
+//     declares, so nothing about the union is visible from there.
+func TestTheRuleFilesAreReadAtBothEnds(t *testing.T) {
+	f, base, head, phrase, removed := narrowedRepo(t)
+
+	t.Run("deleting a line measurably changes what is caught", func(t *testing.T) {
+		// THE PRESENCE. The file as the base declares it catches the
+		// phrase, so the absence below is about the deleted line rather
+		// than about a checker that finds nothing.
+		full, _, err := LoadRules(f.repo.atRevision(base), f.repo.atRevision(base))
+		if err != nil {
+			t.Fatalf("loading the rules at the base: %v", err)
+		}
+		if got := full.Scan("commit", phrase); len(got) == 0 {
+			t.Fatal("the rule file as committed catches nothing, so the row below cannot " +
+				"attribute an absence to the deleted line")
+		}
+
+		// THE ABSENCE. One line out, and the same phrase is invisible.
+		// "Different output" alone would be satisfied by a checker that
+		// reported the manifest's length, so both halves are named.
+		narrowed, _, err := LoadRules(f.repo.atRevision(head), f.repo.atRevision(head))
+		if err != nil {
+			t.Fatalf("loading the rules at head: %v", err)
+		}
+		if got := narrowed.Scan("commit", phrase); len(got) != 0 {
+			t.Errorf("with %q removed from %s the phrase is still reported (%v)\n"+
+				"Deleting a line has to change what this catches, or nobody can check the "+
+				"file is really being read", removed, citationPatternsPath, got)
+		}
+	})
+
+	t.Run("a line deleted inside the range still catches, because the union has the base's copy",
+		func(t *testing.T) {
+			// THE ROW THE HEAD-ONLY READING WOULD PASS. The working tree
+			// is head, where the line is gone; the base still has it.
+			union, _, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree())
+			if err != nil {
+				t.Fatalf("loading the union: %v", err)
+			}
+			if got := union.Scan("commit", phrase); len(got) == 0 {
+				t.Error("a message caught only by a pattern deleted in the same range was " +
+					"not reported. One push can otherwise delete the line that would catch " +
+					"it and add the message, together, and this check loads the weakened " +
+					"file and passes.")
+			}
+
+			// And its control: read head alone — which is what the
+			// content rule does, correctly, on a surface with no range —
+			// and the same phrase goes through. The two ideas are each
+			// right; their combination is not.
+			headOnly, _, err := LoadRules(f.repo.workingTree(), f.repo.workingTree())
+			if err != nil {
+				t.Fatalf("loading head alone: %v", err)
+			}
+			if got := headOnly.Scan("commit", phrase); len(got) != 0 {
+				t.Errorf("head alone still reports the phrase (%v), so the row above passes "+
+					"whether or not the union is doing anything", got)
+			}
+		})
+
+	t.Run("a narrowing is reported with its line named", func(t *testing.T) {
+		_, narrowings, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree())
+		if err != nil {
+			t.Fatalf("loading the union: %v", err)
+		}
+		if len(narrowings) != 1 {
+			t.Fatalf("the range reports %d narrowing(s), want exactly 1: %v", len(narrowings), narrowings)
+		}
+		if narrowings[0].Path != citationPatternsPath || narrowings[0].Line != removed {
+			t.Errorf("narrowing reported as %+v, want %s / %q — a narrowing nobody can read "+
+				"is a red nobody can act on", narrowings[0], citationPatternsPath, removed)
+		}
+
+		// THE CONTROL. A range that narrows nothing reports nothing, so
+		// the row above is not satisfied by a loader that always reports.
+		_, none, err := LoadRules(f.repo.atRevision(base), f.repo.atRevision(base))
+		if err != nil {
+			t.Fatalf("loading the base against itself: %v", err)
+		}
+		if len(none) != 0 {
+			t.Errorf("a range that narrows nothing reports %d narrowing(s): %v", len(none), none)
+		}
+	})
+}
+
+// TestTheLoaderRefusesWhatItCannotCheckWith covers the two ways the
+// vocabulary can go quiet. Neither is a failure git reports, and both
+// leave a check that passes everything.
+func TestTheLoaderRefusesWhatItCannotCheckWith(t *testing.T) {
+	t.Run("an empty pattern file is refused rather than obeyed", func(t *testing.T) {
+		f := newFixture(t)
+		f.write(citationPatternsPath, "# every line here is prose\n")
+		f.write(vendorTermsPath, realRuleFile(t, vendorTermsPath))
+		base := f.commit("rules with nothing in one of them", citationPatternsPath, vendorTermsPath)
+
+		if _, _, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree()); err == nil {
+			t.Error("a pattern file declaring nothing was accepted; this check would then " +
+				"pass every message it was ever given, and say so in the same words a clean " +
+				"range does")
+		}
+
+		// THE PRESENCE. The same fixture with real patterns loads, so the
+		// refusal above is about emptiness rather than about the fixture.
+		f.write(citationPatternsPath, realRuleFile(t, citationPatternsPath))
+		head := f.commit("rules restored", citationPatternsPath)
+		if _, _, err := LoadRules(f.repo.atRevision(head), f.repo.workingTree()); err != nil {
+			t.Errorf("a fixture with real rule files was refused: %v", err)
+		}
+	})
+
+	t.Run("a rule file neither end declares is refused", func(t *testing.T) {
+		f := newFixture(t)
+		f.write("README.md", "a repository with no rule files at all\n")
+		base := f.commit("no rules anywhere", "README.md")
+
+		_, _, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree())
+		if err == nil {
+			t.Fatal("a repository declaring no vocabulary at all was accepted")
+		}
+		if !strings.Contains(err.Error(), citationPatternsPath) {
+			t.Errorf("the refusal is %q and does not name the file that is missing; an "+
+				"operator mid-procedure is the least able to guess", err)
+		}
+	})
+}
