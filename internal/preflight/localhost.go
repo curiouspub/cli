@@ -10,24 +10,25 @@ import (
 	"github.com/curiouspub/cli/internal/check"
 )
 
-// devURLScheme and devURLHost are the two halves of the string this
-// check searches source files for.
+// devURLNeedle is the exact string the pre-flight table names, and it is
+// ONE literal on purpose.
 //
-// THEY ARE HALVES ON PURPOSE, and the spelling looks evasive without
-// this paragraph. No file this repository ships may carry a compiled-in
-// URL literal — a URL a reader cannot find by grepping for one
-// declaration is the shape a phone-home takes, and the rule is enforced
-// by a test rather than left to good intentions. This string is a NEEDLE
-// and never a destination: nothing in this package opens a network
-// connection, and the only thing done with it is a substring comparison
-// against bytes read off the user's own disk. Assembling it from parts
-// is how both facts stay true at once, and neither half is a host.
-const (
-	devURLScheme = "http:"
-	devURLHost   = "localhost"
-)
-
-// devURLNeedle is the exact string the pre-flight table names.
+// It was first written as two constants joined at package level, because
+// no file this repository ships may carry a compiled-in URL and the
+// guard that enforces that fired on the honest spelling. That was the
+// wrong repair. Splitting a URL until no piece looks like one is the
+// technique the guard's own diagnostic names as the way past it, and a
+// value spelled with two names is no less compiled in than a value
+// spelled with one — it is only harder to grep for, which is the property
+// the rule exists to protect. The guard has since learned to fold
+// constants, so the two-constant form no longer passes either.
+//
+// This string is a NEEDLE and never a destination: nothing in this
+// package imports a network package, and the only thing done with it is a
+// substring comparison against bytes read off the user's own disk. That
+// argument was always the right one — it just belonged at the guard's
+// allow-list, where it is now recorded, rather than in a spelling that
+// routed around the check.
 //
 // ONE STRING AND NOT A FAMILY. A secure scheme on the same host, and the
 // loopback address written as numbers, are deliberately NOT matched: the
@@ -37,7 +38,7 @@ const (
 // — no skipping comments, no reading development-only branches — because
 // half-clever filtering hides the one real hit while still missing
 // others, and the warning severity was chosen with that noise in mind.
-var devURLNeedle = devURLScheme + "//" + devURLHost
+const devURLNeedle = "http://localhost"
 
 // scannedExtensions are the file types this check reads, lower-cased.
 //

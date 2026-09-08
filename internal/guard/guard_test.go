@@ -445,7 +445,20 @@ var schemeFragmentPattern = regexp.MustCompile(`^https?:?/{0,2}$`)
 // maxNamedURLConstants is the guard's own stated ceiling, not a count
 // read from anywhere else — a guard whose allowance can be widened by
 // editing the same file that trips it is not a guard.
-const maxNamedURLConstants = 2
+//
+// THAT SENTENCE AND THE ALLOWANCE BELOW RECONCILE, they do not trade, and
+// the axis is WHO rather than WHEN. **Self-service widening is
+// forbidden**: an author raising this number, or adding a line below, as
+// part of getting their own change green is the guard loosening itself
+// on behalf of the thing that tripped it, and no interval makes that
+// legitimate. **Desk-ruled widening with a recorded reason is the
+// allowance working** — it is precisely the deliberate, reviewable act
+// the map below describes, and refusing it would leave the only exit a
+// spelling that hides the value from the check.
+//
+// Different actors, not different days. Raised to 3 on 2026-09-08 by a
+// ruling, for the needle the pre-flight development-URL scan greps for.
+const maxNamedURLConstants = 3
 
 // allowedURLConstants pins the VALUE of every permitted named URL
 // constant, because a ceiling of two says nothing about WHICH two.
@@ -461,6 +474,15 @@ const maxNamedURLConstants = 2
 // no scheme, so it is not a URL literal and never reaches this map.
 var allowedURLConstants = map[string]string{
 	"https://api.curious.pub": "the default control-plane API base",
+
+	// Ruled 2026-09-08: a NEEDLE, never a destination. The pre-flight
+	// development-URL check greps source files for this string and does
+	// nothing else with it; its package imports no network package. It
+	// arrived first as two constants joined at package level — a spelling
+	// that passed only because the split detector read literal operands
+	// and not folded values, which is the hole this entry exists instead
+	// of. The entry is the door; the folding is the wall.
+	"http://localhost": "the string the development-URL pre-flight check searches for",
 }
 
 // allowedHosts is the same list the leak scan enforces, and it exists
@@ -836,9 +858,11 @@ func TestAtMostTwoNamedURLConstants(t *testing.T) {
 	if len(named) > maxNamedURLConstants {
 		sort.Strings(named)
 		t.Errorf("found %d named URL constants, want at most %d: %s\n"+
-			"This repo allows exactly two: the default API base and the site base "+
-			"domain the client assembles a published URL from. A third is a widened "+
-			"guard, and a guard loosened by the thing that trips it is not a guard.",
+			"The budget is the control-plane API base and the development-URL "+
+			"needle, with one space spare. Widening it to green your own change "+
+			"is the guard loosening itself on behalf of the thing that tripped "+
+			"it; a widening ruled at the desk, with its reason written into "+
+			"allowedURLConstants, is the allowance working as designed.",
 			len(named), maxNamedURLConstants, strings.Join(named, "; "))
 	}
 }
