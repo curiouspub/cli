@@ -323,7 +323,18 @@ func textsOf(lines []yamlLine) []string {
 var allowedSecrets = map[string]string{
 	"GITHUB_TOKEN":       "minted per job by the runner, scoped by the job's own permissions block, never a repository secret",
 	"HOMEBREW_TAP_TOKEN": "write access to the tap repository and nothing else; the job token cannot reach another repository",
-	"NPM_TOKEN":          "publish-only, scoped to the one package the wrapper publishes",
+	// ~~NPM_TOKEN~~ REMOVED 2026-09-08. The wrapper publishes through
+	// trusted publishing: the job proves its identity with the token the
+	// runner mints for it and holds no registry credential at all, so
+	// there is nothing here to allow. It was listed before the publish
+	// path was designed, against a token that was never created.
+	//
+	// An allowlist entry for a secret that does not exist is not inert.
+	// It is a standing permission nobody has to ask for again, and the
+	// next reader finds a guard naming a credential and a brief saying
+	// there is none, and has to guess which is stale. Removed so that
+	// reintroducing a token means editing this file, in the diff that
+	// wants it — which is what the comment above says this list is for.
 }
 
 // requiredEnvironment is the deployment environment whose reviewer is the
