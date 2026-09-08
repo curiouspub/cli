@@ -44,6 +44,44 @@ What lands here next:
 The trial opens in small daily batches. Get the launch note:
 [hello -a- curious.pub]
 
+## Installing it
+
+**Nothing is published yet.** There is no release and no package on any
+registry, so the commands below are what installing will look like
+rather than what works today. This section says so out loud because a
+repository describing unbuilt things in the present tense has told its
+reader something false.
+
+What is in the tree now is the npm wrapper, under
+[`npm/`](./npm) — a package whose postinstall fetches the release build
+for your platform. Its own [README](./npm/README.md) has the detail.
+
+```
+npx curiouspub deploy       # run it without installing
+npm install -g curiouspub   # install the `curious` command
+```
+
+The package is `curiouspub` and the command is `curious`. They are
+different names on purpose.
+
+**How the download is checked, and what that is worth.** A postinstall
+script that downloads and runs a binary is, mechanically, what a
+malicious package does, so it is worth being precise about what vouches
+for the bytes. The SHA-256 digest lives inside the npm package, written
+at publish time from the same run that built the binaries — so a release
+asset **replaced after publication** fails the check, because the digest
+is vouched for by the registry rather than by the host serving the
+download. That is the whole claim: it assumes the npm package is itself
+authentic, and it says nothing about a compromised publisher or a
+compromised release run, which is not something a dependency-free
+install script can close. The release is also signed over its checksum
+file, for an auditor with the verifying tool; the install script does
+not check that and does not pretend to.
+
+The install script has **no dependencies at all**, which is part of the
+argument rather than a preference: you can read the whole of it in one
+sitting.
+
 ## Principles
 
 **Zero telemetry.** No analytics, no phone-home, no exceptions. The
