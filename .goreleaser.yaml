@@ -57,6 +57,19 @@ builds:
     # two builds of one tag are byte-identical.
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+# TWO ARCHIVES, TWO AUDIENCES, and the split is forced rather than
+# chosen. A person downloading from the releases page should get the
+# licence and the readme beside the binary; the npm wrapper's install
+# script has to OPEN what it downloads, and Node's standard library
+# reads neither of the formats that can carry three files.
+#
+# So the first archive is for people and the second is for the wrapper.
+# They cannot be merged: a compression-only format holds exactly one
+# member, and stripping the licence out of every human download to
+# please an install script is the wrong trade for an MIT-licensed tool.
+#
+# The names do not collide — one ends .tar.gz and the other .gz — and
+# one checksum file covers both.
 archives:
   - id: curious
     ids: [curious]
@@ -69,6 +82,22 @@ archives:
     files:
       - LICENSE
       - README.md
+
+  # The wrapper's archive: a plain gzip whose only member is the
+  # binary, which one standard-library call opens with no parsing code
+  # at all.
+  - id: curious-gz
+    ids: [curious]
+    # RESTATED RATHER THAN INHERITED. Left out, the default template
+    # produces a differently-spelled name, and every download address
+    # the install script builds would miss by a word.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [gz]
+    # EMPTIED ON PURPOSE. An archive's file list defaults to the licence
+    # and readme globs, and a compression-only format errors on the
+    # second member — so without this the release does not degrade, it
+    # fails to build.
+    files: ["none*"]
 
 checksum:
   name_template: checksums.txt
