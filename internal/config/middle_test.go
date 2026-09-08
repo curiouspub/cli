@@ -7,35 +7,55 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSaveSweepsItsOwnTempLitter covers the crash the deferred remove
-// cannot see.
+// cannot see, and — just as much — the files it must not touch.
 //
 // The write goes to a temp file beside the config and becomes the config
 // in one rename. The deferred remove covers the ERROR path; a crash
-// between the write and the rename is a different thing entirely, and a
-// defer never runs for it. What is left behind is a 0600 file holding
-// the complete token under a name nothing ever looks at again, so it
+// between the write and the rename is a different thing and a defer
+// never runs for it. What is left behind is a 0600 file holding the
+// complete token under a name nothing ever looks at again, so it
 // survives every later rotation of the credential it holds.
 //
-// STATED RESIDUE, because this is best effort and saying so is part of
-// the fix: a crash during the sweep leaves litter, and a sweep that
-// fails never fails a save. The file being written is worth more than
-// the files being tidied.
+// TWO THINGS MAKE THE SWEEP SAFE, and the first draft had neither.
 //
-// REQUIRED MUTATIONS, three, one per half of the rule:
+// A DISTINCTIVE PREFIX. The pattern swept was the pattern the temp files
+// happened to use, and nothing separated a file this process created
+// from one that merely matched. Measured after one save on that version:
+// .config-backup.json deleted, .config-2024.json deleted. A user who
+// backs their config up under an obvious name loses it on their next
+// login, and finds out when they go looking for it.
 //
-//  1. In Save (config.go), delete the sweep call. This row reds with
-//     both orphans still present and nothing else moves.
-//  2. In sweepTempLitter, match "*" instead of the temp pattern. This
-//     row reds on the bystanders, and so does most of the package — the
-//     sweep eats the config file it has just written, which is a red
-//     worth seeing at least once.
-//  3. In sweepTempLitter, stop skipping directories. Only this row
-//     reds, on the directory bystander.
+// AN AGE GATE. A second process writing its own config at this instant
+// has an in-flight temp file in the same directory. An hour is far
+// longer than any write takes and far shorter than a leaked token should
+// live.
 //
-// All three run, all three observed, and the file restored from a
+// STATED RESIDUE, because this is best effort: a crash during the sweep
+// leaves litter, a sweep that fails never fails a save, and litter
+// younger than the gate waits for the next save an hour later rather
+// than being collected now.
+//
+// REQUIRED MUTATIONS, four, and each names what it must not move:
+//
+//  1. In Save (config.go), delete the sweep call. The old-orphan
+//     assertion reds; nothing else moves.
+//  2. In sweepTempLitter, drop the age gate. Only the fresh-orphan row
+//     reds — the one standing in for a concurrent writer.
+//  3. In sweepTempLitter, match ".config-*.json", the pattern this used
+//     to use. The two user-backup rows red and the orphan rows stay
+//     green.
+//  4. In sweepTempLitter, stop skipping directories. Only the directory
+//     bystander reds — and it only reds because the fixture ages that
+//     directory past the gate. A first attempt left it at its creation
+//     time, where the age check excludes it before the directory check
+//     is reached, and this mutation came back GREEN over a skip that had
+//     stopped being load-bearing.
+//
+// All four run, all four observed, and the file restored from a
 // checksum-verified copy after each.
 func TestSaveSweepsItsOwnTempLitter(t *testing.T) {
 	const endpoint = "https://api.example.com"
@@ -43,28 +63,54 @@ func TestSaveSweepsItsOwnTempLitter(t *testing.T) {
 	writeConfigFile(t, path, `{"version":1,"token":"old","api_url":"`+endpoint+`"}`)
 	dir := filepath.Dir(path)
 
-	// Two orphans in exactly the shape a crash leaves them, and two
-	// things that merely live in the same directory. The second pair is
-	// the distinctness half: a sweep that removed those would be
-	// deleting a stranger's files out of a shared directory.
-	orphans := []string{".config-853498953.json", ".config-11.json"}
-	for _, name := range orphans {
-		if err := os.WriteFile(filepath.Join(dir, name),
-			[]byte(`{"token":"a-real-token-left-lying-about"}`), 0o600); err != nil {
-			t.Fatalf("writing the orphan %s: %v", name, err)
+	write := func(name, body string, age time.Duration) string {
+		t.Helper()
+		full := filepath.Join(dir, name)
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
 		}
-	}
-	bystanders := []string{"notes.txt", "config.json.bak", ".configrc"}
-	for _, name := range bystanders {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("not ours"), 0o600); err != nil {
-			t.Fatalf("writing the bystander %s: %v", name, err)
+		when := time.Now().Add(-age)
+		if err := os.Chtimes(full, when, when); err != nil {
+			t.Fatalf("ageing %s: %v", name, err)
 		}
+		return full
 	}
-	// A DIRECTORY whose name matches the pattern. Removing one would
-	// need a different call and would be a different kind of mistake, so
-	// the sweep has to leave it alone.
-	if err := os.Mkdir(filepath.Join(dir, ".config-adirectory.json"), 0o700); err != nil {
+
+	const leftByACrash = `{"token":"a-real-token-left-lying-about"}`
+	// Litter in exactly the shape a crash leaves it, old enough to be
+	// nobody's business but ours.
+	oldOrphans := []string{
+		write(".curious-config-tmp-853498953", leftByACrash, 2*time.Hour),
+		write(".curious-config-tmp-11", leftByACrash, 90*time.Minute),
+	}
+	// The same shape, written a moment ago: this is what a second
+	// process's in-flight write looks like, and removing it would fail
+	// that process's save.
+	freshOrphan := write(".curious-config-tmp-777", leftByACrash, 0)
+	// Files that merely live in the same directory. The first two are
+	// the measured regression: they matched the pattern this used to
+	// sweep, and they are somebody's backup of their own config.
+	bystanders := []string{
+		write(".config-backup.json", "a user's backup", 30*24*time.Hour),
+		write(".config-2024.json", "a user's older backup", 30*24*time.Hour),
+		write("keep.json", "not ours", 30*24*time.Hour),
+		write(".config-x.txt", "not ours", 30*24*time.Hour),
+		write("config.json.bak", "not ours", 30*24*time.Hour),
+	}
+	// A DIRECTORY whose name matches, AGED PAST THE GATE. Removing one
+	// needs a different call and would be a different kind of mistake —
+	// and an empty directory is exactly what os.Remove will happily take
+	// away. The ageing is load-bearing: left at its creation time the
+	// age gate excludes it first, the directory check is never reached,
+	// and this row cannot see whether it exists at all. Measured, by
+	// mutating the check away and watching the suite stay green.
+	matchingDir := filepath.Join(dir, ".curious-config-tmp-adirectory")
+	if err := os.Mkdir(matchingDir, 0o700); err != nil {
 		t.Fatalf("making the directory bystander: %v", err)
+	}
+	aged := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(matchingDir, aged, aged); err != nil {
+		t.Fatalf("ageing the directory bystander: %v", err)
 	}
 
 	cfg := &Config{Path: path}
@@ -72,15 +118,20 @@ func TestSaveSweepsItsOwnTempLitter(t *testing.T) {
 		t.Fatalf("Save(): %v", err)
 	}
 
-	for _, name := range orphans {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+	for _, full := range oldOrphans {
+		if _, err := os.Stat(full); err == nil {
 			t.Errorf("%s is still there after a save, and it holds a complete token "+
-				"under a name nothing will ever look at again", name)
+				"under a name nothing will ever look at again", filepath.Base(full))
 		}
 	}
-	for _, name := range append(bystanders, ".config-adirectory.json") {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Errorf("the save removed %s, which is not ours: %v", name, err)
+	if _, err := os.Stat(freshOrphan); err != nil {
+		t.Errorf("the sweep removed %s, which is the shape a second process's "+
+			"in-flight write has: %v", filepath.Base(freshOrphan), err)
+	}
+	for _, full := range append(bystanders, matchingDir) {
+		if _, err := os.Stat(full); err != nil {
+			t.Errorf("the save removed %s, which is not ours: %v",
+				filepath.Base(full), err)
 		}
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -103,18 +154,23 @@ func TestLoadSaysANewerFileIsNewerRatherThanCorrupt(t *testing.T) {
 
 	for _, tc := range []struct {
 		name    string
+		key     string
 		version string
 		expect  string
 	}{
-		{"a schema from a later release", "2", "newer"},
-		{"a schema far in the future", "99", "newer"},
+		{"a schema from a later release", "version", "2", "newer"},
+		{"a schema far in the future", "version", "99", "newer"},
 		// A negative version was never written by anything, so "newer"
 		// would be a guess. It gets the other sentence.
-		{"a version nothing has ever written", "-7", "delete"},
+		{"a version nothing has ever written", "version", "-7", "delete"},
+		// The decoder fills the struct from this spelling, so anything
+		// reading the field back by an exact name would decide the file
+		// carries no version and read a newer release's file as its own.
+		{"a later schema under a folded spelling", "VERSION", "2", "newer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := hermeticPath(t)
-			writeConfigFile(t, path, `{"version":`+tc.version+`,"token":"`+testToken+
+			writeConfigFile(t, path, `{"`+tc.key+`":`+tc.version+`,"token":"`+testToken+
 				`","api_url":"`+endpoint+`"}`)
 			before := readFile(t, path)
 
@@ -454,5 +510,118 @@ func TestSaveKeepsTheFileValid(t *testing.T) {
 	}
 	if string(again.Token) != testToken || again.NoTokenReason != nil {
 		t.Errorf("the round trip did not come back: %v", again.NoTokenReason)
+	}
+}
+
+// TestLoadRefusesAVersionThatIsNotOne separates three spellings that
+// were being read as one.
+//
+// The decoded version was only assigned when it was non-zero, so ABSENT,
+// ZERO and NULL all arrived at the same place: treated as "no version",
+// and accepted as this build's own. Two of those three are a field that
+// is PRESENT and says something, and one of them — zero — is a real
+// number that no release has ever written. A file claiming a schema
+// version that does not exist is not a file to guess about; guessing
+// here means reading a stranger's format as if it were ours.
+//
+// Absent keeps its meaning, and that is the distinctness row: the field
+// missing altogether is the only one of the three that says nothing, and
+// it is read as this build's schema exactly as before.
+//
+// REQUIRED MUTATION: in Config.read (config.go), accept the version
+// whenever the decoded value is non-zero, without asking whether the
+// field was present — which is the shape this replaces. Both refusal
+// rows red and the two rows that must still load stay green. Run,
+// observed red, and
+// the file restored from a checksum-verified copy.
+func TestLoadRefusesAVersionThatIsNotOne(t *testing.T) {
+	const endpoint = "https://api.example.com"
+
+	for _, tc := range []struct {
+		name     string
+		body     string
+		accepted bool
+		// literal is what the message has to quote back, so the user can
+		// see which of the three spellings their file has.
+		literal string
+	}{
+		{
+			name:    "a version of zero, which is a number no release has written",
+			body:    `{"version":0,"token":"%s","api_url":"%s"}`,
+			literal: "0",
+		},
+		{
+			name:    "a version of null, which is a field that says nothing",
+			body:    `{"version":null,"token":"%s","api_url":"%s"}`,
+			literal: "null",
+		},
+		// THE FIELD IS FOUND THE WAY THE DECODER FINDS IT. The struct
+		// is filled by a fold match, so a file spelling the key with a
+		// capital still SETS the version — and a check that looked the
+		// key up byte for byte would find nothing, conclude the field
+		// was absent, and read a file claiming a schema that does not
+		// exist as though it claimed ours. That is the same two-relation
+		// disagreement this package refuses elsewhere, arriving in the
+		// field that decides whether the rest is readable at all.
+		{
+			name:    "a zero under a spelling the decoder folds onto the field",
+			body:    `{"Version":0,"token":"%s","api_url":"%s"}`,
+			literal: "0",
+		},
+		// The distinctness rows: absent is not the same as present and
+		// empty, and the version this build writes still works.
+		{
+			name:     "no version field at all",
+			body:     `{"token":"%s","api_url":"%s"}`,
+			accepted: true,
+		},
+		{
+			name:     "the version this build writes",
+			body:     `{"version":1,"token":"%s","api_url":"%s"}`,
+			accepted: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := hermeticPath(t)
+			writeConfigFile(t, path, fmt.Sprintf(tc.body, testToken, endpoint))
+			before := readFile(t, path)
+
+			loaded, err := Load(endpoint)
+			if err != nil {
+				t.Fatalf("Load(): %v", err)
+			}
+			if tc.accepted {
+				if loaded.NoTokenReason != nil {
+					t.Fatalf("the file was refused: %v", loaded.NoTokenReason)
+				}
+				if string(loaded.Token) != testToken {
+					t.Errorf("the token was not returned")
+				}
+				if loaded.Version != SchemaVersion {
+					t.Errorf("Version = %d, want %d", loaded.Version, SchemaVersion)
+				}
+				return
+			}
+
+			if loaded.Token != "" {
+				t.Errorf("a token came back out of a file claiming a schema version " +
+					"that has never existed")
+			}
+			if loaded.NoTokenReason == nil {
+				t.Fatalf("nothing was reported to the user")
+			}
+			msg := loaded.NoTokenReason.Error()
+			if !strings.Contains(msg, path) {
+				t.Errorf("the message does not name the file: %q", msg)
+			}
+			if !strings.Contains(msg, tc.literal) {
+				t.Errorf("the message does not quote back what the file actually "+
+					"says (%q), so the user cannot tell which of the two spellings "+
+					"they have: %q", tc.literal, msg)
+			}
+			if after := readFile(t, path); string(after) != string(before) {
+				t.Errorf("the load path modified the config file")
+			}
+		})
 	}
 }
