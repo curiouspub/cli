@@ -97,10 +97,23 @@ type scriptedPrompt struct {
 	// ask, which is what the real terminal does with no TTY on either
 	// half of a question.
 	notInteractive bool
+
+	// transcript is everything this terminal did — narration and
+	// questions interleaved, in the order it happened.
+	//
+	// The buffer and the per-prompt slices above cannot answer an
+	// ORDERING question between the two: a question is recorded in a
+	// slice and a line is written to a buffer, so a run that printed its
+	// explanation after asking looks identical to one that printed it
+	// before. Some rules are orders — nothing asks for an address until
+	// the offer it is for has been accepted — and this is what can see
+	// one.
+	transcript []string
 }
 
 func (s *scriptedPrompt) Step(format string, args ...any) {
 	fmt.Fprintf(&s.out, format+"\n", args...)
+	s.transcript = append(s.transcript, "said: "+fmt.Sprintf(format, args...))
 }
 
 func (s *scriptedPrompt) Email(prompt string) (string, error) {
@@ -108,6 +121,7 @@ func (s *scriptedPrompt) Email(prompt string) (string, error) {
 		return "", ui.ErrNotInteractive
 	}
 	s.emailAsks = append(s.emailAsks, prompt)
+	s.transcript = append(s.transcript, "asked: "+prompt)
 	next, ok := pop(&s.emails)
 	if !ok {
 		return "", errScriptExhausted
@@ -120,6 +134,7 @@ func (s *scriptedPrompt) Line(prompt string) (string, error) {
 		return "", ui.ErrNotInteractive
 	}
 	s.lineAsks = append(s.lineAsks, prompt)
+	s.transcript = append(s.transcript, "asked: "+prompt)
 	next, ok := pop(&s.lines)
 	if !ok {
 		return "", errScriptExhausted
@@ -132,6 +147,7 @@ func (s *scriptedPrompt) Confirm(question string, defaultYes bool) (bool, error)
 		return false, ui.ErrNotInteractive
 	}
 	s.confirmAsks = append(s.confirmAsks, confirmAsk{question: question, defaultYes: defaultYes})
+	s.transcript = append(s.transcript, "asked: "+question)
 	next, ok := pop(&s.confirms)
 	if !ok {
 		return false, errScriptExhausted
@@ -1294,6 +1310,21 @@ func TestBadRequestStopsTheRun(t *testing.T) {
 // TestRateLimitedStopsWithAWallClockTime. The retry time is rendered as
 // a time of day rather than a duration, because "try again in 900
 // seconds" is arithmetic the reader has to do while annoyed.
+//
+// AND IT COMES THROUGH THE SHARED RENDERER, which is what the relative
+// assertion below is for. Until 2026-09-08 this stop had a layout of its
+// own — a bare time of day, no numeric offset, no relative phrase —
+// while a shut account cap rendered all three. Two walls, two answers to
+// the same question, in one program. Nothing pinned the difference,
+// which is why unifying them turned no row red and this assertion had to
+// be written after the change rather than found by it.
+//
+// REQUIRED MUTATION, RUN: give retryAdvice back its own layout —
+//
+//	return fmt.Sprintf("Try again after %s. Nothing has been uploaded.",
+//		now.Add(retryAfter).Format("15:04 MST"))
+//
+// Reds here on the relative phrase, and on the offset inside want.
 func TestRateLimitedStopsWithAWallClockTime(t *testing.T) {
 	res := runVerifyCode(t, wire.CodeRateLimited, http.StatusTooManyRequests,
 		"Too many requests from this network.", "900")
@@ -1305,10 +1336,18 @@ func TestRateLimitedStopsWithAWallClockTime(t *testing.T) {
 	if res.err == nil {
 		t.Fatal("the run continued past a rate limit, want a stop")
 	}
-	want := fixedNow.Add(15 * time.Minute).Format(wallClockLayout)
+	want := fixedNow.Add(15 * time.Minute).Format(resetsLayout)
 	if !strings.Contains(rendered(res.err), want) {
 		t.Errorf("the stop never named the time to come back (%s):\n%s",
 			want, rendered(res.err))
+	}
+	// The relative half is the part a reader acts on: a time of day
+	// answers "when", and only this answers "is that worth waiting for".
+	// A wall the user meets here must not read differently from the one
+	// they meet at a shut account cap.
+	if got := rendered(res.err); !strings.Contains(got, "in about 15 minutes") {
+		t.Errorf("the stop named a time of day with no relative phrase, so this "+
+			"wall reads differently from the capacity wall:\n%s", got)
 	}
 	if res.verifies != 1 {
 		t.Errorf("auth/verify ran %d times, want 1", res.verifies)
@@ -1326,7 +1365,7 @@ func TestRateLimitedWithNoRetryTimeSaysNothingItCannotKnow(t *testing.T) {
 	if res.err == nil {
 		t.Fatal("the run continued past a rate limit, want a stop")
 	}
-	if got := rendered(res.err); strings.Contains(got, fixedNow.Format(wallClockLayout)) {
+	if got := rendered(res.err); strings.Contains(got, fixedNow.Format(resetsLayout)) {
 		t.Errorf("the stop named the current time as the time to come back:\n%s", got)
 	}
 }
@@ -1402,7 +1441,7 @@ func TestCapacityClosedStopsWithNoOfferWired(t *testing.T) {
 	if err == nil {
 		t.Fatal("the run continued past a closed capacity with no offer wired")
 	}
-	want := fixedNow.Add(15 * time.Minute).Format(wallClockLayout)
+	want := fixedNow.Add(15 * time.Minute).Format(resetsLayout)
 	if !strings.Contains(rendered(err), want) {
 		t.Errorf("the stop never named the time to come back (%s):\n%s", want, rendered(err))
 	}
@@ -1436,7 +1475,7 @@ func TestMaintenanceStopsWithTheServerMessageAndNoTime(t *testing.T) {
 	if !strings.Contains(got, serverMessage) {
 		t.Errorf("the server's message was not rendered verbatim:\n%s", got)
 	}
-	if strings.Contains(got, fixedNow.Format(wallClockLayout)) {
+	if strings.Contains(got, fixedNow.Format(resetsLayout)) {
 		t.Errorf("the stop rendered a retry time for a code that carries none:\n%s", got)
 	}
 	if wire.CarriesRetryAfter(wire.CodeMaintenance) {

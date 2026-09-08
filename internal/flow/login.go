@@ -169,10 +169,6 @@ const (
 		"wait about 15 minutes and try again."
 )
 
-// wallClockLayout renders a retry time as a time of day. "Try again in
-// 900 seconds" is arithmetic somebody has to do while annoyed.
-const wallClockLayout = "15:04 MST"
-
 // unauthorizedFailuresBeforeHint is how many consecutive refusals earn
 // the widened copy. It is a threshold for a HINT and never a budget: the
 // server owns the limits, and a second, different limit invented here
@@ -545,10 +541,14 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		// nothing. This function's callers return nil only for a stored
 		// token, so an offer that hands back no error must not turn a
 		// run with no credential into a success.
-		return ui.ServerClosed(ui.NewFailure(
-			"curious.pub is full for today.",
-			apiErr.Message,
-			retryAdvice(apiErr.RetryAfter, now)))
+		//
+		// THE COPY IS NOT WRITTEN HERE. A shut account cap reaches a
+		// person by two routes — met before a login is attempted, or met
+		// at the moment an account would be spent — and the words and
+		// the reset rendering have one home for both, so the two cannot
+		// drift into telling one user something the other is not told.
+		// See closedCapacityFailure.
+		return ui.ServerClosed(closedCapacityFailure(apiErr.Message, resetsAt, now))
 
 	case wire.CodeMaintenance:
 		// The server's message, verbatim, and NO retry time — the kill
@@ -596,19 +596,25 @@ func unknownCodeFailure(apiErr *api.APIError) error {
 			"help — this build may be older than the server.")
 }
 
-// retryAdvice renders a time of day to come back at.
+// retryAdvice renders a time of day to come back at, THROUGH THE SHARED
+// RENDERER rather than a layout of its own.
+//
+// It used to carry its own: a bare time of day, no numeric offset and no
+// relative phrase, while a shut account cap rendered both. Two walls,
+// two answers to "when can I come back", in one program. Ruled
+// 2026-09-08: every retry time this program renders comes through
+// afterTheReset, so the reader gets the same sentence whichever wall
+// they met.
 //
 // A zero duration means the header was absent or unparseable. The
 // contract guarantees it for the codes that reach here, so its absence
 // is a server breaking its own promise — and adding nothing to the
 // current time would tell the reader to come back immediately, which is
-// the one answer that is certainly wrong.
+// the one answer that is certainly wrong. That case needs no branch of
+// its own any more: a reset that is not in the future is exactly what
+// the shared renderer already refuses to name.
 func retryAdvice(retryAfter time.Duration, now time.Time) string {
-	if retryAfter <= 0 {
-		return "Try again a little later. Nothing has been uploaded."
-	}
-	return fmt.Sprintf("Try again after %s. Nothing has been uploaded.",
-		now.Add(retryAfter).Format(wallClockLayout))
+	return "Try again " + afterTheReset(now.Add(retryAfter), now) + ". " + uploadedNothing
 }
 
 // writeFailure is what a login that worked and could not be recorded

@@ -13,8 +13,23 @@
 //     who pressed Ctrl-D asked for the run to stop and it stopped; a
 //     non-zero code there would make every wrapper script treat a
 //     deliberate act as a fault.
+//
+//     ONE SCOPED EXCEPTION, and it is stated here because this is where
+//     the rule is: a cancellation answers the question that was ASKED,
+//     and when the run had already stopped for another reason, that is
+//     not the same as cancelling the run. A person who declines a
+//     waitlist offer at a shut door cancelled an offer; the deploy was
+//     refused by the server before they were asked anything, and a run
+//     that exits 0 having deployed nothing is a command that lies to a
+//     script. Such a caller must not let the cancellation sentinel
+//     escape — it ends the run with its own copy, marked with
+//     ServerClosed, and pays 3. The rule above is unchanged; what it
+//     does not cover is a cancellation that is not the reason the run
+//     ended.
+//
 //   - 1 — the run could not finish. Something is wrong with the project,
 //     the request, the environment, or this program.
+//
 //   - 3 — THE SERVER IS CLOSED TO THIS RUN RIGHT NOW. Nothing is wrong
 //     with the project and nothing is wrong with this program: the door
 //     is shut, and it will open again without anybody changing anything.
