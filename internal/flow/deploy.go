@@ -342,6 +342,23 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE REPORT LEARNS WHAT THE PACK MEASURED. The report a person
+	// consented to was built before anything was packed, so its
+	// packed-size row is a by-design decline — the honest answer at that
+	// moment. Once the archive exists the check has run for real, and a
+	// validated report still carrying the decline is TWO HOMES FOR ONE
+	// ID with the machine-readable one false: the person reads a refusal
+	// with real numbers while an agent reading the manifest is told
+	// nothing was ever packed.
+	//
+	// Superseding is narrow by construction — only a declined row, only
+	// by the same id — so this cannot quietly rewrite anything an earlier
+	// producer answered.
+	report, err = report.Supersede(packedResults)
+	if err != nil {
+		return nil, err
+	}
+
 	if refused := check.Advisories(packedResults.Findings); len(refused) > 0 {
 		// The one refusal a project can reach having passed every other
 		// check here. It carries its own copy, so it renders through the
