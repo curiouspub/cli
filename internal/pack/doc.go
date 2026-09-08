@@ -1,14 +1,16 @@
 // Package pack turns an Astro project directory into the archive the CLI
 // uploads.
 //
-// WHAT EXISTS TODAY IS THE WALK. It produces one canonical, ordered file
-// list — the forced exclusions applied first and absolutely, the
-// project's own ignore rules after them with their full semantics — plus
-// the links it skipped and what it has to say about the names it found.
-// The local file-count and size limits and the archive writer are later
-// changes; this package describes what it does rather than what it will
-// do, because a package comment read by a stranger is a claim like any
-// other.
+// WHAT EXISTS TODAY IS THE WALK AND THE ARCHIVE. The walk produces one
+// canonical, ordered file list — the forced exclusions applied first and
+// absolutely, the project's own ignore rules after them with their full
+// semantics — plus the links it skipped and what it has to say about the
+// names it found. The archive turns that list into a deterministic
+// gzipped tar: every header field normalised, the compression level
+// pinned, files only, and a digest computed as the bytes are written.
+// The local file-count and size limits are a later change; this package
+// describes what it does rather than what it will do, because a package
+// comment read by a stranger is a claim like any other.
 //
 // ONE WALK, THREE READERS. The limits, the scan for hard-coded
 // development URLs, and the archive all read the same list, so the list
