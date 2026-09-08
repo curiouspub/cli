@@ -58,6 +58,31 @@ const noUnknownFields = "no unknown fields"
 // them is the entire reason this field exists — a redaction that reached
 // the file would silently destroy the state it is here to protect. The
 // two directions are pinned by a row each.
+//
+// # The residue, with the gate that holds it named
+//
+// fmt's BAD-VERB diagnostic prints a value without consulting Formatter,
+// so a verb this type cannot serve renders the underlying map. Measured
+// on a config carrying a future field, with the format string hidden
+// from static analysis:
+//
+//	%w on a Config, by value or pointer   the token in plain text, and
+//	                                      these values as their bytes
+//	%w on this type                       these values as their bytes
+//	%p on a Config BY VALUE                the same as %w
+//	%p on a Config POINTER, or on this
+//	  type (a map)                        an address; nothing leaks
+//
+// THE GATE IS go vet, INSIDE make ci, and it is not incidental: vet
+// rejects %w on anything that is not an error and %p on anything that is
+// not pointer-shaped, so every leaking line above fails the build before
+// it can run. That is what makes this a residue rather than a hole.
+//
+// ONE CASE THE GATE DOES NOT COVER, and it is not this package's:
+// %p on the secret type prints the token, and vet does NOT reject it,
+// because vet skips verb checking entirely for a type implementing
+// Formatter. That gap is recorded where the type lives, as one of the
+// three it already names, and no method here can reach it.
 type UnknownFields map[string]json.RawMessage
 
 // String renders the keys, sorted, and nothing else.
