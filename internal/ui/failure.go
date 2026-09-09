@@ -178,15 +178,23 @@ func (u *UI) renderFailure(f *Failure) string {
 	if f == nil {
 		return ""
 	}
+	// EVERY PART GOES THROUGH THE TABLE, and it happens here rather than
+	// at any call site. A Failure's Why routinely carries the server's
+	// own sentence, and a caller that has to remember to escape it is a
+	// caller who will one day not: the sanitised deploy id and the
+	// unsanitised message sitting in ONE string, three tokens apart, is
+	// what this used to look like. Styling is applied after, so the two
+	// escape sequences this program emits on purpose are the only ones
+	// that reach the stream.
 	parts := make([]string, 0, 3)
 	if f.What != "" {
-		parts = append(parts, u.styled(f.What))
+		parts = append(parts, u.styled(sanitizeLines(f.What)))
 	}
 	if f.Why != "" {
-		parts = append(parts, f.Why)
+		parts = append(parts, sanitizeLines(f.Why))
 	}
 	if f.Next != "" {
-		parts = append(parts, f.Next)
+		parts = append(parts, sanitizeLines(f.Next))
 	}
 	if len(parts) == 0 {
 		return ""

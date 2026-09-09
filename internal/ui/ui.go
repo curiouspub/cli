@@ -307,12 +307,60 @@ func (u *UI) styled(s string) string {
 // carry this output, and nothing in the CLI's flow is slow enough to
 // need one. A line that has been printed stays printed.
 func (u *UI) Step(format string, args ...any) {
-	fmt.Fprintf(u.err, format+"\n", args...)
+	fmt.Fprintln(u.err, sanitizeLines(compose(format, args...)))
 }
 
 // Result writes machine-consumable output to STDOUT — the other half of
 // the stream split, and the only thing that belongs there. If a person
 // would read it as prose, it is a Step.
 func (u *UI) Result(format string, args ...any) {
-	fmt.Fprintf(u.out, format+"\n", args...)
+	// THE WHOLE LINE, newline included, because stdout is one record per
+	// line and a newline inside one record is a second record somebody
+	// else wrote. Step's prose may have line breaks in it; a machine-read
+	// line may not.
+	fmt.Fprintln(u.out, Sanitize(compose(format, args...)))
+}
+
+// compose is the one place a message is assembled out of this program's
+// words and somebody else's, and it treats the two differently.
+//
+// AN ARGUMENT IS THE VARIABLE HALF. Every call site in this program
+// writes its prose as the format — a compile-time literal — and passes
+// the parts it did not write as arguments: a server's status, a label,
+// an address, an error's own text. So every argument goes through the
+// whole escape table, newline included, before it is interpolated. A
+// line the far end added to a status cannot become a line of this
+// program's narration.
+//
+// WITH NO ARGUMENTS THERE IS NOTHING TO INTERPOLATE, and the format is
+// this program's own prose: it is written out as it stands. That also
+// makes `Step(text)` safe for copy containing a per-cent sign, which is
+// why several call sites that would otherwise need a "%s" can simply
+// pass their text.
+//
+// What it cannot do is separate copy from data inside a string a caller
+// has already joined — a *Failure carries three assembled paragraphs, so
+// its layout is preserved and a newline arriving inside one of them is
+// preserved with it. That is the remaining edge, and closing it means a
+// Failure that carries its data as data.
+func compose(format string, args ...any) string {
+	if len(args) == 0 {
+		return format
+	}
+	// ONLY THE STRINGS, and every other argument is handed to its verb
+	// untouched. Rendering a duration, a count or a Secret through
+	// fmt.Sprint first and escaping the result would make %T print
+	// "string", make %x hex-encode a rendering rather than a value, and
+	// — the one that matters — would put a Secret through a path other
+	// than the one its own tests range over. A string is where somebody
+	// else's bytes actually arrive.
+	safe := make([]any, len(args))
+	for i, arg := range args {
+		if text, ok := arg.(string); ok {
+			safe[i] = Sanitize(text)
+			continue
+		}
+		safe[i] = arg
+	}
+	return fmt.Sprintf(format, safe...)
 }

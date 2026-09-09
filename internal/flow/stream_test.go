@@ -902,37 +902,36 @@ func TestALineLargerThanTheDefaultScannerBufferArrivesWhole(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// The sanitiser, end to end
+// What this package hands the renderer
 // -------------------------------------------------------------------
 
-// EVERY ROW BELOW PUSHES ITS BYTES THROUGH THE STREAM and asserts on the
-// output sink. A unit row on the escaping helper alone stays green when
-// the call is removed from this path, which would make two of this task's
-// mutations prove nothing. The helper has its own rows next door for the
-// questions a JSON payload cannot carry — a lone byte above 0x7F is not
-// valid UTF-8 and cannot travel in one.
+// THE ESCAPING MOVED, AND SO DID ITS PROOF. This path used to escape its
+// own lines and these rows asserted the result — which proved the call
+// site rather than the property, and the proof of that is the defect it
+// missed: a failure three packages along carried a server's sentence to
+// the terminal with an OSC window-retitle in it, unescaped, while a row
+// here said the build log was safe. The escaping now happens once, at
+// the rendering boundary in internal/ui, and the rows that assert it are
+// ranged over that whole surface in internal/ui/boundary_test.go.
+//
+// WHAT IS LEFT HERE IS THIS PACKAGE'S OWN JOB: hand the far end's bytes
+// over unchanged. A client that trimmed, dropped or re-encoded a line on
+// its way to the renderer would be a defect no boundary can see, because
+// by then the bytes are gone.
 
-// TestEveryControlByteIsEscapedBeforeItReachesTheTerminal ranges the set
-// rather than listing bytes, so one cannot be missed by being forgotten.
+// TestEveryControlByteReachesTheRendererUnchanged ranges the set rather
+// than listing bytes, so one cannot be missed by being forgotten.
 //
-// EVERY ASSERTION IS TWO-SIDED. "The raw byte is absent" is satisfied by
-// a client that dropped the line, so each line must also arrive with its
-// two ordinary characters and something printable between them.
+// The assertion is byte equality with what the server sent, which is
+// two-sided by construction: dropping the byte fails it, escaping the
+// byte here fails it too, and both are things this package must not do.
 //
-// REQUIRED MUTATION, run 2026-09-08: remove the escaping call from the
-// stream's path to the terminal — the CALL SITE, not the helper, because
-// deleting the helper is a compile error and proves nothing about whether
-// this path uses it. Reds here and on the two rows below it; the
-// plain-line control stays green, and so does every row on the helper
-// itself next door, which is the whole reason these are end to end.
-//
-// It reds EARLIER than predicted and the correction is worth keeping. The
-// prediction was the per-byte assertion. What actually reports first is
-// the line count — "the terminal received 34 lines, want one per control
-// byte (33)" — because an unescaped newline in somebody's build output
-// silently becomes a second line. A stricter assertion firing first, and
-// a defect the per-byte check would not have named.
-func TestEveryControlByteIsEscapedBeforeItReachesTheTerminal(t *testing.T) {
+// REQUIRED MUTATION, run 2026-09-09: escape the line in this path before
+// handing it over — the change this commit removes. Reds on every one of
+// the 33, with "the renderer was handed \"a\\x00z\", want \"a\x00z\"",
+// because escaping twice at two layers is exactly the two-surfaces
+// arrangement the move exists to end.
+func TestEveryControlByteReachesTheRendererUnchanged(t *testing.T) {
 	var control []byte
 	for b := 0x00; b < 0x20; b++ {
 		control = append(control, byte(b))
@@ -942,103 +941,11 @@ func TestEveryControlByteIsEscapedBeforeItReachesTheTerminal(t *testing.T) {
 		t.Fatalf("the row built %d control bytes, want 33", len(control))
 	}
 
+	sent := make([]string, 0, len(control))
 	frames := make([]string, 0, len(control)+1)
 	for _, b := range control {
-		frames = append(frames, logFrame("a"+string([]byte{b})+"z"))
-	}
-	frames = append(frames, doneFrame(wire.StatusBuilt))
-
-	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
-	run.prompt.confirms = []answer{no()}
-	run.script.eventScripts = []eventScript{{frames: frames}}
-
-	handoff, err := run.run()
-	defer handoff.Release()
-	if err != nil {
-		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
-	}
-
-	printed := run.prompt.results.String()
-	lines := strings.Split(strings.TrimSuffix(printed, "\n"), "\n")
-	if len(lines) != len(control) {
-		t.Fatalf("the terminal received %d lines, want one per control byte (%d):\n%q",
-			len(lines), len(control), printed)
-	}
-	for i, b := range control {
-		line := lines[i]
-		if line == "az" {
-			t.Errorf("byte %#02x was dropped rather than escaped: %q — deleting the "+
-				"byte satisfies an absence check and loses what it said", b, line)
-			continue
-		}
-		if !strings.HasPrefix(line, "a") || !strings.HasSuffix(line, "z") {
-			t.Errorf("byte %#02x took its neighbours with it: %q", b, line)
-			continue
-		}
-		for j := 0; j < len(line); j++ {
-			if line[j] < 0x20 || line[j] == 0x7f {
-				t.Errorf("byte %#02x reached the terminal unescaped: %q", b, line)
-				break
-			}
-		}
-	}
-}
-
-// TestACSISequenceRendersInertWithItsSurroundingsIntact. ESC is the
-// injection vector: everything a terminal OBEYS begins with it, so this
-// is the byte the whole mechanism exists for.
-//
-// "INERT" IS OTHERWISE SATISFIED BY DROPPING THE LINE, so the row asserts
-// both words survive and that the rest of the sequence arrives as
-// ordinary printable text.
-//
-// REQUIRED MUTATION, run 2026-09-08: remove the ESC entry alone from the
-// escape table. Reds here — "a raw ESC reached the terminal:
-// \"before\x1b[2Jafter\n\"" — and reds exactly ONE of the 33 assertions in
-// the ranged row above, "byte 0x1b reached the terminal unescaped", with
-// the other 32 green. That is what stops the ranged row passing on
-// aggregate.
-func TestACSISequenceRendersInertWithItsSurroundingsIntact(t *testing.T) {
-	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
-	run.prompt.confirms = []answer{no()}
-	run.script.eventScripts = []eventScript{{frames: []string{
-		logFrame("before\x1b[2Jafter"),
-		doneFrame(wire.StatusBuilt),
-	}}}
-
-	handoff, err := run.run()
-	defer handoff.Release()
-	if err != nil {
-		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
-	}
-
-	printed := run.prompt.results.String()
-	if strings.ContainsRune(printed, 0x1b) {
-		t.Errorf("a raw ESC reached the terminal: %q", printed)
-	}
-	for _, want := range []string{"before", "after", "[2J"} {
-		if !strings.Contains(printed, want) {
-			t.Errorf("the line lost %q — an escape must be made inert, not "+
-				"deleted: %q", want, printed)
-		}
-	}
-	if strings.Contains(printed, "beforeafter") {
-		t.Errorf("the escape was dropped rather than rendered: %q", printed)
-	}
-}
-
-// TestAnOrdinaryLineReachesTheTerminalUnchanged is the positive control
-// for every escaping row: without it, a client that escaped or dropped
-// everything would pass all of them. Multibyte text is included because
-// escaping BYTES rather than runes is what keeps it intact.
-func TestAnOrdinaryLineReachesTheTerminalUnchanged(t *testing.T) {
-	lines := []string{
-		"[build] 12 pages built in 1.20s",
-		"düğüm — 日本語 — 🚀",
-		`C:\Users\build\output`,
-	}
-	frames := make([]string, 0, len(lines)+1)
-	for _, line := range lines {
+		line := "a" + string([]byte{b}) + "z"
+		sent = append(sent, line)
 		frames = append(frames, logFrame(line))
 	}
 	frames = append(frames, doneFrame(wire.StatusBuilt))
@@ -1053,58 +960,12 @@ func TestAnOrdinaryLineReachesTheTerminalUnchanged(t *testing.T) {
 		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
 	}
 
-	want := strings.Join(lines, "\n") + "\n"
-	if got := run.prompt.results.String(); got != want {
-		t.Errorf("ordinary build output was rewritten on its way out:\n got %q\nwant %q",
-			got, want)
+	printed := run.prompt.results.String()
+	want := strings.Join(sent, "\n") + "\n"
+	if printed != want {
+		t.Errorf("the renderer was handed something other than what the server "+
+			"sent:\n got %q\nwant %q", printed, want)
 	}
-}
-
-// TestALineAlreadyEscapedIsNotEscapedAgain drives idempotence through the
-// whole path, twice: what the terminal received the first time is fed
-// back through the stream, and the second rendering must be
-// byte-identical.
-//
-// The far end escapes the same vocabulary, so a line arriving here has
-// almost always been through an instance of this already. On clean input
-// an identity function would pass, which is why the fixture carries a
-// real ESC and other control bytes and why the first result is asserted
-// to differ from the input before the second is compared with it.
-func TestALineAlreadyEscapedIsNotEscapedAgain(t *testing.T) {
-	const dirty = "before\x1b[2Jafter\x00\x07\x7f end"
-
-	once := renderOneLine(t, dirty)
-	if once == dirty+"\n" {
-		t.Fatalf("the fixture came through unchanged, so this row is about clean "+
-			"input: %q", once)
-	}
-	if strings.ContainsRune(once, 0x1b) {
-		t.Fatalf("the first pass left a raw ESC: %q", once)
-	}
-
-	twice := renderOneLine(t, strings.TrimSuffix(once, "\n"))
-	if twice != once {
-		t.Errorf("a line the far end had already escaped was mangled again:\n"+
-			"  once:  %q\n  twice: %q", once, twice)
-	}
-}
-
-// renderOneLine pushes one build log line through a whole deploy and
-// returns exactly what the terminal received.
-func renderOneLine(t *testing.T, line string) string {
-	t.Helper()
-	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
-	run.prompt.confirms = []answer{no()}
-	run.script.eventScripts = []eventScript{{frames: []string{
-		logFrame(line), doneFrame(wire.StatusBuilt),
-	}}}
-
-	handoff, err := run.run()
-	defer handoff.Release()
-	if err != nil {
-		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
-	}
-	return run.prompt.results.String()
 }
 
 // -------------------------------------------------------------------

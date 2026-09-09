@@ -458,7 +458,7 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// report. The line is passed as an ARGUMENT and never as the
 		// format, so a percent sign in somebody's output stays a percent
 		// sign.
-		render.Result("%s", ui.Sanitize(ev.Line))
+		render.Result("%s", ev.Line)
 		return "", false
 
 	case wire.EventError:
@@ -478,7 +478,7 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// what it is: the server writes it into the same log the build
 		// output goes into, and a reader collecting stdout would
 		// otherwise be missing the line that explains the rest.
-		render.Result("%s", ui.Sanitize(errorLine(ev)))
+		render.Result("%s", errorLine(ev))
 		return "", false
 
 	case wire.EventPhase:
@@ -511,7 +511,7 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 			return "", false
 		}
 		*lastPhase = ev.Phase
-		render.Step("%s%s.", phaseNarration, ui.Sanitize(string(ev.Phase)))
+		render.Step("%s%s.", phaseNarration, string(ev.Phase))
 		return "", false
 
 	case wire.EventDone:
@@ -519,7 +519,7 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return "", false
 		}
-		render.Step("%s%s.", finishedNarration, ui.Sanitize(string(ev.Status)))
+		render.Step("%s%s.", finishedNarration, string(ev.Status))
 		return ev.Status, true
 	}
 
@@ -611,7 +611,7 @@ func streamLostFailure(deployID string) error {
 		fmt.Sprintf("The connection to the build log dropped, and %d attempts to "+
 			"re-establish\nit did not last either. THE BUILD ITSELF IS NOT AFFECTED "+
 			"— it is running on\nthe server, and this was only the window onto it.\n\n"+
-			"The deploy is %s.", streamReconnectAttempts, ui.Sanitize(deployID)),
+			"The deploy is %s.", streamReconnectAttempts, deployID),
 		"Run `curious deploy` again when the connection is steadier.")
 }
 

@@ -158,7 +158,7 @@ func validEmailShape(entry string) bool {
 // not stdout: somebody piping stdout still has to see what they are
 // being asked.
 func (u *UI) writePrompt(text string) {
-	fmt.Fprintf(u.err, "%s ", text)
+	fmt.Fprintf(u.err, "%s ", sanitizeLines(text))
 }
 
 // readLine reads one answer, trimmed.
