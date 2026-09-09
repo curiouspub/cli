@@ -185,10 +185,10 @@ func createDeploy(ctx context.Context, deps createDeps) (*wire.DeployCreateRespo
 func createUnansweredFailure(err error) error {
 	return ui.NewFailure(
 		"curious didn't hear back after asking for somewhere to upload.",
-		err.Error()+"\n\n"+deployMayExist+" — curious cannot tell whether the\n"+
+		deployMayExist+" — curious cannot tell whether the\n"+
 			"request arrived. Nothing has been uploaded to it either way, and an\n"+
 			"unused deploy is discarded by the server on its own.",
-		"Run `curious deploy` again when the connection is back.")
+		"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 }
 
 // createStopFailure is the copy for each code that ends the run.
@@ -201,15 +201,15 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// run that is not going to end differently.
 		return ui.NewFailure(
 			authenticationFailed,
-			apiErr.Message+"\n\ncurious logged in again and the server still would not "+
+			"curious logged in again and the server still would not "+
 				"accept the\nrequest, so it stopped rather than keep asking.",
 			"Check that this machine's clock is right, then run `curious deploy`\n"+
-				"again. If it keeps happening, please get in touch. "+uploadedNothing)
+				"again. If it keeps happening, please get in touch. "+uploadedNothing).Quoting(apiErr.Message)
 
 	case wire.CodeMaintenance:
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name.
-		return ui.ServerClosed(ui.NewFailure(
+		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not taking deploys right now.",
 			apiErr.Message,
 			"Try again a little later. "+uploadedNothing))
@@ -225,7 +225,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 	case wire.CodeRateLimited:
 		// Pace, not access: no closed-door mark, and the time the
 		// server named is USED rather than dropped.
-		return ui.NewFailure(
+		return ui.Quoted(
 			"Too many requests from here.",
 			apiErr.Message,
 			retryAdvice(apiErr.RetryAfter, now))
@@ -236,17 +236,17 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// knows which one.
 		return ui.NewFailure(
 			"The server wouldn't accept that archive.",
-			apiErr.Message+"\n\nSending the same thing again would not go any better, "+
+			"Sending the same thing again would not go any better, "+
 				"so the run\nstopped here.",
 			"Check that you are running a current version — `curious version` says\n"+
 				"which one — and please report this if it keeps happening. "+
-				uploadedNothing)
+				uploadedNothing).Quoting(apiErr.Message)
 	}
 
 	// Routed to a stop with no copy of its own, or a code this build
 	// predates. The contract is additive-only, so the server is entitled
 	// to introduce one, and the honest answer is to show what it said.
-	return ui.NewFailure(
+	return ui.Quoted(
 		"curious couldn't start the deploy.",
 		apiErr.Message,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+

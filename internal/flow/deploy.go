@@ -621,7 +621,7 @@ func resolveProjectDir(dir string) (string, error) {
 			"Check the path and run `curious deploy <dir>` again — or run it with\n"+
 				"no argument at all to deploy the directory you are standing in.")
 	case err != nil:
-		return "", ui.NewFailure(
+		return "", ui.Quoted(
 			"curious couldn't read "+abs+".",
 			err.Error(),
 			"Check that the path exists and that you can read it, then run\n"+
@@ -641,7 +641,7 @@ func resolveProjectDir(dir string) (string, error) {
 // problem with the file comes back as an empty token and a reason, and
 // every one of those is recoverable by logging in again.
 func configFailure(err error) *ui.Failure {
-	return ui.NewFailure(
+	return ui.Quoted(
 		"curious couldn't work out where to keep your login.",
 		err.Error(),
 		"Set CURIOUS_CONFIG to the full path of a config file and run\n"+
@@ -652,7 +652,7 @@ func configFailure(err error) *ui.Failure {
 // ends the run as. The walk's own error names the directory it stopped
 // at, which is the half a person can act on.
 func unreadableProjectFailure(err error) *ui.Failure {
-	return ui.NewFailure(
+	return ui.Quoted(
 		"curious couldn't read the whole project.",
 		err.Error(),
 		"Check that every directory in the project is readable, then run\n"+
@@ -683,7 +683,7 @@ func endpointUnusableFailure() *ui.Failure {
 // ends the run as: a full disk, or a temporary directory that is not
 // writable.
 func tempDirFailure(err error) *ui.Failure {
-	return ui.NewFailure(
+	return ui.Quoted(
 		"curious couldn't make a place to write the archive.",
 		err.Error(),
 		"Check that the temporary directory exists, is writable and has space,\n"+

@@ -422,7 +422,10 @@ func rendered(err error) string {
 	}
 	var f *ui.Failure
 	if errors.As(err, &f) {
-		return strings.Join([]string{f.What, f.Why, f.Next}, "\n")
+		// THE PACKAGE'S OWN ASSEMBLY, not a copy of it. Joining the
+		// fields here is how this helper came to report a server message
+		// as missing from output that contained it.
+		return strings.Join(f.Paragraphs(), "\n")
 	}
 	return err.Error()
 }
@@ -1150,10 +1153,14 @@ func TestNoContractCodeEndsAsAnInternalFault(t *testing.T) {
 					"internal fault — every code the contract defines must end in "+
 					"copy somebody wrote", code, res.err)
 			}
-			if f.What == "" || f.Why == "" || f.Next == "" {
-				t.Errorf("%q ends in a half-filled failure (what=%q why=%q next=%q); "+
-					"a hard stop that names no action leaves the reader to guess",
-					code, f.What, f.Why, f.Next)
+			// The middle paragraph may be OURS or the far end's — a
+			// failure whose whole explanation is the server's own
+			// sentence is the commonest shape there is. What must not
+			// happen is a stop with no explanation at all.
+			if f.What == "" || (f.Why == "" && f.Detail == "") || f.Next == "" {
+				t.Errorf("%q ends in a half-filled failure (what=%q detail=%q why=%q "+
+					"next=%q); a hard stop that names no action leaves the reader "+
+					"to guess", code, f.What, f.Detail, f.Why, f.Next)
 			}
 		})
 	}

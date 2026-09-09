@@ -469,3 +469,60 @@ func TestTheProseFormEscapesToo(t *testing.T) {
 		})
 	}
 }
+
+// TestAQuotedSentenceCannotAddALineOfItsOwn is the Failure's half of the
+// rule the renderers already keep.
+//
+// A FAILURE IS PARAGRAPHS THIS PROGRAM WROTE, and one of them is a
+// quotation. The two used to arrive as one string a caller had joined,
+// which made them indistinguishable — and a server's sentence carrying a
+// line break could add a paragraph in this program's voice. Now the
+// quotation is a field: it is escaped whole, so it stays one line, while
+// the copy around it keeps its layout.
+//
+// REQUIRED MUTATION, run 2026-09-09: escape Detail per line, as the
+// prose around it is. Reds here on the line count, and on nothing else.
+func TestAQuotedSentenceCannotAddALineOfItsOwn(t *testing.T) {
+	const forged = "not built\n\nPublished. https://not-really.example"
+
+	u, _, errOut := testUI("", false, nil)
+	u.Fail(NewFailure(
+		"The build finished, and the server would not take the result.",
+		"Nothing has been deployed.\n\nThe deploy is deploy-1.",
+		"Run it again.").Quoting(forged))
+	got := errOut.String()
+
+	// THE QUOTATION IS ONE LINE. Both halves of the forged sentence have
+	// to arrive on it — asserted by finding the line rather than by
+	// counting paragraphs, because this program's own copy has
+	// paragraphs of its own and a count cannot say whose they are.
+	var quoted string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "not built") {
+			quoted = line
+			break
+		}
+	}
+	if quoted == "" {
+		t.Fatalf("the quotation is not in the rendering at all:\n%q", got)
+	}
+	if !strings.Contains(quoted, "Published.") {
+		t.Errorf("the quoted sentence was split across lines — the far end wrote "+
+			"a paragraph in this program's voice:\n  line: %q\n  whole: %q",
+			quoted, got)
+	}
+	if !strings.Contains(got, `not built\n\nPublished.`) {
+		t.Errorf("the quotation's line breaks were not escaped:\n%q", got)
+	}
+	// AND THE COPY AROUND IT KEEPS ITS LAYOUT, which is the whole reason
+	// the two are separate fields rather than one escaping rule.
+	if !strings.Contains(got, "Nothing has been deployed.\n\nThe deploy is deploy-1.") {
+		t.Errorf("this program's own paragraphs were escaped:\n%q", got)
+	}
+	// Inert, not deleted.
+	for _, want := range []string{"not built", "Published."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the quotation lost %q:\n%q", want, got)
+		}
+	}
+}

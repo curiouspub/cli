@@ -147,22 +147,22 @@ func capacityCheckFailure(err error) error {
 		// endpoint or lost their connection.
 		return ui.NewFailure(
 			"curious couldn't ask whether there is room today.",
-			err.Error()+"\n\nThat check runs before anything is uploaded, so the "+
+			"That check runs before anything is uploaded, so the "+
 				"run stopped here rather than walking you through a login and a "+
 				"pack that might have nowhere to land.",
-			"Check your connection and run `curious deploy` again. "+uploadedNothing)
+			"Check your connection and run `curious deploy` again. "+uploadedNothing).Quoting(err.Error())
 	}
 
 	if apiErr.Code == wire.CodeMaintenance {
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name.
-		return ui.ServerClosed(ui.NewFailure(
+		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not taking deploys right now.",
 			apiErr.Message,
 			"Try again a little later. "+uploadedNothing))
 	}
 
-	return ui.NewFailure(
+	return ui.Quoted(
 		"curious couldn't ask whether there is room today.",
 		apiErr.Message,
 		"Try again in a moment. "+uploadedNothing)
