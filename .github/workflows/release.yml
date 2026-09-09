@@ -31,8 +31,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The range needs its own endpoints, and the checker proves
-          # itself against two commits in this repository's history before
-          # it examines any of them.
+          # itself against a commit in this repository's history before it
+          # examines any of them.
+          #
+          # AND A TAG PUSH IS THE NEW-REF CASE EVERY TIME: there is no
+          # before-sha, so what the tag publishes is measured against the
+          # default branch. The checkout action fetches only the pushed
+          # ref unless the depth is unbounded, in which case it fetches
+          # every head and tag — read at the pinned commit above rather
+          # than remembered. Reduce this to a number and this job refuses
+          # every release tag, correctly and unhelpfully.
           fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

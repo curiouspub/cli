@@ -20,11 +20,24 @@ name: CI
 # like. The pull-request job reads the title and body directly, so the
 # surface is covered before publication either way; what the queue adds
 # is the composed commit itself.
+#
+# THE ACTIVITY TYPES ARE NAMED, and `edited` is the reason. A pull
+# request's title and body are checked surfaces here, because a squash
+# merge composes its commit message out of them — and both can be
+# rewritten in a browser after the check has passed. The default set is
+# opened, synchronize and reopened; an edit is not in it, so without this
+# the title that becomes the commit message is the one nobody read.
+#
+# Naming the types REPLACES the defaults rather than adding to them,
+# which is why all four are spelled out. Dropping `synchronize` here
+# would stop this running on every push to a pull request, and nothing
+# about the line would look wrong.
 on:
   push:
     branches: ['**']
     tags: ['**']
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   merge_group:
 
 permissions:
@@ -42,12 +55,20 @@ jobs:
         with:
           # THE SUITE NOW ASSERTS SOMETHING ABOUT THIS REPOSITORY'S OWN
           # HISTORY, so it needs that history. The surface checker proves
-          # itself against two real commits before it is trusted with a
-          # range, and those are objects rather than fixtures on purpose:
+          # itself against a real commit before it is trusted with a
+          # range, and that is an object rather than a fixture on purpose:
           # a fixture file holding a private identifier is the leak
           # arriving through the check that hunts it. A shallow checkout
           # cannot answer whether the checker works, and the rows say so
           # rather than skipping.
+          #
+          # WHAT IT COSTS, said here because it arrived without being
+          # said: this is a full clone of every branch and tag on every
+          # run of every leg of the matrix, rather than the single commit
+          # a default checkout fetches. The repository is small and the
+          # cost is seconds today; it grows with the history, and the day
+          # somebody wants that back, the thing to move is the rows that
+          # read real commits, not this line.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -94,6 +115,19 @@ jobs:
           # there — and a range that silently resolves to nothing is this
           # check's whole failure mode, so it is stated here rather than
           # assumed.
+          #
+          # IT IS ALSO WHAT PUTS THE DEFAULT BRANCH IN THE CHECKOUT, and
+          # that is load bearing rather than incidental. A push of a NEW
+          # ref carries no before-sha, so what is new has to be measured
+          # against the default branch — and the checkout action fetches
+          # only the pushed ref UNLESS the depth is unbounded, in which
+          # case it fetches every head and tag. Read at the pinned commit
+          # below rather than remembered. Reduce this to a number and the
+          # first branch anybody creates fails undetermined, blaming a
+          # shallow checkout, which is true and unhelpful.
+          #
+          # The cost is a full clone on every run. One leg, and this
+          # repository is small.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

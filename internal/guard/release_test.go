@@ -1506,3 +1506,114 @@ func TestCutReleaseRefusesAVersionThatIsNotOne(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------
+// The surface check's own triggers and history.
+// ---------------------------------------------------------------------
+
+// ciWorkflow is the workflow that runs on every ref.
+const ciWorkflow = ".github/workflows/ci.yml"
+
+// surfaceCheckCommand is what a job runs to read the published surfaces
+// a scan of file contents cannot see.
+const surfaceCheckCommand = "surface-check"
+
+// TestTheSurfaceCheckRunsWhenItMustAndCanSeeWhatItNeeds holds two
+// settings that decide whether that check is coverage or decoration, and
+// which nothing else in this repository can observe.
+//
+// A WORKFLOW IS A CLAIM ABOUT WHEN SOMETHING RUNS, and neither of these
+// can be tested by running the check: one is about an event that has not
+// happened, the other about a checkout that has not been made. They are
+// asserted from the file, which is the only place the fact exists.
+func TestTheSurfaceCheckRunsWhenItMustAndCanSeeWhatItNeeds(t *testing.T) {
+	root := moduleRoot(t)
+
+	t.Run("a pull request's title and body are re-read after they are edited",
+		func(t *testing.T) {
+			// The title and body are checked surfaces because a squash
+			// merge composes its commit message out of them — and both can
+			// be rewritten in a browser after the check has passed. The
+			// default activity types are opened, synchronize and reopened;
+			// an edit is not among them, so without `edited` the title
+			// that becomes the commit message is the one nobody read.
+			//
+			// ALL FOUR ARE REQUIRED, because naming types REPLACES the
+			// defaults rather than adding to them. Dropping synchronize
+			// would stop this running on every push to a pull request, and
+			// nothing about the line would look wrong.
+			data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ciWorkflow)))
+			if err != nil {
+				t.Fatalf("reading %s: %v", ciWorkflow, err)
+			}
+			lines := readYAMLLines(string(data))
+			triggers, ok := topLevelBlock(lines, "on")
+			if !ok {
+				t.Fatalf("%s declares no triggers at all", ciWorkflow)
+			}
+			at := findKey(triggers, "pull_request")
+			if at < 0 {
+				t.Fatalf("%s does not run on a pull request", ciWorkflow)
+			}
+			typesAt := findKey(blockAt(triggers, at), "types")
+			if typesAt < 0 {
+				t.Fatalf("%s names no activity types for a pull request, so it takes the "+
+					"defaults — and an edit to the title is not one of them", ciWorkflow)
+			}
+			got := map[string]bool{}
+			for _, v := range listValues(blockAt(triggers, at), typesAt) {
+				got[v] = true
+			}
+			for _, want := range []string{"opened", "synchronize", "reopened", "edited"} {
+				if !got[want] {
+					t.Errorf("%s does not run on a pull request being %s.\n"+
+						"Naming types replaces the defaults rather than adding to them, so "+
+						"every one this check needs has to be spelled out.", ciWorkflow, want)
+				}
+			}
+		})
+
+	t.Run("every job that runs the surface check checks out the whole history",
+		func(t *testing.T) {
+			// THE CHECK FAILS CLOSED WITHOUT IT, which is the good half:
+			// a range it cannot resolve is undetermined rather than clean.
+			// The bad half is that it fails for every new branch and every
+			// release tag, blaming a shallow checkout — which is true, and
+			// leaves whoever reads it looking at the wrong line.
+			//
+			// A push of a new ref carries no before-sha, so what is new is
+			// measured against the default branch. The checkout action
+			// fetches only the pushed ref UNLESS the depth is unbounded,
+			// in which case it fetches every head and tag. That behaviour
+			// is a property of the pinned action rather than of this
+			// repository, so what is asserted here is the input this
+			// repository chooses.
+			found := 0
+			for _, path := range workflowFiles(t, root) {
+				rel := filepath.ToSlash(mustRel(t, root, path))
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("reading %s: %v", rel, err)
+				}
+				for _, j := range jobs(readYAMLLines(string(data))) {
+					body := strings.Join(textsOf(j.Body), "\n")
+					if !strings.Contains(body, surfaceCheckCommand) {
+						continue
+					}
+					found++
+					if !hasEntry(j.Body, "fetch-depth", "0") {
+						t.Errorf("%s:%d — the job %q reads a published range and does not ask "+
+							"for the history to read it in.\nA new branch and a release tag "+
+							"both have to be measured against the default branch, which a "+
+							"shallow checkout does not carry.", rel, j.N, j.Name)
+					}
+				}
+			}
+			// THE FLOOR. Both workflows run this check, and a reader that
+			// found neither would report every workflow as compliant.
+			if found < 2 {
+				t.Fatalf("found %d job(s) running the surface check, want at least 2 — the "+
+					"row above would pass over an empty set", found)
+			}
+		})
+}
