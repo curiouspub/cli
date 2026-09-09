@@ -298,6 +298,27 @@ func (u *UI) styled(s string) string {
 	return boldSequence + s + resetSequence
 }
 
+// Prose is THIS PROGRAM'S OWN WORDS, marked as such.
+//
+// AN ARGUMENT IS ESCAPED WHOLE, newline included, because an argument is
+// where somebody else's text arrives. But some of this program's own
+// copy is composed at RUN TIME and cannot be written into the format: a
+// pack receipt, a pre-flight finding, the closing narration with its
+// optional expiry line. Passed as a plain string its paragraphs become
+// visible backslash-n; passed as the format it is a non-constant format
+// string, which go vet refuses on purpose.
+//
+// So it is passed as a Prose. It is not a string, so the argument
+// escaping leaves it alone, and the rendered line still goes through the
+// escape table per line: the layout is kept and everything a terminal
+// obeys is still inert.
+//
+// MISUSING IT IS THE ONE HOLE IT OPENS. Prose around somebody else's
+// sentence would let a newline through, so a guard refuses that — and
+// forgetting it produces a visibly mangled paragraph rather than a quiet
+// hole, which is the right way round for a mistake to fail.
+type Prose string
+
 // Step writes one line of narration to stderr.
 //
 // PLAIN SEQUENTIAL LINES, and that is a decision rather than a stage on

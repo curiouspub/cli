@@ -384,7 +384,7 @@ func renderPublished(render publishRenderer, resp *wire.DeployPublishResponse, n
 	if line, known := expiresLine(resp.ExpiresAt, now); known {
 		closing += "\n\n" + line
 	}
-	render.Step("%s", closing)
+	render.Step("%s", ui.Prose(closing))
 	render.Result("%s", publishedURL(resp.Subdomain))
 }
 

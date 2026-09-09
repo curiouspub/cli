@@ -56,11 +56,25 @@ func TestNoServerSentenceIsJoinedIntoOurProse(t *testing.T) {
 		rel, _ := filepath.Rel(root, path)
 		ast.Inspect(parsed, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || !isUICall(call, "NewFailure") || len(call.Args) < 2 {
+			if !ok {
+				return true
+			}
+			// TWO PLACES THIS PROGRAM CLAIMS WORDS AS ITS OWN: the middle
+			// paragraph of a failure, and a Prose mark. Somebody else's
+			// sentence belongs in neither — a Prose around a server
+			// message would put its line breaks back, which is the one
+			// hole that mark opens.
+			var subject ast.Expr
+			switch {
+			case isUICall(call, "NewFailure") && len(call.Args) >= 2:
+				subject = call.Args[1]
+			case isUICall(call, "Prose") && len(call.Args) == 1:
+				subject = call.Args[0]
+			default:
 				return true
 			}
 			checked++
-			ast.Inspect(call.Args[1], func(inner ast.Node) bool {
+			ast.Inspect(subject, func(inner ast.Node) bool {
 				name := serverTextName(inner)
 				if name == "" {
 					return true

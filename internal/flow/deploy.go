@@ -383,7 +383,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		return nil, blockedFailure(refused)
 	}
 
-	deps.Prompt.Step("%s", prepared.Receipt)
+	deps.Prompt.Step("%s", ui.Prose(prepared.Receipt))
 
 	// 8. THE CREATE.
 	//

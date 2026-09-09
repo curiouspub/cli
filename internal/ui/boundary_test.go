@@ -526,3 +526,48 @@ func TestAQuotedSentenceCannotAddALineOfItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// TestThisProgramsComposedProseKeepsItsParagraphs.
+//
+// THE DEFECT THIS ROW EXISTS FOR SHIPPED, and nothing here saw it. An
+// argument is escaped whole so that a server's sentence cannot add a
+// line — and this program's own closing narration is composed at run
+// time and passed as an argument, so every successful deploy printed
+// "Published.\n\nIt can take..." on ONE line with visible backslash-n.
+// The flow suite renders through a double that formats and does not
+// escape, so the mangling existed only in the shipped path.
+//
+// Prose is the mark that says whose words these are. Both halves are
+// asserted here: the mark keeps the layout, and its absence does not.
+//
+// REQUIRED MUTATION, run 2026-09-09: escape a Prose argument like a
+// string one — `case Prose: args[i] = Prose(Sanitize(string(v)))`. Reds
+// on the first half.
+func TestThisProgramsComposedProseKeepsItsParagraphs(t *testing.T) {
+	const composed = "Published.\n\nIt can take up to about a minute." + hostileCSI
+
+	u, _, marked := testUI("", false, nil)
+	u.Step("%s", Prose(composed))
+	got := marked.String()
+
+	if !strings.Contains(got, "Published.\n\nIt can take") {
+		t.Errorf("this program's own paragraphs were turned into text:\n%q", got)
+	}
+	// AND IT IS STILL INERT. Prose says whose words they are, not that
+	// they may drive a terminal.
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("a Prose argument carried a raw ESC to the terminal:\n%q", got)
+	}
+	if !strings.Contains(got, "[2Jafter") {
+		t.Errorf("the escape was dropped rather than rendered inert:\n%q", got)
+	}
+
+	// The other half: an unmarked string is still somebody else's, and
+	// its line breaks are still content.
+	u2, _, plain := testUI("", false, nil)
+	u2.Step("%s", composed)
+	if strings.Contains(plain.String(), "Published.\n\nIt can take") {
+		t.Errorf("an unmarked argument kept line breaks, so the mark means "+
+			"nothing:\n%q", plain.String())
+	}
+}

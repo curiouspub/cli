@@ -451,7 +451,7 @@ func Login(ctx context.Context, deps LoginDeps) error {
 			// noise to somebody deploying their first site.
 			p.Step("%s", lastMessage)
 			if consecutiveRefusals >= unauthorizedFailuresBeforeHint && !cooldownHintShown {
-				p.Step("%s", cooldownHint)
+				p.Step("%s", ui.Prose(cooldownHint))
 				cooldownHintShown = true
 			}
 			p.Step("%s", escapeHatchLine)
