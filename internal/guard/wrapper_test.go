@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -352,6 +353,16 @@ func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 	}
 }
 
+// wrapperPublishActions is the list this job's design claims, written
+// out because the claim is the exact two and not the namespace.
+//
+// checkout, because the package files are in the tree; setup-node,
+// because publishing needs a newer package manager than the wrapper's
+// own floor. Widening this list is an edit to this file, in the diff
+// that wants it, which is the only way a reader ever sees the question
+// asked.
+var wrapperPublishActions = []string{"actions/checkout", "actions/setup-node"}
+
 // TestThePublishJobRunsNobodyElsesCode states the property the split
 // between the two publishing jobs exists to buy, and checks it.
 //
@@ -360,47 +371,66 @@ func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 // three actions from outside the actions organisation; this one runs
 // two, both from inside it. That is the whole reason there are two
 // jobs, and it is a property nothing else in the tree records.
+//
+// THE NAMESPACE WAS A SILHOUETTE. Asking only whether each action came
+// from the actions organisation admitted any number of them: adding
+// actions/github-script to this job passed the row while contradicting
+// the exact list the design claims, measured before this change. An
+// action that runs arbitrary script from a workflow input, inside the
+// job holding the publish credential, is precisely the widening the
+// split was made to prevent — and it would have arrived green.
 func TestThePublishJobRunsNobodyElsesCode(t *testing.T) {
 	root := moduleRoot(t)
 	lines := readYAMLLines(readRepoFile(t, root, releaseWorkflow))
+	wrapper := wrapperJob(t, lines)
 
-	var wrapper *job
-	for i, j := range jobs(lines) {
-		if j.Name == "wrapper" {
-			wrapper = &jobs(lines)[i]
-		}
-	}
-	if wrapper == nil {
-		t.Fatal("the release workflow has no job publishing the npm wrapper")
-	}
-
-	uses := 0
+	var ran []string
 	for _, line := range textsOf(wrapper.Body) {
 		m := usesEntry.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
-		uses++
-		action := strings.TrimSpace(strings.SplitN(m[1], "@", 2)[0])
-		if !strings.HasPrefix(action, "actions/") {
-			t.Errorf("the wrapper's publish job runs %s, which is not from the actions "+
-				"organisation\n"+
-				"This job holds the ability to publish a package to a registry. Everything "+
-				"running inside it holds that too.", action)
+		value := strings.TrimSpace(m[1])
+		if hash := strings.Index(value, "#"); hash >= 0 {
+			value = strings.TrimSpace(value[:hash])
+		}
+		value = strings.Trim(value, `"'`)
+		action, ref := value, ""
+		if at := strings.LastIndex(value, "@"); at >= 0 {
+			action, ref = value[:at], value[at+1:]
+		}
+		ran = append(ran, action)
+		// PINNED, and asserted here rather than left to the repository-wide
+		// pinning row: that row is about every workflow, and this one is
+		// about the two things allowed inside a job that can publish.
+		if !pinnedSHA.MatchString(ref) {
+			t.Errorf("the %q job runs %s at %q, which is not a commit identifier\n"+
+				"A tag is mutable, and whoever can move one runs their code inside the job "+
+				"that holds the publish credential.", wrapperJobName, action, ref)
 		}
 	}
-	if uses == 0 {
-		t.Fatal("the wrapper's publish job runs no action at all, so this row observed nothing")
+
+	sort.Strings(ran)
+	want := append([]string(nil), wrapperPublishActions...)
+	sort.Strings(want)
+	// Joined rather than compared element by element: an action path
+	// carries no spaces, so one string is the whole comparison.
+	if strings.Join(ran, " ") != strings.Join(want, " ") {
+		t.Errorf("the %q job runs %v, and its design claims exactly %v\n"+
+			"Everything running in this job holds the ability to publish a package to a "+
+			"registry. The list is short on purpose, and it is the SET that is the "+
+			"property — a namespace admits any number of them.", wrapperJobName, ran, want)
 	}
+
 	// The grant, in full: a job-level block replaces the workflow floor
 	// rather than adding to it.
 	if !hasEntry(wrapper.Body, "contents", "read") {
-		t.Error("the wrapper's publish job does not grant itself read access, and it checks " +
-			"out the tree")
+		t.Errorf("the %q job does not grant itself read access, and it checks out the tree",
+			wrapperJobName)
 	}
 	if !hasEntry(wrapper.Body, "id-token", "write") {
-		t.Error("the wrapper's publish job mints no identity token, so it has no way to " +
-			"prove who it is without a stored credential")
+		t.Errorf("the %q job mints no identity token, so it has no way to prove who it is "+
+			"without a stored credential", wrapperJobName)
 	}
 }
 
