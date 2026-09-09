@@ -446,7 +446,7 @@ func publishUnusableAnswerFailure(deployID string) error {
 		"The publish itself was accepted, so the deploy may well be live — but\n"+
 			"the label the server sent back is not a label, so curious has no\n"+
 			"address to show you and will not guess at one.\n\n"+
-			"The deploy is "+deployID+".",
+			ui.Written("The deploy is %s.", deployID),
 		"Please report this. Running `curious deploy` again would make a second\n"+
 			"deploy rather than answer the question about this one.")
 }
@@ -476,7 +476,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// promised would be wrong either way.
 		return ui.NewFailure(
 			"The server is asking for a pause.",
-			nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID),
 			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message)
 
 	case wire.CodeCapacityClosed:
@@ -485,7 +485,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// "this went wrong".
 		return ui.ServerClosed(ui.NewFailure(
 			closedHeadline,
-			nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID),
 			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message))
 
 	case wire.CodeDeployFailed, wire.CodeBadRequest:
@@ -494,9 +494,9 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	case wire.CodeNotFound:
 		return ui.NewFailure(
 			"The server doesn't know that deploy.",
-			"The deploy is "+deployID+". That usually "+
+			ui.Written("The deploy is %s. That usually "+
 				"means it has already\nexpired, or that it belongs to a different login "+
-				"from the one this run\nis using. "+nothingDeployed,
+				"from the one this run\nis using. "+nothingDeployed, deployID),
 			"Run `curious deploy` again to make a fresh one.").Quoting(apiErr.Message)
 
 	case wire.CodeMaintenance:
@@ -515,8 +515,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// printed directly above it.
 		return ui.NewFailure(
 			"The server couldn't finish the deploy.",
-			nothingDeployed+"\n\nThe deploy is "+
-				deployID+".",
+			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID),
 			"There is nothing to fix at this end and nothing here worth retrying.\n"+
 				"If it keeps happening, please get in touch.").Quoting(apiErr.Message)
 	}
@@ -526,8 +525,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.NewFailure(
 		"The server wouldn't give this deploy an address.",
-		nothingDeployed+"\n\nThe deploy is "+
-			deployID+".",
+		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID),
 		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.").Quoting(apiErr.Message)
 }
@@ -559,7 +557,7 @@ func buildRefusedFailure(deployID string) *ui.Failure {
 			"produced, and the server refused this deploy at that point — so this\n"+
 			"is the second half of a build outcome arriving late rather than\n"+
 			"anything going wrong at the last step. "+nothingDeployed+"\n\n"+
-			"The deploy is "+deployID+".",
+			ui.Written("The deploy is %s.", deployID),
 		"Run `curious deploy` again. What went wrong is in the build log above\n"+
 			"rather than here, and there is nothing at this step to retry on its\n"+
 			"own.")
@@ -579,7 +577,7 @@ func publishNotConfirmedFailure(deployID string) error {
 		"The build log ended with the build reporting that it had finished, and\n"+
 			"the server was still working on it "+publishConfirmWindow.String()+
 			" later. curious stopped\nasking rather than wait indefinitely. "+
-			nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID),
 		"Run `curious deploy` again.")
 }
 
@@ -599,10 +597,10 @@ func publishNotConfirmedFailure(deployID string) error {
 func publishUnansweredFailure(err error, deployID string) error {
 	return ui.NewFailure(
 		"curious didn't hear back after asking for the deploy's address.",
-		"The deploy may or may not have got one — curious cannot "+
+		ui.Written("The deploy may or may not have got one — curious cannot "+
 			"tell whether\nthe request arrived, and it does not ask twice, because "+
 			"asking again is\nnot a way of finding out. It never learned the address "+
-			"either: that\narrives in the answer that did not come.\n\nThe deploy is "+
-			deployID+".",
+			"either: that\narrives in the answer that did not come.\n\nThe deploy is %s.",
+			deployID),
 		"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 }

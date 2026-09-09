@@ -71,7 +71,7 @@ func exitCodeFor(t *testing.T, err error) int {
 	os.Stderr, os.Stdout = devnull, devnull
 	defer func() { os.Stderr, os.Stdout = realErr, realOut }()
 
-	return ui.New().ExitCode(err)
+	return ui.New(os.Stdin, os.Stdout, os.Stderr).ExitCode(err)
 }
 
 func hardStop(id, message string) check.Finding {
@@ -621,7 +621,7 @@ func renderedBytes(t *testing.T, err error) (string, int) {
 
 	realErr, realOut := os.Stderr, os.Stdout
 	os.Stderr, os.Stdout = sink, sink
-	code := ui.New().ExitCode(err)
+	code := ui.New(os.Stdin, os.Stdout, os.Stderr).ExitCode(err)
 	os.Stderr, os.Stdout = realErr, realOut
 
 	if closeErr := sink.Close(); closeErr != nil {

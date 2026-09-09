@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,20 +50,21 @@ func TestRunVersionOverridden(t *testing.T) {
 // stored login and no fixture, and it still cannot pass without the real
 // sequence having run.
 //
-// The process's own stderr is redirected, because the run's output goes
-// through the terminal type rather than through the writers dispatch was
-// handed, and a row that ignored that would print its diagnostic into
-// the suite's output.
+// IT READS THE WRITER DISPATCH WAS HANDED. This row used to redirect the
+// process's own stderr, because the terminal type built itself out of
+// os.Stderr no matter what dispatch was given — which is the same fact
+// that let the flag parser write to a raw stream before any escaping
+// existed. The renderer takes its streams now, so the row can simply
+// read the buffer it passed in, and nothing here touches a global.
 //
 // REQUIRED MUTATION, run 2026-09-08: return 0 from runDeploy without
 // calling flow.Deploy. This reds; the flag rows above stay green.
 func TestDeployIsDispatchedToTheRealSequence(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-project")
 
-	var out bytes.Buffer
-	text, code := withCapturedStderr(t, func() int {
-		return run([]string{"deploy", missing}, emptyStdin(), &out, io.Discard)
-	})
+	var out, errOut bytes.Buffer
+	code := run([]string{"deploy", missing}, emptyStdin(), &out, &errOut)
+	text := errOut.String()
 
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1 for a directory that is not there", code)
@@ -76,35 +75,6 @@ func TestDeployIsDispatchedToTheRealSequence(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("a failure leaked to stdout: %q", out.String())
 	}
-}
-
-// withCapturedStderr runs fn with the process's stderr pointed at a file
-// and returns what was written to it, plus fn's own result.
-//
-// Redirected rather than captured, because the terminal type writes to
-// the streams it was built from and this is the only portable way to
-// hand it one a test can read back.
-func withCapturedStderr(t *testing.T, fn func() int) (string, int) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "stderr")
-	sink, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("creating the capture file: %v", err)
-	}
-
-	real := os.Stderr
-	os.Stderr = sink
-	code := fn()
-	os.Stderr = real
-
-	if err := sink.Close(); err != nil {
-		t.Fatalf("closing the capture file: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading the capture file: %v", err)
-	}
-	return string(data), code
 }
 
 func TestRunUnknownCommand(t *testing.T) {
