@@ -224,14 +224,38 @@ func report(stdout io.Writer, findings []Finding, narrowings []Narrowing) int {
 	return exitClean
 }
 
-// String renders one finding for whoever has to fix it.
+// String renders one finding for whoever has to fix it, and NEVER the
+// text that tripped it.
+//
+// THE MATCH IS THE THING THIS CHECK EXISTS TO KEEP OUT OF PUBLISHED
+// TEXT — a private citation, or a provider name — and this report goes
+// into a run's log. On a pull request from a fork that log is more public
+// than the message being read, so a report carrying the match publishes
+// what it caught, to a wider audience than the surface it was defending.
+// The refusal that is written by the one piece of code guaranteed to be
+// holding the thing it refuses is the first place a leak gets out.
+//
+// The self-test already refuses exactly this, a file away: it discards
+// its findings and prints a sha and a count, because rendering one would
+// write the identifier into a log. The hazard was understood and guarded
+// in one place; this is the other place agreeing with it.
+//
+// WHAT IS LEFT IS ENOUGH TO ACT ON, which is the other half and not a
+// smaller one — a report redacted into uselessness is a leak closed by
+// removing the check. The surface, the line and the rule name a single
+// line of the author's own text, and the rule is either a line of this
+// repository's own published manifest or the name of the vendor check.
+// Neither discloses anything the reader could not already read here.
+//
+// Match stays on the struct: it is what the counting is done on, and a
+// row can assert on it in memory without any of it reaching a page.
 func (f Finding) String() string {
 	where := f.Subject
 	if f.Line > 0 {
 		where = fmt.Sprintf("%s, line %d", f.Subject, f.Line)
 	}
 	if f.Rule == vendorVocabulary {
-		return fmt.Sprintf("%s names infrastructure (%q)", where, f.Match)
+		return where + " names infrastructure"
 	}
-	return fmt.Sprintf("%s matches %s (matched %q)", where, f.Rule, f.Match)
+	return fmt.Sprintf("%s matches %s", where, f.Rule)
 }
