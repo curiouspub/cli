@@ -352,3 +352,70 @@ func TestTheLoaderRefusesWhatItCannotCheckWith(t *testing.T) {
 		}
 	})
 }
+
+// TestSamenessIsTheFILESOwnQuestion covers an edit that gives nothing up
+// being reported as though it did.
+//
+// A term is looked up after lowering, so two spellings of one term are
+// one rule: changing the case of a letter in the vocabulary retires
+// nothing. A pattern is compiled exactly as written, so two spellings are
+// two different patterns and swapping one for the other really does
+// retire the first. Compared verbatim, both read as a narrowing — and a
+// narrowing is a finding, so an edit that changed nothing fails a run and
+// teaches its reader that this report cries wolf.
+//
+// THE SAME EDIT IN BOTH FILES, which is what makes this a row about the
+// files rather than about lowercasing: one marker line, re-cased in each,
+// and exactly one narrowing comes back.
+func TestSamenessIsTheFILESOwnQuestion(t *testing.T) {
+	const asWritten, recased = "ZZMARKERONLYFORTHISROW", "zzmarkeronlyforthisrow"
+
+	f := newFixture(t)
+	patterns := realRuleFile(t, citationPatternsPath)
+	vendor := realRuleFile(t, vendorTermsPath)
+	f.write(citationPatternsPath, patterns+"\n"+asWritten+"\n")
+	f.write(vendorTermsPath, vendor+"\n"+asWritten+"\n")
+	base := f.commit("a marker line in both rule files", citationPatternsPath, vendorTermsPath)
+
+	// HEAD IS THE WORKING TREE, and the only edit is the case of that one
+	// line in each file.
+	f.write(citationPatternsPath, patterns+"\n"+recased+"\n")
+	f.write(vendorTermsPath, vendor+"\n"+recased+"\n")
+
+	rules, narrowings, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree())
+	if err != nil {
+		t.Fatalf("loading the union: %v", err)
+	}
+
+	// THE ABSENCE. Nothing was given up in the vocabulary.
+	for _, n := range narrowings {
+		if n.Path == vendorTermsPath {
+			t.Errorf("re-casing a term reported a narrowing (%+v).\nA term is looked up after "+
+				"lowering, so both spellings are the same rule and nothing was retired — and a "+
+				"narrowing is a finding, so this fails a run over an edit that changed nothing.",
+				n)
+		}
+	}
+	// THE PRESENCE, in the same breath: the term still matches, so the
+	// absence above is about sameness rather than about a term that fell
+	// out of the union altogether.
+	if got := rules.Scan("commit", "a line naming "+asWritten+" outright"); len(got) == 0 {
+		t.Error("the re-cased term matches nothing at either end, so the row above is passing " +
+			"because the vocabulary lost it rather than because it kept it")
+	}
+
+	// AND THE CONTROL, which is the same edit in the other file. A pattern
+	// is compiled as written; the two spellings are two patterns, and
+	// swapping them retires one.
+	saw := 0
+	for _, n := range narrowings {
+		if n.Path == citationPatternsPath && n.Line == asWritten {
+			saw++
+		}
+	}
+	if saw != 1 {
+		t.Errorf("re-casing a pattern reported %d narrowing(s) for %s, want exactly 1: %v\n"+
+			"Without this the row above is satisfied by a loader that has stopped reporting "+
+			"narrowings at all.", saw, citationPatternsPath, narrowings)
+	}
+}

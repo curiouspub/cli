@@ -269,6 +269,17 @@ func (r repo) atRevision(rev string) end {
 // owns these files: deleting a line from one has to measurably change
 // what a check catches, or nobody can tell the file is really being read.
 // The union above is what keeps that property from becoming a hole.
+//
+// AND ON A PULL REQUEST THE WORKING TREE IS THE MERGE COMMIT'S, not the
+// pull request's own head — a checkout for that event puts the merge of
+// the two ends on disk. Recorded rather than corrected, because it is the
+// text that will actually land, which is the text worth reading: a line
+// the pull request adds is in the merge tree and is caught, and a line it
+// deletes is absent from the merge tree while the base end of the union
+// still holds it. What it does mean is that a rule file changed on the
+// BASE branch since the pull request opened is read here as though the
+// pull request carried that change, which is true of the merge and not of
+// the branch.
 func (r repo) workingTree() end {
 	return func(path string) (string, bool, error) {
 		data, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(path)))

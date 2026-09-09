@@ -61,10 +61,20 @@ func selfTest(r repo, rules Rules, out io.Writer) error {
 			return err
 		}
 		if len(found) == 0 {
+			// AND WHAT TO DO ABOUT IT, because one of the two causes is a
+			// legitimate change somebody made on purpose, possibly weeks
+			// ago, and this message is the only place the two events ever
+			// meet. Without the repair spelled out, whoever hits it finds
+			// a run that fails undetermined for a reason that reads like a
+			// bug in the check.
 			return fmt.Errorf("the self-test read %s and reported nothing. That message is "+
 				"known to carry what this check looks for, so either the vocabulary no longer "+
 				"contains the rule that caught it or the checker has stopped finding anything "+
-				"at all. Nothing below this line would notice the second one", short(sha))
+				"at all. Nothing below this line would notice the second one. If a rule was "+
+				"retired on purpose, this is the rest of that decision arriving late: the "+
+				"commit recorded here has to be replaced with one the vocabulary still "+
+				"catches, and the run that retires a rule says so while there is still "+
+				"somebody to tell", short(sha))
 		}
 		fmt.Fprintf(out, "self-test: %s reported %d finding(s), as it must\n", short(sha), len(found))
 	}

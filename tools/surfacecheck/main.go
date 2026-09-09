@@ -268,6 +268,28 @@ func describe(stdout io.Writer, findings []Finding, narrowings []Narrowing) bool
 			"that the vocabulary is smaller from now on, which is a decision somebody has to "+
 			"take on purpose — land it on its own, with nothing else in the range, so the "+
 			"diff shows exactly what is being given up.")
+		// SAID OUT LOUD, because it is a consequence of the design that
+		// reads like a mistake. A narrowing is a finding and findings fail,
+		// so the change that retires a rule is merged over a red check.
+		// That was implicit in a rule and left the person at the merge
+		// button to work out whether they were doing something wrong.
+		fmt.Fprintln(stdout, "\nThis check will be red on that change, and that is the "+
+			"designed path rather than a thing to work around. There is no way to retire a "+
+			"rule without the run that retires it reporting the retirement; merging it over "+
+			"this red is somebody deciding in the open, which is the whole reason a narrowing "+
+			"fails at all.")
+		// AND THE OTHER THING THE LINE MAY HAVE BEEN HOLDING UP. This
+		// check proves itself before every run against a commit in this
+		// repository's history that a rule must catch. Retire that rule
+		// and every later run fails undetermined, saying only that the
+		// commit reported nothing — with nothing anywhere connecting it to
+		// the change that caused it. The moment to say so is here, to the
+		// person who can still do something about it.
+		fmt.Fprintln(stdout, "\nCheck what else the line was holding up before you land it. "+
+			"This check proves itself against a commit in this repository's history that a "+
+			"rule must catch, and if the line above is that rule, every run after this one "+
+			"fails saying that commit reported nothing. Retire the line and replace the "+
+			"recorded commit in the same change.")
 	}
 
 	for _, f := range findings {

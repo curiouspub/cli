@@ -50,11 +50,11 @@ type Narrowing struct {
 // The union closes it: the base's copy of a deleted line is still in
 // force for the range that deletes it.
 func LoadRules(base, head end) (Rules, []Narrowing, error) {
-	patternLines, patternNarrowings, err := unionOf(base, head, citationPatternsPath)
+	patternLines, patternNarrowings, err := unionOf(base, head, citationPatternsPath, verbatim)
 	if err != nil {
 		return Rules{}, nil, err
 	}
-	vendorLines, vendorNarrowings, err := unionOf(base, head, vendorTermsPath)
+	vendorLines, vendorNarrowings, err := unionOf(base, head, vendorTermsPath, strings.ToLower)
 	if err != nil {
 		return Rules{}, nil, err
 	}
@@ -86,13 +86,28 @@ func LoadRules(base, head end) (Rules, []Narrowing, error) {
 	return rules, append(patternNarrowings, vendorNarrowings...), nil
 }
 
+// verbatim is the sameness test for a file whose lines mean exactly what
+// they spell.
+func verbatim(line string) string { return line }
+
 // unionOf reads one rule file at both ends and returns every data line
 // either of them declares, plus the lines only the base had.
 //
 // A file ABSENT at the base is not a narrowing: the base predates it, and
 // there is nothing to have given up. A file absent at HEAD is a narrowing
 // of every line it used to carry, which is what deleting it means.
-func unionOf(base, head end, path string) ([]string, []Narrowing, error) {
+//
+// SAMENESS IS THE FILE'S OWN QUESTION, which is why it arrives as an
+// argument. Whether two lines are the same rule depends on how the line
+// is read, and the two rule files read theirs differently: a term is
+// looked up after lowering, so two spellings of one term are one rule and
+// changing the case of a letter gives nothing up; a pattern is compiled
+// as written, so two spellings are two different patterns and swapping
+// one for the other really does retire the first. Compared verbatim, a
+// case-only edit to a term reports a narrowing that did not happen — and
+// a narrowing is a finding, so an edit that changed nothing fails a run
+// and teaches the reader that this report cries wolf.
+func unionOf(base, head end, path string, sameAs func(string) string) ([]string, []Narrowing, error) {
 	baseText, baseHad, err := base(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading %s at the base of the range: %w", path, err)
@@ -109,17 +124,18 @@ func unionOf(base, head end, path string) ([]string, []Narrowing, error) {
 	headLines := dataLines(headText)
 	inHead := map[string]bool{}
 	for _, line := range headLines {
-		inHead[line] = true
+		inHead[sameAs(line)] = true
 	}
 
 	union := append([]string(nil), headLines...)
 	var narrowings []Narrowing
 	seen := map[string]bool{}
 	for _, line := range dataLines(baseText) {
-		if inHead[line] || seen[line] {
+		key := sameAs(line)
+		if inHead[key] || seen[key] {
 			continue
 		}
-		seen[line] = true
+		seen[key] = true
 		union = append(union, line)
 		narrowings = append(narrowings, Narrowing{Path: path, Line: line})
 	}

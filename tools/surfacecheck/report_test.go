@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -105,4 +106,98 @@ func TestTheReportNamesThePlaceAndNeverTheTextThatTrippedIt(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestTheNarrowingOutputSaysWhatHappensNext covers the two things a
+// narrowing report has to tell the person reading it, neither of which
+// follows from the narrowing itself.
+//
+// THE FIRST IS THAT THE RED IS THE PATH. A narrowing is a finding and
+// findings fail, so the change that retires a rule is merged over a
+// failing check. That is deliberate — there is no way to retire a rule
+// without the run that retires it saying so — and left unsaid it reads as
+// a mistake to the one person who has to decide whether to press the
+// button anyway.
+//
+// THE SECOND IS WHAT ELSE THE LINE WAS HOLDING UP. This check proves
+// itself before every run against a commit in this repository's history
+// that a rule must catch, and exactly one rule catches it: measured by
+// scanning that commit against the real vocabulary. Retire that rule and
+// every later run fails undetermined, saying only that the commit
+// reported nothing — with nothing connecting it to a change made weeks
+// earlier. The moment to say so is while the person who can act on it is
+// still there.
+//
+// MUTATION RUN: delete either paragraph. This row reds naming the missing
+// one, and nothing else in the package moves.
+func TestTheNarrowingOutputSaysWhatHappensNext(t *testing.T) {
+	narrowed := renderReport(t, nil, []Narrowing{
+		{Path: citationPatternsPath, Line: "a-line-that-used-to-be-here"},
+	})
+
+	if !strings.Contains(narrowed, "a-line-that-used-to-be-here") ||
+		!strings.Contains(narrowed, citationPatternsPath) {
+		t.Fatalf("the narrowing does not name the file and the line that went:\n%s", narrowed)
+	}
+	for what, phrase := range map[string]string{
+		"that the red is the designed path":                "designed path",
+		"that the self-test's own commit may depend on it": "proves itself against a commit",
+	} {
+		if !strings.Contains(narrowed, phrase) {
+			t.Errorf("the narrowing report does not say %s:\n%s", what, narrowed)
+		}
+	}
+
+	// THE CONTROL. A run with nothing to report says none of it — without
+	// this, the row above is satisfied by a report that prints the whole
+	// paragraph every time, which would train its reader to skip it.
+	clean := renderReport(t, nil, nil)
+	for _, phrase := range []string{"designed path", "proves itself against a commit"} {
+		if strings.Contains(clean, phrase) {
+			t.Errorf("a clean run carries the narrowing copy anyway:\n%s", clean)
+		}
+	}
+}
+
+// TestTheSelfTestSaysHowToRepairItself is the other half of the same
+// hazard, at the other end of it in time.
+//
+// A rule retired on purpose makes this check fail on every run
+// afterwards, and the failure says the recorded commit reported nothing —
+// which reads as a bug in the check rather than as the second half of
+// somebody's decision. The message has to carry the repair, because it is
+// the only place the two events ever meet.
+//
+// THE VOCABULARY HERE IS REAL IN SHAPE AND MATCHES NOTHING, which is the
+// only way to reach this branch without editing the repository's own rule
+// files: it stands in for a vocabulary that has lost the one line that
+// catches the recorded commit.
+//
+// MUTATION RUN: drop the repair sentence from the message. This row reds;
+// the control below stays green, because it never reaches that branch.
+func TestTheSelfTestSaysHowToRepairItself(t *testing.T) {
+	r := repo{dir: moduleRoot(t)}
+
+	blind := Rules{
+		patterns: []*regexp.Regexp{regexp.MustCompile(`zzz-this-pattern-matches-nothing-zzz`)},
+		vendor:   map[string]bool{"zzzthistermmatchesnothingzzz": true},
+	}
+	var out bytes.Buffer
+	err := selfTest(r, blind, &out)
+	if err == nil {
+		t.Fatal("a vocabulary that catches nothing passed the self-test, so the control " +
+			"that must red on demand cannot")
+	}
+	if !strings.Contains(err.Error(), "retired on purpose") {
+		t.Errorf("the failure does not connect itself to the change that causes it: %v\n"+
+			"Whoever hits this is looking at a run that fails for a decision somebody else "+
+			"made, and nothing else anywhere says the two are the same event.", err)
+	}
+
+	// THE CONTROL. The real vocabulary passes, so the row above is about
+	// the missing rule rather than about a self-test that always fails.
+	var green bytes.Buffer
+	if err := selfTest(r, realRules(t), &green); err != nil {
+		t.Fatalf("the self-test failed against this repository's real vocabulary: %v", err)
+	}
 }
