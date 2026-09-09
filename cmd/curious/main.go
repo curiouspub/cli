@@ -1,6 +1,6 @@
 // Command curious is the curious.pub CLI: pack an Astro project, upload
-// it, and stream the build. See the repository README for what exists
-// today.
+// it, stream the build, and print the address the built site answers at.
+// See the repository README for what exists today.
 package main
 
 import (
@@ -71,7 +71,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprint(w, `usage: curious <command> [arguments]
 
 commands:
-  deploy [dir]   pack an Astro project, upload it, and stream the build
+  deploy [dir]   pack an Astro project, upload it, build it, print its address
   mcp            serve the Model Context Protocol on stdin and stdout
   version        print the version, commit and build date
 
@@ -88,7 +88,10 @@ Takes no arguments.
 const deployUsage = `usage: curious deploy [dir]
 
 Pack the Astro project in [dir] (default: the current directory),
-upload it, and stream the build.
+upload it, stream the build, and print the address it answers at.
+
+The address goes to stdout and everything said about it goes to stderr,
+so redirecting stdout collects the build log and the address.
 `
 
 const mcpUsage = `usage: curious mcp

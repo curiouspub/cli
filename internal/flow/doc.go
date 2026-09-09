@@ -2,11 +2,11 @@
 // sequence that ties pre-flight, packing, upload and log streaming
 // together into what a person running `curious deploy` sees.
 //
-// The sequence is here now and `curious deploy` runs it. It stops with a
-// built deploy in hand: the archive is packed, uploaded and built, and
-// the log of that build has been rendered — but publishing the result and
-// printing its address arrive in a later change, so Deploy hands its
-// caller a Handoff rather than a site anybody can visit.
+// The sequence is here now and `curious deploy` runs the whole of it: the
+// archive is packed, uploaded and built, the log of that build is
+// rendered, the built deploy is published, and the address it answers at
+// is printed. Deploy hands its caller a Handoff so that the archive it
+// left on the machine has an owner, not because the run is unfinished.
 //
 // # Why the stream is a narrator and not an authority
 //
@@ -52,6 +52,19 @@
 // is blind by design and its copy has to be honest about a state it
 // cannot observe: where a code would go, and what to do when nothing
 // arrives — never that one is on its way.
+//
+// # The last line does not claim the site is reachable
+//
+// An address begins answering a little after the deploy that owns it is
+// published — observed once at about half a minute, which is one
+// measurement rather than an upper bound. So the closing narration says
+// the deploy was published, says the address may take up to about a
+// minute to start answering, and says what to do about a placeholder
+// page in the meantime. It does not poll the address and does not sleep:
+// a delay is a guess, a guess long enough to be safe costs more than the
+// wait it hides, and asking one location whether it is serving yet is
+// not the claim being made. Machinery that genuinely waits belongs where
+// every surface inherits it rather than in this one command.
 //
 // # Which stream a line goes to is decided by where it CAME FROM
 //

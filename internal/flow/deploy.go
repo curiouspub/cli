@@ -121,6 +121,16 @@ type DeployDeps struct {
 	// questions, so each is chosen where it is used.
 	StreamStallTimeout  time.Duration
 	StreamReconnectStep time.Duration
+
+	// PublishRetryInterval is the pause between two asks when the server
+	// says the deploy is not ready yet. Optional; without one the
+	// publish's own constant applies.
+	//
+	// IT IS A SEAM FOR THE REASON THE OTHERS ARE, and it moves the PACE
+	// alone. What bounds the asking is a window measured on Now, so a
+	// row drives the race by advancing the clock and this only keeps it
+	// from spending real seconds doing so.
+	PublishRetryInterval time.Duration
 }
 
 // Handoff is what a completed run leaves in the caller's hands: the
@@ -183,20 +193,8 @@ func (h *Handoff) Release() {
 // from a run that was killed mid-pack, which has a name nobody recorded.
 const workDirPattern = "curious-deploy-*"
 
-// stopsHere is the honest end of this release's deploy. It names what is
-// missing rather than stopping silently, because a command that watches a
-// build finish and then says nothing more reads as one that failed
-// quietly.
-//
-// IT MOVES IN THE COMMIT THAT MOVES THE CODE. A line still saying the
-// build log is unbuilt, the day after it ships, is the same defect as one
-// describing an unbuilt feature in the present tense — running backwards,
-// and just as false.
-const stopsHere = "That is as far as this release goes — the site's own address " +
-	"arrives in\nthe next one."
-
-// Deploy runs `curious deploy` as far as this release goes: everything
-// local, then the create, then the upload.
+// Deploy runs the whole of `curious deploy`: everything local, then the
+// create, the upload, the build, and the address the build answers at.
 //
 // # The order, and why it is the order
 //
@@ -208,6 +206,9 @@ const stopsHere = "That is as far as this release goes — the site's own addres
 //  7. Pack.
 //  8. Create the deploy.
 //  9. Upload the archive.
+//  10. Start the build.
+//  11. Render the build log.
+//  12. Publish, and print the address.
 //
 // LOCAL TRUTHS BEFORE GLOBAL STATE, and the consequence is the sentence
 // worth keeping: A PROJECT THAT CANNOT DEPLOY MAKES ZERO NETWORK CALLS.
@@ -473,7 +474,25 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		return nil, buildFailedFailure()
 	}
 
-	deps.Prompt.Step("%s", stopsHere)
+	// 12. THE PUBLISH, AND THE LAST LINE OF THE COMMAND.
+	//
+	// IT SITS INSIDE THE HAND-OFF'S OWN GUARD, deliberately. Every way
+	// this step can fail returns before handedOver is set, so the
+	// deferred release still removes the archive — a failure that handed
+	// over a file nobody will release would be a temp file left on the
+	// machine by the error path, which is the one thing an error path
+	// must not do.
+	published, err := publishDeploy(ctx, publishDeps{
+		Client:        authed,
+		DeployID:      resp.DeployID,
+		Render:        deps.Prompt,
+		Now:           now,
+		RetryInterval: deps.PublishRetryInterval,
+	})
+	if err != nil {
+		return nil, err
+	}
+	renderPublished(deps.Prompt, published, now())
 
 	handedOver = true
 	return &Handoff{

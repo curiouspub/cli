@@ -116,8 +116,8 @@ The finished product is one binary with two faces:
 
 **What exists in the tree right now is smaller than that, and this
 section says so on purpose.** Today `curious` dispatches `version`, a
-`deploy` that runs everything up to and including the streamed build
-log, and an
+`deploy` that runs the whole sequence and ends with the site's address,
+and an
 `mcp` server that is **transport and dispatch with NO TOOLS REGISTERED**
 — a client connects, completes a handshake and receives an empty tool
 list, because the callables an agent would actually use land in a later
@@ -132,10 +132,9 @@ moves the code.
 project once, runs the pre-flight checks and the local limits over that
 one walk, checks capacity and logs in when there is no usable token,
 packs the archive, asks the server for somewhere to send it, uploads it,
-asks the server to build, and renders the build log until the build
-finishes — **and then stops, with the archive removed and a line saying
-so.** Publishing the built site and printing its address are the next
-change. The
+asks the server to build, renders the build log until the build
+finishes, publishes the built deploy, and prints the address it answers
+at — **with the archive removed on the way out of every path.** The
 ordering is the product rather than an implementation detail: everything
 free and local runs first, so **a project that cannot deploy makes zero
 network calls**, and nobody is walked through email verification before
@@ -164,6 +163,16 @@ kills a large upload on an ordinary uplink and any build quieter than
 half a minute. A constant carries its number and not the reason the
 number was chosen, so each of these windows is picked where it is used
 and says what it bounds there.
+
+**The last line does not claim the site is reachable.** An address
+starts answering a little after the deploy that owns it is published —
+observed once at about half a minute, which is ONE measurement and not
+an upper bound, so the copy says "up to about a minute" rather than
+naming a figure nobody measured twice. Nothing polls the address and
+nothing sleeps: a delay is a guess, a guess long enough to be safe costs
+more than the wait it hides, and one location's answer is not the claim
+being made. Machinery that genuinely waits belongs in the control plane,
+where every surface inherits it, rather than in this one command.
 
 **Everything the build prints is escaped before it reaches the
 terminal.** The build log is arbitrary program output — the package
@@ -341,12 +350,16 @@ sentence has already carried a stale one.
    requirement nothing imports yet is already the commitment. The
    fragments live in `scripts/banned-dependencies.txt` and the guard
    reads that file on every run, keeping no copy.
-2. **No compiled-in hostname**, beyond at most two named URL constants —
-   the API base and the site base domain. A bare URL literal anywhere
-   fails regardless of count: a URL a reader cannot find by grepping for
-   one declaration is the shape a phone-home takes. The ceiling is stated
-   inside the guard, because **a guard loosened by the thing that trips
-   it is not a guard**.
+2. **No compiled-in hostname**, beyond a small pinned set of named URL
+   constants whose VALUES are approved one by one. A bare URL literal
+   anywhere fails regardless of count: a URL a reader cannot find by
+   grepping for one declaration is the shape a phone-home takes. The
+   ceiling is stated inside the guard, because **a guard loosened by the
+   thing that trips it is not a guard**. The site base domain is not one
+   of them and takes none of that budget: it is a bare host with no
+   scheme, so it is not a URL literal at all, and the scheme is added
+   where the address is composed — through `net/url`, so no source file
+   carries the scheme fragment either.
 3. **No private citation in any published file** — the rule at the top of
    this document, with `scripts/citation-patterns.txt` as its single
    source of patterns. The guard reads that file on every run and keeps
