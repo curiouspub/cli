@@ -960,13 +960,29 @@ func TestEveryControlByteReachesTheRendererUnchanged(t *testing.T) {
 		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
 	}
 
-	// buildLogOutput, because stdout now carries the address as well and
-	// a row about the log has to say which half it is reading.
-	printed := buildLogOutput(t, run)
-	want := strings.Join(sent, "\n") + "\n"
-	if printed != want {
-		t.Errorf("the renderer was handed something other than what the server "+
-			"sent:\n got %q\nwant %q", printed, want)
+	// THE RECORD OF WHAT WAS HANDED OVER, not the rendered buffer. The
+	// terminal double delegates to the real renderer now, so its buffers
+	// hold escaped output — which is right, and is the other row's
+	// subject. What this row is about is the bytes this package passes
+	// ON, before anything has touched them.
+	var handed []string
+	for _, entry := range run.journal.all() {
+		if line, ok := strings.CutPrefix(entry, "printed: "); ok {
+			handed = append(handed, line)
+		}
+	}
+	// The address is the last thing printed, and it is not build output.
+	if n := len(handed); n > 0 && handed[n-1] == publishedURL(run.script.publishSubdomain) {
+		handed = handed[:n-1]
+	}
+	if len(handed) != len(sent) {
+		t.Fatalf("the renderer was handed %d lines, want %d", len(handed), len(sent))
+	}
+	for i, line := range handed {
+		if line != sent[i] {
+			t.Errorf("line %d was changed on its way to the renderer:\n got %q\nwant %q",
+				i, line, sent[i])
+		}
 	}
 }
 
