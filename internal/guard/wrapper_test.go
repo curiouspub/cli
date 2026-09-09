@@ -26,10 +26,10 @@ import (
 	"testing"
 )
 
-const (
-	wrapperManifest = "npm/package.json"
-	ciWorkflow      = ".github/workflows/ci.yml"
-)
+// ciWorkflow is declared beside the release guards, which reached it
+// first — one name for one path, rather than two constants that agree
+// today.
+const wrapperManifest = "npm/package.json"
 
 // declaredNodeFloor reads the major version the wrapper's manifest
 // declares. It is THE floor: the install script derives its own check
