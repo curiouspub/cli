@@ -272,7 +272,9 @@ function writeCA(t, pem) {
 // listener stays untouched". The client is told the asset lives at one
 // address; the proxy dials another. A client that ignored the proxy
 // would reach the first address, and the first address is watched.
-function serveProxy(t, { dialPort = null, respondWith = null, tlsCert = null } = {}) {
+function serveProxy(t, {
+  dialPort = null, respondWith = null, respondBody = null, tlsCert = null,
+} = {}) {
   const connects = [];
   // EVERY SOCKET THIS PROXY OPENS, tracked. A tunnel is two sockets and
   // the server owns only one of them: closing the server destroys the
@@ -296,7 +298,18 @@ function serveProxy(t, { dialPort = null, respondWith = null, tlsCert = null } =
       at: Date.now(),
     });
     if (respondWith) {
-      clientSocket.write(`HTTP/1.1 ${respondWith}\r\n\r\n`);
+      // BYTES AFTER THE BLANK LINE BECOME `head` ON THE CLIENT. Node
+      // treats every answer to a CONNECT as an upgrade and hands the
+      // connect handler whatever followed the headers, so a proxy that
+      // refuses with an error page is what actually puts bytes there —
+      // and a client that mistook them for the start of a tunnel would
+      // report a bewildering handshake failure instead of the refusal.
+      const body = respondBody ? Buffer.from(respondBody) : Buffer.alloc(0);
+      const head = body.length
+        ? `HTTP/1.1 ${respondWith}\r\ncontent-type: text/html\r\n` +
+          `content-length: ${body.length}\r\n\r\n`
+        : `HTTP/1.1 ${respondWith}\r\n\r\n`;
+      clientSocket.write(Buffer.concat([Buffer.from(head, 'ascii'), body]));
       if (respondWith === 'drop') {
         clientSocket.destroy();
       } else {
