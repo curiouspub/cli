@@ -107,6 +107,41 @@ test('a server fault is tried again and a missing file is not', async (t) => {
   assert.match(missingRun.output, /404/);
 });
 
+// The same two numbers as the redirect row's, chosen again here because
+// they bound a different thing: how long this row will wait to catch a
+// client still reading a fault it has already given up on, and how often
+// to feed the stream while it waits.
+const ENDLESS_BODY_MS = 2_000;
+const CHUNK_EVERY_MS = 5;
+
+test('a fault whose body never ends is closed on every attempt', async (t) => {
+  // A server fault is retried, so this is three responses rather than
+  // one — and a client that only drained them would be holding three
+  // open at once by the end.
+  const bodies = [];
+  const faulty = await h.serveAssets(t, {
+    handler: (record, res) => {
+      res.writeHead(503);
+      bodies.push(h.keepSending(res, { forMs: ENDLESS_BODY_MS, everyMs: CHUNK_EVERY_MS }));
+    },
+  });
+
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+  const run = await h.runInstall(t, dir, { base: faulty.origin, ...TARGET });
+
+  // THE PRESENCE HALF: it really did ask three times and really did
+  // stop, with the message a person is meant to read.
+  assert.notStrictEqual(run.code, 0, run.output);
+  assert.strictEqual(faulty.requests.length, 3);
+  assert.match(run.output, /3 attempts/);
+  assert.deepStrictEqual(h.leftovers(dir), []);
+
+  // AND THE ABSENCE: every one of them was let go of.
+  assert.strictEqual(bodies.length, 3);
+  assert.deepStrictEqual(bodies.map((b) => b.hungUp), [true, true, true],
+    `chunks written after each fault: ${bodies.map((b) => b.chunks).join(', ')}`);
+});
+
 test('the numbers this script chose are the numbers it declares', () => {
   // A PIN, and it is named as one rather than dressed as a behaviour
   // row. No row here can observe thirty seconds without spending

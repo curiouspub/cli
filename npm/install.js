@@ -433,7 +433,7 @@ function openTunnel(proxy, target, signal, sockets) {
       resolve(socket);
     });
     request.on('response', (response) => {
-      response.resume();
+      discard(response);
       reject(new Refused(proxyFailure(proxy,
         `it answered ${response.statusCode} to the request to open a tunnel`)));
     });
@@ -493,6 +493,24 @@ function sendGet(url, signal, sockets, socket) {
     request.on('error', reject);
     request.end();
   });
+}
+
+// discard ends a response whose body this script is not going to read.
+//
+// DRAINING IS NOT CLOSING, and the difference is the whole point. A
+// stream set flowing and thrown away is still a stream being read: a
+// host that answers a redirect, or an error, with a body that never
+// ends goes on sending it — down a socket nobody is going to look at —
+// for as long as this process lives, while the download carries on at
+// the next address. Destroying takes the connection with it, which is
+// the only thing that actually stops a sender.
+//
+// It is called for every answer whose body is not wanted, on both
+// paths. The tunnelled path had a socket of its own to destroy and the
+// direct one had nothing, which is exactly the sort of difference that
+// survives review because only half of it is visible in any one place.
+function discard(response) {
+  response.destroy();
 }
 
 // readBody collects a response, hashing as it goes, into a temp file in
@@ -613,7 +631,7 @@ async function attemptFetch(startURL) {
       const status = response.statusCode;
 
       if (status >= 300 && status < 400) {
-        response.resume();
+        discard(response);
         if (tunnel) {
           tunnel.destroy();
         }
@@ -642,7 +660,7 @@ async function attemptFetch(startURL) {
       }
 
       if (status !== 200) {
-        response.resume();
+        discard(response);
         throw statusError(status, url);
       }
       return await readBody(response);

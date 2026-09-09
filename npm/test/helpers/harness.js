@@ -343,6 +343,40 @@ function watchPort(t) {
   });
 }
 
+// keepSending answers with a body that does not finish on its own, and
+// records how it ended.
+//
+// THE DISTINCTION IT EXISTS FOR is between a client that CLOSED a
+// response it had no further use for and one that merely drained it. The
+// first hangs up within milliseconds; the second goes on reading, and
+// discarding, until this server gives up — and then it is the server
+// that ended the body, not the client. `hungUp` is which of those
+// happened, and it is a boolean rather than a byte count, so no row has
+// to pick a threshold for "too much".
+//
+// The two numbers belong to the row that calls this: how long it is
+// willing to wait for the evidence, and how often to feed the stream.
+function keepSending(res, { forMs, everyMs }) {
+  const state = { hungUp: null, chunks: 0 };
+  const timer = setInterval(() => {
+    state.chunks += 1;
+    res.write('.'.repeat(64));
+  }, everyMs);
+  const giveUp = setTimeout(() => {
+    clearInterval(timer);
+    res.end();
+  }, forMs);
+  res.on('close', () => {
+    state.hungUp = !res.writableEnded;
+    clearInterval(timer);
+    clearTimeout(giveUp);
+  });
+  // Writing into a connection the client has dropped is the expected
+  // outcome here rather than a fault of the row.
+  res.on('error', () => {});
+  return state;
+}
+
 // assertNoSecretIn is the shape a credential row needs: the value must
 // appear nowhere, and something must have happened. An output that is
 // empty because nothing ran satisfies the first half on its own.
@@ -362,6 +396,7 @@ module.exports = {
   authority,
   checksumsFor,
   installedBinary,
+  keepSending,
   leftovers,
   makePackage,
   runInstall,

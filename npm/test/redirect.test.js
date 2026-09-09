@@ -127,3 +127,47 @@ test('a Location that is not a URL is a failure rather than a retry', async (t) 
   assert.strictEqual(server.requests.length, 1);
   assert.deepStrictEqual(h.leftovers(dir), []);
 });
+
+// A redirect whose body never ends, which is the shape that tells apart
+// draining a response from closing it.
+//
+// TWO NUMBERS, BOTH CHOSEN HERE. The body keeps arriving for at most two
+// seconds: that is how long this row is willing to spend proving that a
+// client is STILL reading something it said it was finished with, and it
+// is spent only on the way to failing. One chunk every five
+// milliseconds keeps the stream alive without making the row a memory
+// test. Neither is a bound on the installer, which has its own and is
+// nowhere near either.
+const ENDLESS_BODY_MS = 2_000;
+const CHUNK_EVERY_MS = 5;
+
+test('a redirect body that never ends is closed rather than read to nowhere', async (t) => {
+  let body = null;
+  const server = await h.serveAssets(t, {
+    handler: (record, res) => {
+      if (record.url.endsWith('.gz')) {
+        res.writeHead(302, { location: '/stored/object' });
+        body = h.keepSending(res, { forMs: ENDLESS_BODY_MS, everyMs: CHUNK_EVERY_MS });
+        return;
+      }
+      res.writeHead(200, { 'content-length': String(h.BINARY_GZ.length) });
+      res.end(h.BINARY_GZ);
+    },
+  });
+
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+  const run = await h.runInstall(t, dir, { base: server.origin, ...TARGET });
+
+  // THE PRESENCE HALF: the redirect was followed and the binary that
+  // landed is the right one. Without it, a client that refused every
+  // redirect outright would also hang up.
+  assert.strictEqual(run.code, 0, run.output);
+  assert.deepStrictEqual(h.installedBinary(dir, 'curious'), h.BINARY_BODY);
+  assert.deepStrictEqual(server.requests.map((r) => r.url),
+    [`/v${V}/${ASSET}`, '/stored/object']);
+
+  // AND THE ABSENCE: nobody was still reading it.
+  assert.strictEqual(body.hungUp, true,
+    "the endless redirect body was read to the end of this row's patience, " +
+    `${body.chunks} chunks of it`);
+});
