@@ -304,8 +304,17 @@ YAML is a step nobody can run before pushing.
   in the ruleset are three copies of one string, and only two of them
   live in this repository.
 
+  **AND A REQUIRED CHECK HAS TO BE PRODUCED WHERE IT IS WAITED FOR.**
+  A workflow not wired to `merge_group` never produces its check inside
+  the queue, so the entry waits for it for ever: the queue STALLS rather
+  than failing, which is the quieter of the two and the one nobody gets
+  told about. This repository's queue did exactly that on its first run —
+  the snapshot workflow was wired to `pull_request` and `push`, and its
+  job is required.
+
   So a guard compares the first two — `internal/guard` derives the check
-  names from the workflows and requires them to be exactly this table.
+  names from the workflows, requires them to be exactly this table, and
+  requires each one's workflow to fire on the queue's event.
   A rename reds in CI, loudly, before it goes quiet in the ruleset. The
   third copy is still a setting somebody has to change by hand, and the
   guard's message says so.

@@ -12,6 +12,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  # THE MERGE QUEUE, because this workflow produces a REQUIRED check.
+  # A required check is waited for by name; a workflow that does not fire
+  # on the queue's event never produces it, and the entry sits at
+  # "awaiting checks" for ever. Measured, on the first run this
+  # repository's queue ever had: the queue stalled here.
+  merge_group:
 
 permissions:
   contents: read

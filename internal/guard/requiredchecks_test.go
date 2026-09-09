@@ -31,6 +31,31 @@ var (
 	matrixValues = regexp.MustCompile(`^        [A-Za-z0-9_-]+:\s*\[(.+)\]\s*$`)
 )
 
+// firesOnMergeQueue reports whether a workflow is wired to the event the
+// merge queue raises.
+//
+// A REQUIRED CHECK IS WAITED FOR BY NAME AND PRODUCED BY AN EVENT. A
+// workflow that does not fire on merge_group never produces its check
+// inside the queue, so the entry waits for it for ever: the queue does
+// not fail, it STALLS, which is a worse failure than a red because
+// nothing reports it. Measured on the first run this repository's queue
+// ever had — the snapshot workflow was wired to pull_request and push,
+// its job was required, and the entry sat at "awaiting checks".
+func firesOnMergeQueue(t *testing.T, path string) bool {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), ":")) == "merge_group" &&
+			strings.HasPrefix(line, "  ") {
+			return true
+		}
+	}
+	return false
+}
+
 // checkNamesFrom derives the check names one workflow produces: the
 // job's display name, or its key, with each matrix value in brackets
 // after it — which is how GitHub composes them.
@@ -114,10 +139,13 @@ func TestTheRequiredCheckNamesMatchTheWorkflows(t *testing.T) {
 	root := moduleRoot(t)
 
 	produced := map[string]bool{}
+	queued := map[string]bool{}
 	for _, workflow := range []string{"ci.yml", "snapshot.yml"} {
-		for _, name := range checkNamesFrom(t,
-			filepath.Join(root, ".github", "workflows", workflow)) {
+		path := filepath.Join(root, ".github", "workflows", workflow)
+		onQueue := firesOnMergeQueue(t, path)
+		for _, name := range checkNamesFrom(t, path) {
 			produced[name] = true
+			queued[name] = onQueue
 		}
 	}
 	// The control for the derivation: a parser that stopped working
@@ -140,6 +168,18 @@ func TestTheRequiredCheckNamesMatchTheWorkflows(t *testing.T) {
 				"merge — it simply stops being a gate, and main is un-gated on that "+
 				"leg until somebody edits the branch ruleset by hand. This row "+
 				"cannot read the ruleset; fix the name here AND there.", name)
+			continue
+		}
+		// AND IT MUST BE PRODUCED WHERE IT IS WAITED FOR. A required
+		// check whose workflow does not fire on merge_group stalls the
+		// queue rather than failing it, which is the quieter of the two
+		// and the one nobody gets told about.
+		if !queued[name] {
+			t.Errorf("the check %q is required, and the workflow that produces it "+
+				"is not wired to the merge_group event.\nInside the queue that "+
+				"check is never produced, so the entry waits for it for ever — the "+
+				"queue stalls rather than failing, and nothing reports it. Add "+
+				"merge_group to that workflow's triggers.", name)
 		}
 	}
 }
