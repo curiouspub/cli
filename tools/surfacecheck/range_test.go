@@ -288,6 +288,48 @@ func TestTheEventDecidesWhatIsPublished(t *testing.T) {
 		}
 	})
 
+	t.Run("a force-pushed branch is measured against the default branch", func(t *testing.T) {
+		// THE BEFORE-SHA IS PRESENT AND GONE, which is not the same as
+		// absent. Every rebase of a branch under review is a force push,
+		// and the commit it names was discarded by the push itself — so
+		// the checkout holds a range whose base is not in it.
+		//
+		// This used to refuse, correctly and PERMANENTLY: the same head
+		// failed on every re-run, and since this check is required, the
+		// merge queue could never take the branch. Measured on a real
+		// one: "the base of the range could not be resolved".
+		//
+		// REQUIRED MUTATION, run 2026-09-09: trust the before-sha
+		// without resolving it. Reds here, with the range unresolvable.
+		f := newFixture(t)
+		f.write("notes.txt", "one\n")
+		first := f.commit("first", "notes.txt")
+		f.git("checkout", "--quiet", "-b", "pack/rebased")
+		f.write("notes.txt", "two\n")
+		head := f.commit("second", "notes.txt")
+
+		req, err := requestFromEvent(f.repo, "push", "pack/rebased", eventJSON(t, map[string]any{
+			// A commit this checkout has never had, which is what a
+			// discarded base looks like from here.
+			"before": strings.Repeat("b", 40), "after": head,
+			"ref":        "refs/heads/pack/rebased",
+			"repository": map[string]any{"default_branch": "main"},
+		}))
+		if err != nil {
+			t.Fatalf("resolving a force-pushed branch: %v", err)
+		}
+		if req.Base != first {
+			t.Errorf("base %s, want the merge base %s — a base the push discarded "+
+				"has to be measured against something, and a check that can never "+
+				"go green blocks the queue rather than reporting anything",
+				req.Base, first)
+		}
+		if req.Skip != "" {
+			t.Errorf("a force-pushed branch was skipped (%q); its commits are as "+
+				"published as any others", req.Skip)
+		}
+	})
+
 	t.Run("a deleted branch is skipped, and says why", func(t *testing.T) {
 		f := newFixture(t)
 		req, err := requestFromEvent(f.repo, "push", "pack/gone", eventJSON(t, map[string]any{

@@ -144,9 +144,24 @@ func pushRequest(r repo, p payload, refName string) (request, error) {
 		req.Named = append(req.Named, named{Subject: "branch name", Text: refName})
 	}
 
+	// A BEFORE-SHA CAN BE PRESENT AND GONE, which is not the same as
+	// absent and is the case this originally got wrong. A force-push —
+	// every rebase of a branch under review is one — names a commit the
+	// push itself discarded, so the checkout has a range whose base is
+	// not in it. The run then refused, correctly and permanently: the
+	// same head would fail on every re-run, and a required check that can
+	// never go green blocks the merge queue for ever.
+	//
+	// It is REFUSED RATHER THAN GUESSED only when there is nothing to
+	// fall back to. A discarded base is measured against the default
+	// branch, which is exactly what a new ref does and for the same
+	// reason: what is new here is what this branch has that the default
+	// branch does not.
 	if p.Before != zeroSHA {
-		req.Base = p.Before
-		return req, nil
+		if _, err := r.resolve(p.Before + "^{commit}"); err == nil {
+			req.Base = p.Before
+			return req, nil
+		}
 	}
 
 	// A NEW REF HAS NO BEFORE-SHA, so the range is taken against the
