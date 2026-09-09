@@ -227,18 +227,30 @@ func (u *UI) renderFailure(f *Failure) string {
 	if len(parts) == 0 {
 		return ""
 	}
+	// BY POSITION, NOT BY VALUE. Asking whether a paragraph EQUALS the
+	// quotation gets the right answer for the quotation and the wrong one
+	// for anything that happens to read the same: a Why identical to a
+	// Detail was escaped whole and lost its layout. Paragraphs drops
+	// empties, so the quotation's index is computed the same way.
+	quoted := -1
+	if f.Detail != "" {
+		if f.What != "" {
+			quoted = 1
+		} else {
+			quoted = 0
+		}
+	}
 	rendered := make([]string, 0, len(parts))
 	for i, part := range parts {
-		if i == 0 && f.What != "" {
+		switch {
+		case i == 0 && f.What != "":
 			rendered = append(rendered, u.styled(sanitizeLines(part)))
-			continue
-		}
-		if part == f.Detail && f.Detail != "" {
+		case i == quoted:
 			// WHOLE, newline included. See the field.
 			rendered = append(rendered, Sanitize(part))
-			continue
+		default:
+			rendered = append(rendered, sanitizeLines(part))
 		}
-		rendered = append(rendered, sanitizeLines(part))
 	}
 	return strings.Join(rendered, "\n\n") + "\n"
 }

@@ -571,3 +571,31 @@ func TestThisProgramsComposedProseKeepsItsParagraphs(t *testing.T) {
 			"nothing:\n%q", plain.String())
 	}
 }
+
+// TestAParagraphThatMerelyREADSLikeTheQuotationKeepsItsLayout.
+//
+// The quotation used to be found by asking whether a paragraph EQUALS
+// Detail, which is the right answer for the quotation and the wrong one
+// for anything that happens to read the same — a Why identical to a
+// Detail was escaped whole and lost its paragraphs. It is found by
+// position now.
+//
+// REQUIRED MUTATION, run 2026-09-09: identify the quotation by value
+// again. Reds here, and on nothing else.
+func TestAParagraphThatMerelyREADSLikeTheQuotationKeepsItsLayout(t *testing.T) {
+	const same = "first\n\nsecond"
+
+	u, _, errOut := testUI("", false, nil)
+	u.Fail(NewFailure("What.", same, "Next.").Quoting(same))
+	got := errOut.String()
+
+	// The quotation is one line; the Why that reads the same is two
+	// paragraphs. Both appear, and they must not look alike.
+	if !strings.Contains(got, `first\n\nsecond`) {
+		t.Errorf("the quotation kept its line breaks:\n%q", got)
+	}
+	if !strings.Contains(got, "first\n\nsecond") {
+		t.Errorf("this program's own paragraph lost its layout because it read "+
+			"like the quotation:\n%q", got)
+	}
+}
