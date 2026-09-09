@@ -445,7 +445,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	if err != nil {
 		return nil, startFailure(err)
 	}
-	deps.Prompt.Step("%s%s.", startNarration, ui.Sanitize(string(startResp.Status)))
+	deps.Prompt.Step("%s%s.", startNarration, string(startResp.Status))
 
 	// 11. THE BUILD LOG.
 	//

@@ -154,3 +154,34 @@ func hexEscape(c byte) string {
 // lowercase, and two spellings of one byte in one line of output is a
 // difference a reader would try to interpret.
 const hexDigits = "0123456789abcdef"
+
+// sanitizeLines is Sanitize for text that is allowed to have LINES in
+// it, and it is the form the rendering boundary uses.
+//
+// WHY A SECOND ENTRY POINT AND NOT A SECOND VOCABULARY. Sanitize escapes
+// the whole C0 set, newline included, which is exactly right for one
+// line of somebody else's build output and exactly wrong for a rendered
+// failure — three paragraphs whose blank lines are the layout. This
+// splits on the newlines the LAYOUT owns, hands every remaining byte to
+// Sanitize unchanged, and puts the layout back. There is one escape
+// table and one function that applies it; this decides only which bytes
+// are structure and which are content.
+//
+// A carriage return is content, not structure: it is escaped like any
+// other C0 byte, because a lone CR walks the cursor back over the line a
+// person just read.
+//
+// It inherits idempotence from Sanitize, which is what lets the boundary
+// run over text that has already been through the same table — the
+// ordinary case rather than the exotic one, since the far end escapes
+// this vocabulary too.
+func sanitizeLines(s string) string {
+	if !strings.Contains(s, "\n") {
+		return Sanitize(s)
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = Sanitize(line)
+	}
+	return strings.Join(lines, "\n")
+}
