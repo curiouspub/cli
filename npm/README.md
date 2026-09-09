@@ -70,6 +70,14 @@ rather than a package.
 `HTTPS_PROXY` and `https_proxy`; `npm_config_no_proxy` and `NO_PROXY`
 are honoured, including the `*` and leading-dot forms.
 
+A bypass entry names **one host**, and the leading dot is what widens
+it: `example.com` covers that host alone, while `.example.com` covers it
+and everything under it. An entry may carry a port, and then it matches
+only that port. The distinction decides between a tunnel and a direct
+connection, so it errs towards the proxy: an entry that matched more
+hosts than it names would send the download direct on a machine whose
+policy says tunnel.
+
 If a proxy is configured and the tunnel fails, **the install fails and
 names the proxy**. It never quietly connects directly instead: on a
 machine where direct access is blocked that would be a bypass nobody
