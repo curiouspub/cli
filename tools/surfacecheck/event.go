@@ -135,17 +135,11 @@ func pushRequest(r repo, p payload, refName string) (request, error) {
 
 	req := request{Head: p.After}
 	if strings.HasPrefix(p.Ref, "refs/tags/") {
-		// A TAG IS THE SURFACE WITH THE LEAST CHANCE OF A SECOND LOOK,
-		// and it has two of them: the name a person typed and the message
-		// they wrote with it.
-		req.Named = append(req.Named, named{Subject: "tag name", Text: refName})
-		message, annotated, err := r.tagMessage(refName)
+		surfaces, err := tagSurfaces(r, refName)
 		if err != nil {
 			return request{}, err
 		}
-		if annotated {
-			req.Named = append(req.Named, named{Subject: "tag message", Text: message})
-		}
+		req.Named = append(req.Named, surfaces...)
 	} else {
 		req.Named = append(req.Named, named{Subject: "branch name", Text: refName})
 	}
@@ -170,6 +164,29 @@ func pushRequest(r repo, p payload, refName string) (request, error) {
 	}
 	req.Base = merged
 	return req, nil
+}
+
+// tagSurfaces returns everything a tag publishes.
+//
+// A TAG IS THE SURFACE WITH THE LEAST CHANCE OF A SECOND LOOK, and it has
+// two of them: the name a person typed and the message they wrote with
+// it. Both are published the instant the tag is pushed.
+//
+// ONE FUNCTION, because the workflow and the pre-push hook reach a tag by
+// different roads — an event payload and a command line — and a hook that
+// read one surface where the workflow reads two would pass a push that
+// the run then fails. A fast check that disagrees with the slow one is a
+// fast check people stop running.
+func tagSurfaces(r repo, name string) ([]named, error) {
+	out := []named{{Subject: "tag name", Text: name}}
+	message, annotated, err := r.tagMessage(name)
+	if err != nil {
+		return nil, err
+	}
+	if annotated {
+		out = append(out, named{Subject: "tag message", Text: message})
+	}
+	return out, nil
 }
 
 // defaultBranchTip finds the default branch in this checkout, preferring

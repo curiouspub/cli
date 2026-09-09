@@ -58,13 +58,20 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	dir := flags.String("repo", ".", "the checkout to read")
 	base := flags.String("base", "", "the revision the range starts after")
 	head := flags.String("head", "", "the revision the range ends at")
-	branch := flags.String("branch", "", "a branch or tag name to check alongside the range")
+	branch := flags.String("branch", "", "a branch name to check alongside the range")
+	// A TAG IS NOT A BRANCH WITH A DIFFERENT NAME. It publishes two
+	// surfaces rather than one — the name a person typed and the message
+	// they wrote with it — and a report calling a tag a branch sends its
+	// reader to look for something that does not exist. One flag for both
+	// made the hook that uses these flags quietly narrower than the
+	// workflow that does not.
+	tag := flags.String("tag", "", "a tag name to check alongside the range, with its message")
 	if err := flags.Parse(args); err != nil {
 		return exitUndetermined
 	}
 
 	r := repo{dir: *dir}
-	req, err := buildRequest(r, getenv, *base, *head, *branch)
+	req, err := buildRequest(r, getenv, *base, *head, *branch, *tag)
 	if err != nil {
 		fmt.Fprintf(stderr, "the range could not be resolved: %v\n", err)
 		fmt.Fprintln(stderr, "This is not a pass. A range that resolves to nothing examines "+
@@ -136,14 +143,31 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 // THE FLAGS ARE NOT A CONVENIENCE. A check that exists only inside a
 // workflow file is a check nobody can run before pushing, and this one is
 // wanted most on the machine that wrote the message.
-func buildRequest(r repo, getenv func(string) string, base, head, branch string) (request, error) {
+func buildRequest(r repo, getenv func(string) string, base, head, branch, tag string) (request, error) {
 	if head != "" || base != "" {
 		if head == "" || base == "" {
 			return request{}, fmt.Errorf("a range needs both ends: -base %q and -head %q", base, head)
 		}
+		if branch != "" && tag != "" {
+			return request{}, fmt.Errorf("a push moves one ref: -branch %q and -tag %q cannot "+
+				"both be what is being published", branch, tag)
+		}
 		req := request{Base: base, Head: head}
-		if branch != "" {
+		switch {
+		case branch != "":
 			req.Named = append(req.Named, named{Subject: "branch name", Text: branch})
+		case tag != "":
+			// THE SAME TWO SURFACES THE WORKFLOW READS, through the same
+			// function. A hook that read fewer of them would pass a push
+			// the workflow then fails, which is the one thing a
+			// convenience must not do: it teaches its user that the slow
+			// check disagrees with the fast one, and the answer to that is
+			// to stop running the fast one.
+			surfaces, err := tagSurfaces(r, tag)
+			if err != nil {
+				return request{}, err
+			}
+			req.Named = append(req.Named, surfaces...)
 		}
 		return req, nil
 	}

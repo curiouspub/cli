@@ -65,11 +65,27 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
 	# The ref's own NAME is a published surface too, and on a brand new
 	# branch it is the only one there is.
-	name="${local_ref#refs/heads/}"
-	name="${name#refs/tags/}"
+	#
+	# A TAG IS TOLD APART FROM A BRANCH, and that is not cosmetic. A tag
+	# publishes two surfaces — the name and the message written with it —
+	# where a branch publishes one, and both were being handed over as
+	# "a branch name". So this hook read less than the workflow does and
+	# labelled what it did read wrongly: a push it passed could still fail
+	# the run, which is how somebody learns the fast check disagrees with
+	# the slow one and stops using it.
+	case "$local_ref" in
+	refs/tags/*)
+		name="${local_ref#refs/tags/}"
+		kind="-tag"
+		;;
+	*)
+		name="${local_ref#refs/heads/}"
+		kind="-branch"
+		;;
+	esac
 
 	echo "pre-push: checking ${name}"
-	if ! go run ./tools/surfacecheck -base "$base" -head "$local_sha" -branch "$name"; then
+	if ! go run ./tools/surfacecheck -base "$base" -head "$local_sha" "$kind" "$name"; then
 		status=1
 	fi
 done

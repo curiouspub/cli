@@ -1216,6 +1216,15 @@ const cutReleaseScript = "scripts/cut-release.sh"
 // script that lost its executable bit to an in-place rewrite passes every
 // test invoked as `bash script` and fails the moment anything runs it the
 // way an operator does.
+//
+// THE UNIVERSE IS WHAT THE FILE DECLARES ITSELF TO BE, not what it is
+// called. This row used to select on a .sh suffix, and a suffix is a
+// naming habit rather than a fact about the file — so the git hook under
+// scripts/, which carries a shebang, is run by path, and has no extension
+// because the directory git installs it into does not allow one, sat
+// outside the guard entirely. It had the bit; nothing kept it. Reading
+// the first line asks the question the mode is actually about: is this a
+// file something will try to execute?
 func TestScriptsAreExecutableAsGitRecordsThem(t *testing.T) {
 	root := moduleRoot(t)
 	cmd := exec.Command("git", "ls-files", "-s", "--", "scripts")
@@ -1224,14 +1233,15 @@ func TestScriptsAreExecutableAsGitRecordsThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing scripts/ from the index: %v", err)
 	}
-	checked := 0
+	checked, skipped := 0, 0
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			continue
 		}
 		name := fields[len(fields)-1]
-		if !strings.HasSuffix(name, ".sh") {
+		if !hasShebang(t, filepath.Join(root, filepath.FromSlash(name))) {
+			skipped++
 			continue
 		}
 		checked++
@@ -1242,8 +1252,34 @@ func TestScriptsAreExecutableAsGitRecordsThem(t *testing.T) {
 		}
 	}
 	if checked == 0 {
-		t.Fatal("no shell script is tracked under scripts/ — this row would pass over an empty set")
+		t.Fatal("no executable script is tracked under scripts/ — this row would pass over an empty set")
 	}
+	// AND THE OTHER HALF, because "look for a shebang" is only a
+	// narrowing if something is narrowed. The rule files under scripts/
+	// are data and carry none, so a reader that found a shebang in
+	// everything — or in nothing — would satisfy the loop above while
+	// measuring the wrong set.
+	if skipped == 0 {
+		t.Error("every tracked file under scripts/ was read as executable, including the rule " +
+			"files, so this row is not distinguishing a script from data")
+	}
+}
+
+// hasShebang reports whether a file begins with the two bytes that make
+// the kernel look for an interpreter.
+func hasShebang(t *testing.T, path string) bool {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	defer f.Close()
+	var first [2]byte
+	n, err := f.Read(first[:])
+	if err != nil && n == 0 {
+		return false
+	}
+	return n == 2 && first[0] == '#' && first[1] == '!'
 }
 
 // TestCutReleaseMakesNoOutwardChangeWithoutConsent drives the script with
