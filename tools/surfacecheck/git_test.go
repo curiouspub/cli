@@ -218,7 +218,9 @@ func TestWhatWasReadIsKeptWhenTheRestCannotBe(t *testing.T) {
 		req := request{Named: []named{{Subject: "branch name", Text: "fix/" + phrase}}}
 
 		const absent = "0123456789012345678901234567890123456789"
-		findings, examined, err := examine(f.repo, rules, req, absent, head)
+		findings, examined, err := examine(f.repo, rules, req, func() ([]string, error) {
+			return f.repo.commits(absent, head)
+		})
 		if err == nil {
 			t.Fatal("a range whose base is not in the repository was walked without error")
 		}

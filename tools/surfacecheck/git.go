@@ -98,6 +98,7 @@ func (r repo) run(args ...string) (string, error) {
 // repository, and a range computed against a checkout missing its own
 // endpoints resolves to nothing. Nothing then gets examined and the run
 // goes green, which is this check's whole failure mode.
+//
 // AND THE SEAM HAS A THIRD SIDE. Mapping every failure to "not in this
 // checkout's history" turns a git that could not be run into a statement
 // about the repository — so the two are separated on the shape git
@@ -134,7 +135,29 @@ func (r repo) mergeBase(a, b string) (string, error) {
 // commits lists the range, oldest first, so a report reads in the order
 // the commits were written.
 func (r repo) commits(base, head string) ([]string, error) {
-	out, err := r.run("rev-list", "--reverse", base+".."+head)
+	return r.revList("--reverse", base+".."+head)
+}
+
+// only lists exactly the commit named and nothing else.
+//
+// IT IS THE SAME ENUMERATION, and that is the whole reason it exists
+// rather than the caller writing down the one sha it already has. The
+// self-test reads a historical commit through this, so a break in the
+// listing — the walk, the parsing, the ordering — is visible to the
+// control that runs before any range is examined. A control that took a
+// shortcut past the plumbing would vouch for a checker whose plumbing is
+// dead.
+//
+// --no-walk rather than a parent range, because a parent range is not one
+// commit for a merge: the clean commit this check proves itself against
+// happens to be one, and its parent range covers six.
+func (r repo) only(sha string) ([]string, error) {
+	return r.revList("--no-walk", sha)
+}
+
+// revList runs one revision listing and returns the commits it named.
+func (r repo) revList(args ...string) ([]string, error) {
+	out, err := r.run(append([]string{"rev-list"}, args...)...)
 	if err != nil {
 		return nil, err
 	}

@@ -124,6 +124,78 @@ func narrowedRepo(t *testing.T) (f *fixture, base, head, phrase, removed string)
 	return f, base, head, phrase, removed
 }
 
+// widenedRepo is narrowedRepo's mirror: a repository whose BASE lacks one
+// pattern line and whose HEAD declares it, with a message only that line
+// would catch.
+//
+// A range that ADDS a rule is the ordinary case — it is what tightening
+// the vocabulary looks like — and the rows built on narrowedRepo cannot
+// see it at all.
+func widenedRepo(t *testing.T) (f *fixture, base, phrase, added string) {
+	t.Helper()
+	rules := realRules(t)
+	phrase, added = aCitedPhrase(t, rules)
+
+	patterns := realRuleFile(t, citationPatternsPath)
+	vendor := realRuleFile(t, vendorTermsPath)
+
+	f = newFixture(t)
+	f.write(citationPatternsPath, withoutLine(t, patterns, added))
+	f.write(vendorTermsPath, vendor)
+	base = f.commit("the rules before the line was added", citationPatternsPath, vendorTermsPath)
+
+	// HEAD IS THE WORKING TREE, which is where this loader reads it, and
+	// the line is back.
+	f.write(citationPatternsPath, patterns)
+	return f, base, phrase, added
+}
+
+// TestALineADDEDInTheRangeIsInForceForIt is the direction the union's
+// other rows cannot see.
+//
+// They cover a line DELETED in the range, which the base's copy keeps
+// alive, and a range that narrows nothing. Every one of them is satisfied
+// by a loader that reads the BASE alone and consults head only to work
+// out what went missing — measured, not supposed: with the union replaced
+// by the base's lines, the whole package stayed green. Such a loader
+// would miss every message caught by a rule added in the range that
+// contains it, which is what tightening the vocabulary looks like.
+//
+// BOTH DIRECTIONS. The base alone must not catch the phrase, or the
+// presence below says nothing about where the rule came from.
+func TestALineADDEDInTheRangeIsInForceForIt(t *testing.T) {
+	f, base, phrase, added := widenedRepo(t)
+
+	// THE ABSENCE. The base predates the line, so on its own it is blind
+	// to the phrase.
+	before, _, err := LoadRules(f.repo.atRevision(base), f.repo.atRevision(base))
+	if err != nil {
+		t.Fatalf("loading the rules at the base: %v", err)
+	}
+	if got := before.Scan("commit", phrase); len(got) != 0 {
+		t.Fatalf("the base already catches the phrase (%v), so the row below cannot attribute "+
+			"anything to the line that was added", got)
+	}
+
+	// THE PRESENCE. The union takes head's copy, so the new line is in
+	// force for the range that introduces it.
+	union, narrowings, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree())
+	if err != nil {
+		t.Fatalf("loading the union: %v", err)
+	}
+	if got := union.Scan("commit", phrase); len(got) == 0 {
+		t.Errorf("a message caught only by %q — a line this range ADDS — was not reported.\n"+
+			"A loader reading the base alone would pass every other row here and miss every "+
+			"message a newly added rule is meant to catch.", added)
+	}
+
+	// AND NOTHING WAS GIVEN UP. A range that only adds must report no
+	// narrowing, or "a narrowing is a finding" reds on every tightening.
+	if len(narrowings) != 0 {
+		t.Errorf("a range that adds a rule reported %d narrowing(s): %v", len(narrowings), narrowings)
+	}
+}
+
 // ---------------------------------------------------------------------
 // The rule files are READ, at both ends.
 // ---------------------------------------------------------------------

@@ -31,6 +31,13 @@ import (
 //     this ran. It was predicted that NOTHING would red, which was very
 //     nearly right — the order row is the one thing standing between that
 //     prediction and a control that can be deleted in silence.
+//   - the revision listing stubbed to answer with no commits -> three rows
+//     here red, each saying the listing answered with zero surfaces where
+//     one was asked for. Run against the control as it stood BEFORE it
+//     went through the range path, the same mutation left every row here
+//     green while the check could no longer read a range at all: a
+//     control that took a shortcut past the plumbing certified the
+//     scanner and said nothing about the check.
 func TestTheSelfTestProvesTheCheckerBothWays(t *testing.T) {
 	r := repo{dir: moduleRoot(t)}
 	rules := realRules(t)
@@ -52,22 +59,32 @@ func TestTheSelfTestProvesTheCheckerBothWays(t *testing.T) {
 		// BOTH DIRECTIONS FROM ONE PLACE. Without the second half, the
 		// first is satisfied by a checker that reports on everything.
 		for _, sha := range citedCommits {
-			found, err := countFindings(r, rules, sha)
+			found, err := scanCommit(r, rules, sha)
 			if err != nil {
 				t.Fatalf("reading %s: %v", short(sha), err)
 			}
-			if found == 0 {
+			if len(found) == 0 {
 				t.Errorf("%s reported nothing and is on the list because it must report "+
 					"something", short(sha))
 			}
+			// AND IT CAME BACK UNDER THE SUBJECT A REPORT WOULD NAME IT
+			// BY. A control that scanned the same text under a private
+			// subject of its own would pass while the range path — the
+			// listing, the message reading, the naming — went untouched.
+			want := "commit " + short(sha)
+			if found[0].Subject != want {
+				t.Errorf("the self-test's finding is named %q, want %q: this control has to "+
+					"travel the road a real range travels, or it certifies the scanner and "+
+					"says nothing about the check", found[0].Subject, want)
+			}
 		}
-		found, err := countFindings(r, rules, cleanCommit)
+		found, err := scanCommit(r, rules, cleanCommit)
 		if err != nil {
 			t.Fatalf("reading %s: %v", short(cleanCommit), err)
 		}
-		if found != 0 {
+		if len(found) != 0 {
 			t.Errorf("%s reported %d finding(s) and is the control that must report none",
-				short(cleanCommit), found)
+				short(cleanCommit), len(found))
 		}
 	})
 

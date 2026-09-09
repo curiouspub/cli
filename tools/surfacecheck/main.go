@@ -99,7 +99,9 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return exitUndetermined
 	}
 
-	findings, examined, err := examine(r, rules, req, baseSHA, headSHA)
+	findings, examined, err := examine(r, rules, req, func() ([]string, error) {
+		return r.commits(baseSHA, headSHA)
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "the range could not be read: %v\n", err)
 		// WHAT WAS READ BEFORE THAT IS STILL TRUE. A branch name carrying
@@ -182,6 +184,15 @@ func unresolvable(stderr io.Writer, which, rev string, err error) int {
 	return exitUndetermined
 }
 
+// commitRange is where the commits a run examines come from.
+//
+// It is an enumeration to run rather than a pair of revisions so that one
+// commit and a whole range reach the scanning below by the same road. The
+// self-test hands it a single historical commit; a workflow hands it the
+// range being published. Neither gets a path of its own, which is what
+// makes the first one evidence about the second.
+type commitRange func() ([]string, error)
+
 // examine reads every published surface the request names and returns
 // what it found, with the number of surfaces actually read.
 //
@@ -196,7 +207,14 @@ func unresolvable(stderr io.Writer, which, rev string, err error) int {
 // undetermined, because what could not be read may carry more; that is
 // the caller's decision, and it does not need this evidence destroyed to
 // make it.
-func examine(r repo, rules Rules, req request, baseSHA, headSHA string) ([]Finding, int, error) {
+//
+// THE COMMITS ARRIVE AS AN ENUMERATION TO RUN, not as two revisions,
+// because the self-test goes through this same function over a single
+// commit. Sharing the path is the point: the subject a finding is named
+// by, the message reading and the listing are then all proven by the
+// control that runs before any range is examined, instead of being
+// reached for the first time by the measurement itself.
+func examine(r repo, rules Rules, req request, commits commitRange) ([]Finding, int, error) {
 	var findings []Finding
 	examined := 0
 
@@ -211,7 +229,7 @@ func examine(r repo, rules Rules, req request, baseSHA, headSHA string) ([]Findi
 		findings = append(findings, rules.Scan(n.Subject, n.Text)...)
 	}
 
-	shas, err := r.commits(baseSHA, headSHA)
+	shas, err := commits()
 	if err != nil {
 		return findings, examined, err
 	}
