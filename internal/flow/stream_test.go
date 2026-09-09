@@ -960,7 +960,9 @@ func TestEveryControlByteReachesTheRendererUnchanged(t *testing.T) {
 		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
 	}
 
-	printed := run.prompt.results.String()
+	// buildLogOutput, because stdout now carries the address as well and
+	// a row about the log has to say which half it is reading.
+	printed := buildLogOutput(t, run)
 	want := strings.Join(sent, "\n") + "\n"
 	if printed != want {
 		t.Errorf("the renderer was handed something other than what the server "+

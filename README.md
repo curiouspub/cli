@@ -24,20 +24,21 @@ The platform is not yet open. What exists here today:
   tools yet, so a client that connects today finds an empty list. Written
   against the standard library alone — no SDK, no new dependency.
 - **`curious deploy`** — it checks your project, logs you in if it has
-  to, packs the archive, uploads it, starts the build and streams the
-  build log to your terminal until the build finishes. It stops there
-  and says so, because the site's own address is not built yet.
-  Everything it can answer without the network it answers first, so a
-  project that cannot deploy never sends a byte. The build log goes to
-  stdout and everything the tool says about it goes to stderr, so
-  redirecting stdout collects the log and nothing else — and every line
-  is escaped on the way out, because a build log is arbitrary program
-  output and your terminal obeys some of it.
+  to, packs the archive, uploads it, starts the build, streams the build
+  log to your terminal until the build finishes, publishes the result
+  and prints the `*.curiously.dev` address it answers at. Everything it
+  can answer without the network it answers first, so a project that
+  cannot deploy never sends a byte. The build log and the address go to
+  stdout and everything the tool says about them goes to stderr, so
+  redirecting stdout collects the log and the address and nothing else —
+  and every line of the log is escaped on the way out, because a build
+  log is arbitrary program output and your terminal obeys some of it.
+  The last line does not tell you the site is live: an address takes a
+  little while to start answering everywhere, so the tool says the
+  deploy was published and tells you what to do if you get there first.
 
 What lands here next:
 
-- **The rest of `curious deploy`** — publish the built site and print
-  its `*.curiously.dev` URL.
 - **The MCP tools** — the same flow through `curious mcp`, so Claude
   Code, Claude Desktop, and other MCP clients can deploy for you.
 

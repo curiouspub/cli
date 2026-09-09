@@ -783,6 +783,7 @@ func TestAnUnauthorizedCreateReAuthenticatesAndRetriesOnce(t *testing.T) {
 			"POST /v1/deploys",
 			"POST /v1/deploys/deploy-1/start",
 			"GET /v1/deploys/deploy-1/events",
+			"POST /v1/deploys/deploy-1/publish",
 		}
 		if got := endpointCalls(run.journal.all()); !equalEvents(got, want) {
 			t.Errorf("the run called %v, want %v\n\nfull journal:\n  %s",

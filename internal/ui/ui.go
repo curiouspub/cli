@@ -307,7 +307,8 @@ func (u *UI) styled(s string) string {
 // carry this output, and nothing in the CLI's flow is slow enough to
 // need one. A line that has been printed stays printed.
 func (u *UI) Step(format string, args ...any) {
-	fmt.Fprintln(u.err, sanitizeLines(compose(format, args...)))
+	escapeInPlace(args)
+	fmt.Fprintln(u.err, sanitizeLines(fmt.Sprintf(format, args...)))
 }
 
 // Result writes machine-consumable output to STDOUT — the other half of
@@ -318,7 +319,8 @@ func (u *UI) Result(format string, args ...any) {
 	// line and a newline inside one record is a second record somebody
 	// else wrote. Step's prose may have line breaks in it; a machine-read
 	// line may not.
-	fmt.Fprintln(u.out, Sanitize(compose(format, args...)))
+	escapeInPlace(args)
+	fmt.Fprintln(u.out, Sanitize(fmt.Sprintf(format, args...)))
 }
 
 // compose is the one place a message is assembled out of this program's
@@ -343,10 +345,35 @@ func (u *UI) Result(format string, args ...any) {
 // its layout is preserved and a newline arriving inside one of them is
 // preserved with it. That is the remaining edge, and closing it means a
 // Failure that carries its data as data.
-func compose(format string, args ...any) string {
-	if len(args) == 0 {
-		return format
-	}
+// THE SHAPE OF THE TWO METHODS ABOVE IS NOT AN ACCIDENT, and this is the
+// paragraph that says why, because the obvious tidying breaks it.
+//
+// go vet's printf analyser finds a wrapper by looking for a function
+// whose last two parameters are a format string and a variadic, and
+// whose body hands BOTH OF THOSE SAME VARIABLES to a print function.
+// Once it has found one, `Step(somebodyElsesSentence)` — a non-constant
+// format with nothing to interpolate — is reported wherever it is
+// written, in every package, by `go vet ./...` and nothing else.
+//
+// That is the seam the format/argument split leaves open. The split
+// makes an ARGUMENT safe; a caller who puts the same text in the FORMAT
+// has moved somebody else's words into this program's prose, and no
+// escaping can tell the difference because by then the two are one
+// string. The analyser can, and it is the only thing that can.
+//
+// SO THE ESCAPING IS IN PLACE. Measured, on this analyser, with a probe
+// kept beside the guard: a method forwarding `format, args...` is
+// detected; the same method with `args = somethingElse(args)` first is
+// NOT, and neither `-printf.funcs=Step,Result` nor its qualified
+// spellings put the detection back. Mutating the elements and
+// forwarding the same slice keeps it.
+//
+// WHAT IN-PLACE COSTS, and how it is paid: a caller who spreads a slice
+// — `Step(f, xs...)` — passes that very slice, so escaping its elements
+// would reach back into the caller's own values. No call site does, and
+// a guard says so rather than a comment hoping.
+func escapeInPlace(args []any) {
+
 	// ONLY THE STRINGS, and every other argument is handed to its verb
 	// untouched. Rendering a duration, a count or a Secret through
 	// fmt.Sprint first and escaping the result would make %T print
@@ -354,13 +381,9 @@ func compose(format string, args ...any) string {
 	// — the one that matters — would put a Secret through a path other
 	// than the one its own tests range over. A string is where somebody
 	// else's bytes actually arrive.
-	safe := make([]any, len(args))
 	for i, arg := range args {
 		if text, ok := arg.(string); ok {
-			safe[i] = Sanitize(text)
-			continue
+			args[i] = Sanitize(text)
 		}
-		safe[i] = arg
 	}
-	return fmt.Sprintf(format, safe...)
 }

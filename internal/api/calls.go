@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/curiouspub/cli/pkg/wire"
@@ -99,6 +101,77 @@ func (c *Client) DeployStart(ctx context.Context, deployID string) (*wire.Deploy
 		return nil, err
 	}
 	return &out, nil
+}
+
+// DeployPublish calls POST /v1/deploys/{id}/publish: the last call of a
+// deploy, and the one that gives a built deploy an address.
+//
+// NEVER RETRIED, and the reason is the same one the create carries
+// rather than the start's. A failure after the request left this process
+// is indistinguishable from one before it, and the two possible truths —
+// the deploy has an address, or it has none — are exactly what a caller
+// would be retrying to find out. Asking again cannot answer that
+// question: a second call arriving after a first one succeeded is a
+// second decision about a deploy this client has already been told
+// nothing about.
+//
+// The success body carries a subdomain LABEL and an expiry, and per the
+// contract's own rule no client behaviour depends on either: they are
+// shown to a person. The label is the half a client cannot derive, and
+// assembling an address out of it belongs to whoever knows the domain,
+// which is not this package.
+//
+// It authenticates per call, like the create and the start.
+func (c *Client) DeployPublish(ctx context.Context, deployID string) (*wire.DeployPublishResponse, error) {
+	var out wire.DeployPublishResponse
+	if err := c.do(ctx, http.MethodPost, deployPath(deployID, "publish"), nil, &out, false, c.withBearerToken()); err != nil {
+		return nil, err
+	}
+	// THE ONE FIELD A CLIENT CANNOT DERIVE IS ALSO THE ONE IT CANNOT
+	// CHECK AGAINST ANYTHING ELSE, so it is checked against its own
+	// grammar here rather than trusted onward. A 200 carrying an empty
+	// label used to reach the end of the command and print
+	// "https://.curiously.dev" as the site's address, with exit 0 — the
+	// one line a script reads, confidently wrong.
+	if !validSubdomainLabel(out.Subdomain) {
+		return nil, fmt.Errorf("%w: the publish returned %q as this site's label",
+			ErrUnusableResponse, out.Subdomain)
+	}
+	return &out, nil
+}
+
+// ErrUnusableResponse marks an answer the server was entitled to send
+// and this client cannot act on. It is NOT a transport failure and must
+// not be reported as one: the request arrived, the server answered, and
+// the answer said something this build cannot use.
+var ErrUnusableResponse = errors.New("the server's answer cannot be used")
+
+// validSubdomainLabel reports whether a label is one the address this
+// program prints could actually be made out of.
+//
+// THE GRAMMAR IS THE SERVER'S and this is a shape check, not a second
+// implementation of it: the labels are generated from a fixed alphabet
+// at the far end, and what this refuses is the set that cannot be a host
+// label at all — empty, over-long, a character no label may carry, or a
+// hyphen at either end. A label that is well-formed and wrong is the
+// server's business; a label that is not a label is this client about to
+// print a URL that is not one.
+func validSubdomainLabel(label string) bool {
+	if label == "" || len(label) > 63 {
+		return false
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // AuthVerify calls POST /v1/auth/verify, the second step of the login

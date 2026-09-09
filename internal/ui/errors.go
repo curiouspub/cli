@@ -26,6 +26,23 @@ var (
 	// times and never got an answer it could use.
 	ErrNoAnswer = errors.New("no usable answer")
 
+	// ErrInterrupted means the run was stopped from OUTSIDE it — a
+	// cancelled context rather than a decision this program made.
+	//
+	// IT IS NOT ErrAborted, and the difference is who stopped it and
+	// what that costs. ErrAborted is a person answering a prompt with
+	// Ctrl-D: a deliberate act, nothing went wrong, exit 0. This is the
+	// run being cut off mid-step — by a wrapper's deadline, by a parent
+	// process, by a signal that reached the context before the handler.
+	// The program says the same short word, and costs 130, because that
+	// is the number every wrapping script already reads as "stopped
+	// rather than finished".
+	//
+	// WHAT IT MUST NOT DO IS EXPLAIN THE SERVER. Whoever returns this
+	// knows only that the wait ended; a message about what the far end
+	// was doing would be invented.
+	ErrInterrupted = errors.New("the run was interrupted")
+
 	// ErrServerClosed means THE SERVER IS CLOSED TO YOU RIGHT NOW — the
 	// scope behind ExitServerClosed, stated once in this package's own
 	// doc comment and carried here so a caller marks a stop rather than

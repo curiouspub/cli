@@ -61,31 +61,23 @@ func bothStreams(out, errOut *bytes.Buffer) string {
 
 func renderers() []aRenderer {
 	return []aRenderer{
-		// BOTH FORMS OF THE TWO METHODS THAT HAVE TWO. Step and Result
-		// escape an interpolated argument in one place and their own
-		// prose in another, and a table that drove only the argument
-		// form left the prose path unguarded — measured: removing the
-		// sanitiser from Step reddened nothing until this entry existed.
+		// THE ARGUMENT FORM. The prose form has a row of its own below,
+		// because a variable cannot be a format string in this project
+		// any more — go vet reports it, which is the whole of the guard
+		// two files over. Driving it here would be writing the thing the
+		// analyser exists to refuse.
 		{"Step/argument", func(t *testing.T, text string) string {
 			u, out, errOut := testUI("", false, nil)
 			u.Step("%s", text)
 			return bothStreams(out, errOut)
 		}},
-		{"Step/prose", func(t *testing.T, text string) string {
-			u, out, errOut := testUI("", false, nil)
-			u.Step(text)
-			return bothStreams(out, errOut)
-		}},
+
 		{"Result/argument", func(t *testing.T, text string) string {
 			u, out, errOut := testUI("", false, nil)
 			u.Result("%s", text)
 			return bothStreams(out, errOut)
 		}},
-		{"Result/prose", func(t *testing.T, text string) string {
-			u, out, errOut := testUI("", false, nil)
-			u.Result(text)
-			return bothStreams(out, errOut)
-		}},
+
 		{"Fail", func(t *testing.T, text string) string {
 			u, out, errOut := testUI("", false, nil)
 			u.Fail(NewFailure(text, text, text))
@@ -425,5 +417,55 @@ func TestThisProgramsOwnProseKeepsItsLayout(t *testing.T) {
 	}
 	if !strings.Contains(got, "First line.\n\nSecond paragraph.") {
 		t.Errorf("the paragraphs did not survive: %q", got)
+	}
+}
+
+// TestTheProseFormEscapesToo drives the OTHER form of the two methods
+// that have two: the caller's whole string as the format, nothing to
+// interpolate.
+//
+// EVERY CALL BELOW USES A CONSTANT, and it has to. A variable format is
+// exactly what go vet now reports for these methods, everywhere in the
+// repository — so a row that drove this path with a variable would be
+// writing the defect the analyser was taught to find. The fixtures are
+// constants already, which is what makes the path reachable at all.
+//
+// REQUIRED MUTATION, run 2026-09-09: remove the sanitiser from Step, and
+// then from Result. Reds here and on nothing else, which is what makes
+// this row rather than the ranged one above the guard for the prose
+// path.
+func TestTheProseFormEscapesToo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(u *UI)
+	}{
+		{"Step/CSI", func(u *UI) { u.Step(hostileCSI) }},
+		{"Step/OSC", func(u *UI) { u.Step(hostileOSC) }},
+		{"Step/BEL", func(u *UI) { u.Step(hostileBEL) }},
+		{"Step/DEL", func(u *UI) { u.Step(hostileDEL) }},
+		{"Result/CSI", func(u *UI) { u.Result(hostileCSI) }},
+		{"Result/OSC", func(u *UI) { u.Result(hostileOSC) }},
+		{"Result/BEL", func(u *UI) { u.Result(hostileBEL) }},
+		{"Result/DEL", func(u *UI) { u.Result(hostileDEL) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, out, errOut := testUI("", false, nil)
+			tc.call(u)
+			got := bothStreams(out, errOut)
+			if got == "" {
+				t.Fatal("nothing was written, so this row asserts an absence that " +
+					"would hold for a method that renders at all")
+			}
+			for i := 0; i < len(got); i++ {
+				if b := got[i]; b != '\n' && (b < 0x20 || b == 0x7f) {
+					t.Fatalf("byte %#02x reached the terminal: %q", b, got)
+				}
+			}
+			for _, want := range []string{"before", "after"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("dropped %q instead of escaping it: %q", want, got)
+				}
+			}
+		})
 	}
 }

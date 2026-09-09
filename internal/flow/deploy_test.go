@@ -259,6 +259,29 @@ type deployScript struct {
 	// itself paused past the window under test has measured the runner.
 	eventGaps []time.Duration
 
+	// publishOutcome scripts the publish's answer, publishSubdomain and
+	// publishExpiresAt the success body, and publishBody replaces that
+	// body with raw JSON — which is the only way to send a field this
+	// build's type does not have.
+	publishOutcome   outcome
+	publishSubdomain string
+	publishExpiresAt time.Time
+	publishBody      string
+	publishes        int
+
+	// publishNotReadyFor is how many publishes are answered "not ready"
+	// before the scripted outcome applies, so a row can watch the run
+	// resolve the race the last step actually meets — and, with the
+	// outcome ALSO set to not-ready, watch it give up.
+	publishNotReadyFor int
+
+	// publishHangsUp makes the publish receive the request and then drop
+	// the connection without answering, which is how a row produces "the
+	// request left this process and no answer came back" with the run
+	// still alive. Cancelling the context would not do: it would also
+	// stop anything that followed from ever leaving the machine.
+	publishHangsUp bool
+
 	// release is closed when the test ends, so a connection held open on
 	// purpose cannot outlive its row.
 	release chan struct{}
@@ -295,6 +318,7 @@ type eventScript struct {
 const (
 	startAction      = "start"
 	eventsAction     = "events"
+	publishAction    = "publish"
 	deployPathPrefix = "/v1/deploys/"
 )
 
@@ -379,6 +403,72 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 	}
 }
 
+// sentPrefix marks a journal entry that records ONE request leaving this
+// machine, method and absolute URL. It is a prefix rather than a second
+// slice because the question it answers — "everything this run sent" —
+// ranges over two servers and a transport, and three separate lists
+// cannot be read in order.
+const sentPrefix = "sent: "
+
+// absoluteURL is the address a request was actually made to, rebuilt
+// from what the server received. The scheme is the one these doubles
+// serve on; what matters to the rows that read this is the HOST, since a
+// path alone cannot tell one destination from another.
+func absoluteURL(r *http.Request) string {
+	return "http://" + r.Host + r.URL.RequestURI()
+}
+
+// servePublish answers the last call of a deploy.
+//
+// The success body is written BY HAND for the same reason the create's
+// is: a zero expiry must be ABSENT rather than encoded as the zero
+// instant, because "the server did not tell me" and "the server told me
+// the epoch" are two different things and only an omitted key models the
+// first.
+func (s *deployScript) servePublish(w http.ResponseWriter, r *http.Request) {
+	s.publishes++
+
+	if s.publishHangsUp {
+		// The request arrived and is not answered: the connection goes
+		// away underneath it.
+		if hijacker, ok := w.(http.Hijacker); ok {
+			if conn, _, hijackErr := hijacker.Hijack(); hijackErr == nil {
+				_ = conn.Close()
+				return
+			}
+		}
+		panic("this server cannot drop a connection, so the row that needs one " +
+			"would silently be measuring something else")
+	}
+
+	if s.publishes <= s.publishNotReadyFor {
+		s.reply(w, fails(http.StatusConflict, wire.CodeDeployNotReady,
+			`this deploy is "building" and cannot be given an address yet`), nil)
+		return
+	}
+	if s.publishOutcome.code != "" {
+		s.reply(w, s.publishOutcome, nil)
+		return
+	}
+
+	body := s.publishBody
+	if body == "" {
+		fields := map[string]any{"subdomain": s.publishSubdomain}
+		if !s.publishExpiresAt.IsZero() {
+			fields["expires_at"] = s.publishExpiresAt.Format(time.RFC3339Nano)
+		}
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			panic(err)
+		}
+		body = string(encoded)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body)
+	_ = r
+}
+
 func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 
@@ -386,6 +476,7 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.paths = append(s.paths, r.URL.Path)
 	s.bearers = append(s.bearers, r.Header.Get("Authorization"))
 	s.journal.note(r.Method + " " + r.URL.Path)
+	s.journal.note(sentPrefix + r.Method + " " + absoluteURL(r))
 
 	if _, action, ok := deployAction(r.URL.Path); ok && action == eventsAction {
 		s.eventGETs++
@@ -398,6 +489,10 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 
 	if _, action, ok := deployAction(r.URL.Path); ok {
+		if action == publishAction {
+			s.servePublish(w, r)
+			return
+		}
 		if action != startAction {
 			s.strays = append(s.strays, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -684,6 +779,7 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if s.journal != nil {
 		s.journal.note(r.Method + " (object store)")
+		s.journal.note(sentPrefix + r.Method + " " + absoluteURL(r))
 	}
 
 	if s.location != "" {
@@ -855,6 +951,16 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 		token:    "issued-token",
 		store:    store,
 		release:  make(chan struct{}),
+		// The label the address is built from. It is set here rather than
+		// defaulted inside the handler so a row can read the value the
+		// run will actually be given.
+		publishSubdomain: defaultPublishSubdomain,
+		// The publish expiry is NON-ZERO by default, the opposite of the
+		// create's, because the two model different servers: this field
+		// is one the client cannot derive and the server does populate,
+		// where the create's is published in the contract and not sent
+		// yet. Each default is the answer the real server gives today.
+		publishExpiresAt: fixedNowLocal.Add(71 * time.Hour),
 	}
 	srv := httptest.NewServer(script)
 	t.Cleanup(srv.Close)
@@ -903,6 +1009,33 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 		},
 	}
 	return run
+}
+
+// defaultPublishSubdomain is the label the scripted server hands out
+// unless a row says otherwise. It is deliberately NOT the deploy id: a
+// client echoing the wrong field of the wrong response would produce a
+// working-looking address, and two values that differ are the only thing
+// that can see it.
+const defaultPublishSubdomain = "quick-koala-4f2a"
+
+// buildLogOutput is the build's own output as it reached stdout, with
+// the address the run ends with taken off the end.
+//
+// STDOUT NOW CARRIES TWO THINGS, and a row about one of them has to say
+// which: the build log, line by line as the server wrote it, and then
+// the address, once, as the last thing the command prints. Splitting
+// them here rather than in every row keeps the address's POSITION
+// asserted in one place — and asserts it rather than trimming whatever
+// happened to be last, which would quietly absorb a client that printed
+// something else there.
+func buildLogOutput(t *testing.T, run *deployRun) string {
+	t.Helper()
+	printed := run.prompt.results.String()
+	want := publishedURL(run.script.publishSubdomain) + "\n"
+	if !strings.HasSuffix(printed, want) {
+		t.Fatalf("stdout does not end with the address %q:\n%q", want, printed)
+	}
+	return strings.TrimSuffix(printed, want)
 }
 
 // storedToken writes a real config file holding a token, through the
@@ -985,6 +1118,8 @@ func landmarks(events []string) []string {
 			step = "start"
 		case strings.HasPrefix(e, "GET "+deployPathPrefix) && strings.HasSuffix(e, "/"+eventsAction):
 			step = "stream"
+		case strings.HasPrefix(e, "POST "+deployPathPrefix) && strings.HasSuffix(e, "/"+publishAction):
+			step = "publish"
 		default:
 			continue
 		}
@@ -1085,7 +1220,7 @@ func TestTheSequenceRunsInTheOrderTheSpecSets(t *testing.T) {
 	defer handoff.Release()
 
 	want := []string{"walk", "pre-flight", "capacity", "login", "pack", "create",
-		"upload", "start", "stream"}
+		"upload", "start", "stream", "publish"}
 	if got := landmarks(run.journal.all()); !equalEvents(got, want) {
 		t.Errorf("the run happened in the order %v, want %v\n\nfull journal:\n  %s",
 			got, want, strings.Join(run.journal.all(), "\n  "))
@@ -1629,11 +1764,14 @@ func TestTheHandoffIsTheFormedRequest(t *testing.T) {
 	}
 }
 
-// TestASuccessfulRunSaysWhatItPackedAndWhereItStops. A command that
-// packs an archive and then says nothing reads as one that failed
-// quietly, and a person who is told the upload is not built yet does not
-// file a bug about it.
-func TestASuccessfulRunSaysWhatItPackedAndWhereItStops(t *testing.T) {
+// TestASuccessfulRunSaysWhatItPackedAndHowItEnded. A command that packs
+// an archive and then says nothing reads as one that failed quietly, so
+// a run that worked says what it made and how it finished.
+//
+// The closing narration itself has its own rows next door; what belongs
+// here is that the run's two halves both speak — the receipt from the
+// pack, and the outcome from the last step.
+func TestASuccessfulRunSaysWhatItPackedAndHowItEnded(t *testing.T) {
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 
@@ -1644,7 +1782,7 @@ func TestASuccessfulRunSaysWhatItPackedAndWhereItStops(t *testing.T) {
 	defer handoff.Release()
 
 	shown := run.prompt.out.String()
-	for _, want := range []string{"Packed ", "into an archive of ", stopsHere} {
+	for _, want := range []string{"Packed ", "into an archive of ", publishedHeadline} {
 		if !strings.Contains(shown, want) {
 			t.Errorf("the run never said %q:\n%s", want, shown)
 		}
