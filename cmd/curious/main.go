@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -40,8 +39,17 @@ func main() {
 // a command that reached for os.Stdin itself would be one no test could
 // drive without giving the test process a pipe of its own.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// THE RENDERER IS BUILT BEFORE ANYTHING IS PARSED, and that is the
+	// point of it being here rather than inside the one subcommand that
+	// used to build it. A flag error carries the user's own text — an
+	// unknown flag is quoted back — and it was written straight to
+	// stderr, before any escaping existed in this process at all. There
+	// is no moment in this program's life now when a byte can reach a
+	// person without passing the boundary.
+	u := ui.New(stdin, stdout, stderr)
+
 	if len(args) == 0 {
-		printUsage(stderr)
+		printUsage(u)
 		return 2
 	}
 
@@ -50,16 +58,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// Consistent with parseSubcommand below: help is a request, not a
 		// mistake. It answered on stderr with exit 2, which made
 		// `curious -h | less` show nothing.
-		printUsage(stdout)
+		u.Help(usageText)
 		return 0
 	case "version":
-		return runVersion(args[1:], stdout, stderr)
+		return runVersion(args[1:], u, stdout)
 	case "deploy":
-		return runDeploy(args[1:], stdout, stderr)
+		return runDeploy(args[1:], u)
 	case "mcp":
-		return runMCP(args[1:], stdin, stdout, stderr)
+		return runMCP(args[1:], u, stdin, stdout, stderr)
 	default:
-		printUsage(stderr)
+		printUsage(u)
 		return 2
 	}
 }
@@ -67,8 +75,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // printUsage writes the command surface to w. Deliberately small: this
 // binary has three commands today, and anything not listed here is not
 // yet public surface.
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, `usage: curious <command> [arguments]
+func printUsage(u *ui.UI) {
+	u.Step("%s", ui.Prose(usageText))
+}
+
+// usageText is the command surface.
+const usageText ui.Prose = `usage: curious <command> [arguments]
 
 commands:
   deploy [dir]   pack an Astro project, upload it, build it, print its address
@@ -76,16 +88,15 @@ commands:
   version        print the version, commit and build date
 
 Run 'curious <command> -h' for a command's own flags.
-`)
-}
+`
 
-const versionUsage = `usage: curious version
+const versionUsage ui.Prose = `usage: curious version
 
 Print the version, commit, build date and Go runtime version.
 Takes no arguments.
 `
 
-const deployUsage = `usage: curious deploy [dir]
+const deployUsage ui.Prose = `usage: curious deploy [dir]
 
 Pack the Astro project in [dir] (default: the current directory),
 upload it, stream the build, and print the address it answers at.
@@ -94,7 +105,7 @@ The address goes to stdout and everything said about it goes to stderr,
 so redirecting stdout collects the build log and the address.
 `
 
-const mcpUsage = `usage: curious mcp
+const mcpUsage ui.Prose = `usage: curious mcp
 
 Serve the Model Context Protocol on stdin and stdout, so an agent can
 deploy the same way a person does. Takes no arguments, and is meant to be
@@ -117,23 +128,25 @@ so anything you type is read as a message.
 // — a wrong flag exited 2 in complete silence, which is the worst of the
 // three since the exit code is the only evidence and scripts are the only
 // readers of it.
-func parseSubcommand(fs *flag.FlagSet, args []string, maxOperands int, usage string, stdout, stderr io.Writer) (int, bool) {
+func parseSubcommand(fs *flag.FlagSet, args []string, maxOperands int, usage ui.Prose, u *ui.UI) (int, bool) {
 	fs.SetOutput(io.Discard)
 	err := fs.Parse(args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
 		// -h is a request, not a mistake: it answers on stdout and exits
 		// 0, so `curious deploy -h | less` works.
-		fmt.Fprint(stdout, usage)
+		u.Help(usage)
 		return 0, true
 	case err != nil:
-		fmt.Fprintf(stderr, "curious %s: %v\n\n", fs.Name(), err)
-		fmt.Fprint(stderr, usage)
+		// THE ERROR QUOTES THE USER'S OWN TEXT — an unknown flag is
+		// named back — so it is an argument and not part of the format.
+		u.Step("curious %s: %s\n", fs.Name(), err.Error())
+		u.Step("%s", ui.Prose(usage))
 		return 2, true
 	}
 	if fs.NArg() > maxOperands {
-		fmt.Fprintf(stderr, "curious %s: unexpected argument %q\n\n", fs.Name(), fs.Arg(maxOperands))
-		fmt.Fprint(stderr, usage)
+		u.Step("curious %s: unexpected argument %q\n", fs.Name(), fs.Arg(maxOperands))
+		u.Step("%s", ui.Prose(usage))
 		return 2, true
 	}
 	return 0, false
@@ -142,12 +155,16 @@ func parseSubcommand(fs *flag.FlagSet, args []string, maxOperands int, usage str
 // runVersion prints the version, commit, build date and Go runtime
 // version. One flag.FlagSet per subcommand, even one with no flags of its
 // own yet, so every subcommand is dispatched the same way.
-func runVersion(args []string, stdout, stderr io.Writer) int {
+func runVersion(args []string, u *ui.UI, stdout io.Writer) int {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
-	if code, done := parseSubcommand(fs, args, 0, versionUsage, stdout, stderr); done {
+	if code, done := parseSubcommand(fs, args, 0, versionUsage, u); done {
 		return code
 	}
-	fmt.Fprintf(stdout, "curious %s (commit %s, built %s, %s)\n", version, commit, date, runtime.Version())
+	// ONE LINE, MACHINE-READ. Result is the right stream and the right
+	// escaping: every value in it is compiled into this binary, and a
+	// line break in one would be a second record.
+	u.Result("curious %s (commit %s, built %s, %s)", version, commit, date, runtime.Version())
+	_ = stdout
 	return 0
 }
 
@@ -177,13 +194,12 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 // nil hand-off a refused run returns. The interrupt path cannot use it —
 // nothing deferred runs once a signal has killed the process — which is
 // why the handler is handed its own copy of the same tidy-up.
-func runDeploy(args []string, stdout, stderr io.Writer) int {
+func runDeploy(args []string, u *ui.UI) int {
 	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
-	if code, done := parseSubcommand(fs, args, 1, deployUsage, stdout, stderr); done {
+	if code, done := parseSubcommand(fs, args, 1, deployUsage, u); done {
 		return code
 	}
 
-	u := ui.New()
 	handoff, err := flow.Deploy(context.Background(), flow.DeployDeps{
 		Dir:        fs.Arg(0),
 		Prompt:     u,
@@ -205,14 +221,19 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 // The server is given this binary's own version rather than a literal,
 // so an unreleased build introduces itself to a client as "dev" for the
 // same reason `curious version` does.
-func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func runMCP(args []string, u *ui.UI, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
-	if code, done := parseSubcommand(fs, args, 0, mcpUsage, stdout, stderr); done {
+	if code, done := parseSubcommand(fs, args, 0, mcpUsage, u); done {
 		return code
 	}
 
+	// THE RAW STREAMS GO TO THE SERVER because one of them is a protocol
+	// and the other is what the server renders its own diagnostics to —
+	// through a boundary of its own, built inside Serve. This is the one
+	// place in the program a stream is handed on rather than written to,
+	// and what receives it is held to the same rule.
 	if err := mcp.New("curious", version).Serve(stdin, stdout, stderr); err != nil {
-		fmt.Fprintf(stderr, "curious mcp: %v\n", err)
+		u.Step("curious mcp: %s", err.Error())
 		return 1
 	}
 	return 0

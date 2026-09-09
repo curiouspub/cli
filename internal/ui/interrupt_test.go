@@ -276,7 +276,7 @@ func TestInterruptHelperProcess(t *testing.T) {
 		t.Skip("child half of the terminator row; runs only when re-executed")
 	}
 
-	u := New()
+	u := New(os.Stdin, os.Stdout, os.Stderr)
 	if mode == "exit" {
 		// The control: the behaviour this package shipped with, so the
 		// two are produced by the same harness and differ only where

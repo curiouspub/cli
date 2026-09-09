@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/curiouspub/cli/internal/ui"
 )
 
 // ProtocolVersion is the revision of the Model Context Protocol this
@@ -137,7 +139,33 @@ func (s *Server) Register(t Tool) {
 // where every diagnostic goes. A function handed both cannot reach for
 // the process's own streams and so cannot write a log line into the
 // protocol by forgetting which one it was holding.
+// notes is the diagnostic half of the connection.
+//
+// EVERYTHING THIS SERVER SAYS ABOUT A CLIENT IS ABOUT SOMETHING THE
+// CLIENT SENT — a method name it chose, a protocol revision it asked
+// for, the name it gave itself. Written straight to the stream those
+// were terminal control sequences on an operator's screen: a cold
+// review turned an MCP notification called
+// "notifications/\x1b]0;pwned\a" into a retitled window, through a raw
+// io.Writer this package was handed and trusted.
+//
+// It goes through the same boundary as everything else now. The format
+// is this server's own words and an argument is the client's, which is
+// the rule the rest of the program keeps — and go vet holds it here too,
+// because say forwards its own format and variadic to a renderer it
+// already knows about.
+type notes struct{ render *ui.UI }
+
+func newNotes(w io.Writer) notes {
+	// io.Discard for the machine half: this connection's stdout is the
+	// protocol and carries nothing else.
+	return notes{render: ui.Writing(io.Discard, w)}
+}
+
+func (n notes) say(format string, args ...any) { n.render.Step(format, args...) }
+
 func (s *Server) Serve(in io.Reader, out, logw io.Writer) error {
+	diagnostics := newNotes(logw)
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, initialMessageBytes), maxMessageBytes)
 
@@ -151,7 +179,7 @@ func (s *Server) Serve(in io.Reader, out, logw io.Writer) error {
 			continue
 		}
 
-		reply, answer := s.handle(line, logw)
+		reply, answer := s.handle(line, diagnostics)
 		if !answer {
 			continue
 		}
@@ -172,7 +200,7 @@ func (s *Server) Serve(in io.Reader, out, logw io.Writer) error {
 
 // handle turns one inbound line into the reply that should go back, and
 // reports whether there is a reply at all.
-func (s *Server) handle(line []byte, logw io.Writer) (response, bool) {
+func (s *Server) handle(line []byte, logw notes) (response, bool) {
 	// THE TWO WAYS AN INBOUND MESSAGE CAN BE UNREADABLE ARE DIFFERENT
 	// FAULTS AND GET DIFFERENT CODES, which is worth the extra call
 	// because the codes are the only thing a client can act on. Bytes
@@ -249,7 +277,7 @@ func (s *Server) handle(line []byte, logw io.Writer) (response, bool) {
 }
 
 // handleNotification acts on a message that expects no reply.
-func (s *Server) handleNotification(req request, logw io.Writer) {
+func (s *Server) handleNotification(req request, logw notes) {
 	switch req.Method {
 	case methodInitialized:
 		// The client saying it is ready. There is nothing to do: this
@@ -267,7 +295,7 @@ func (s *Server) handleNotification(req request, logw io.Writer) {
 		// violation and an error reply would be a lie. The log line is
 		// what turns "the agent's cancel does nothing" from a mystery
 		// into a sentence somebody can read.
-		fmt.Fprintf(logw, "curious mcp: ignoring the %s notification, which this server does not implement\n", req.Method)
+		logw.say("curious mcp: ignoring the %s notification, which this server does not implement", req.Method)
 	}
 }
 
@@ -319,12 +347,12 @@ type initializeParams struct {
 // The mismatch is not silent, it is just not silent AT THE CLIENT: it
 // goes to the log, where the person who has to explain why an old client
 // stopped working can read it.
-func (s *Server) initialize(params json.RawMessage, logw io.Writer) initializeResult {
+func (s *Server) initialize(params json.RawMessage, logw notes) initializeResult {
 	var p initializeParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
-			fmt.Fprintf(logw, "curious mcp: the handshake parameters would not decode (%v); "+
-				"answering with revision %s anyway\n", err, ProtocolVersion)
+			logw.say("curious mcp: the handshake parameters would not decode (%s); "+
+				"answering with revision %s anyway", err.Error(), ProtocolVersion)
 		}
 	}
 	if p.ProtocolVersion != "" && p.ProtocolVersion != ProtocolVersion {
@@ -332,8 +360,8 @@ func (s *Server) initialize(params json.RawMessage, logw io.Writer) initializeRe
 		if p.ClientInfo != nil && p.ClientInfo.Name != "" {
 			client = p.ClientInfo.Name
 		}
-		fmt.Fprintf(logw, "curious mcp: %s asked for protocol revision %s; this server speaks %s "+
-			"and answered with that\n", client, p.ProtocolVersion, ProtocolVersion)
+		logw.say("curious mcp: %s asked for protocol revision %s; this server speaks %s "+
+			"and answered with that", client, p.ProtocolVersion, ProtocolVersion)
 	}
 
 	return initializeResult{
@@ -394,7 +422,7 @@ type callParams struct {
 // faults in the request and are answered as protocol errors, and
 // everything from the tool itself — including a total failure — comes
 // back as a result the client can read.
-func (s *Server) callTool(params json.RawMessage, logw io.Writer) (Result, *rpcError) {
+func (s *Server) callTool(params json.RawMessage, logw notes) (Result, *rpcError) {
 	var p callParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return Result{}, &rpcError{Code: codeInvalidParams, Message: "the tool call parameters were not readable"}

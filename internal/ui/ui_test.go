@@ -391,7 +391,7 @@ func TestInteractivityNeedsBothStreams(t *testing.T) {
 func TestNewReadsTheRealEnvironment(t *testing.T) {
 	t.Setenv(debugEnvVar, "1")
 
-	u := New()
+	u := New(os.Stdin, os.Stdout, os.Stderr)
 	if !u.debug {
 		t.Errorf("New did not see %s in the process environment", debugEnvVar)
 	}
@@ -416,7 +416,7 @@ func TestNewWithoutTheDebugVariable(t *testing.T) {
 	t.Setenv(debugEnvVar, "")
 	os.Unsetenv(debugEnvVar)
 
-	if u := New(); u.debug {
+	if u := New(os.Stdin, os.Stdout, os.Stderr); u.debug {
 		t.Errorf("New reported debug with %s unset", debugEnvVar)
 	}
 }

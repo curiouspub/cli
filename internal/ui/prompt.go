@@ -158,7 +158,15 @@ func validEmailShape(entry string) bool {
 // not stdout: somebody piping stdout still has to see what they are
 // being asked.
 func (u *UI) writePrompt(text string) {
-	fmt.Fprintf(u.err, "%s ", sanitizeLines(text))
+	// THE WHOLE THING, newline included, because a prompt is one
+	// question. Line breaks in it were kept, on the reasoning that
+	// prompts are this program's own copy — but the methods that
+	// take them are exported and take a string, and text arriving
+	// in one is the same shape of thing that arrives in an
+	// argument. A question that can add a line above itself can put
+	// words in this program's mouth directly over the answer it is
+	// asking for.
+	fmt.Fprint(u.err, Sanitize(text)+" ")
 }
 
 // readLine reads one answer, trimmed.

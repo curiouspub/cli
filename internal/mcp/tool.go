@@ -3,8 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"runtime/debug"
+
+	"github.com/curiouspub/cli/internal/ui"
 )
 
 // Handler runs one tool call and returns what the client should see.
@@ -123,13 +124,16 @@ const schemaForNoArguments = `{"type":"object"}`
 // model and then usually by a person in a transcript. The operator gets
 // the value and the stack on the diagnostic stream; the client is told
 // which tool failed and that the server is still up.
-func invoke(t Tool, arguments json.RawMessage, logw io.Writer) (result Result) {
+func invoke(t Tool, arguments json.RawMessage, logw notes) (result Result) {
 	defer func() {
 		r := recover()
 		if r == nil {
 			return
 		}
-		fmt.Fprintf(logw, "curious mcp: the %s tool panicked: %v\n%s\n", t.Name, r, debug.Stack())
+		// THE STACK IS OURS AND HAS LINES IN IT, so it goes as prose;
+		// the tool's name and the panic value are values.
+		logw.say("curious mcp: the %s tool panicked: %s\n%s", t.Name,
+			fmt.Sprint(r), ui.Prose(debug.Stack()))
 		result = ErrorResult("The %s tool failed unexpectedly and nothing it was doing was finished. "+
 			"The server is still running, so you can try the call again.", t.Name)
 	}()

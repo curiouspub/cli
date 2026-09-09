@@ -90,21 +90,42 @@ func Writing(out, err io.Writer) *UI {
 		func() bool { return false })
 }
 
-// New returns a UI wired to this process's own streams and environment.
+// Help writes this program's own prose to STDOUT, keeping its layout.
 //
-// It is the only constructor that touches the operating system, which is
-// what keeps every decision below testable: newUI takes the answers as
-// arguments, and this function is where they are actually obtained.
-func New() *UI {
-	u := newUI(os.Stdin, os.Stdout, os.Stderr, os.LookupEnv,
-		interactiveStreams(os.Stdin, os.Stderr),
-		func() bool { return terminalUnderstandsEscapes(os.Stderr) })
+// IT IS THE ONE EXCEPTION to "stdout is one record per line", and it has
+// exactly one caller: the usage text, which is prose a person reads and
+// which goes to stdout so that `curious -h | less` shows something. A
+// Result would escape its line breaks, because on that stream a line
+// break inside one record is a second record. This does not, and takes
+// a Prose so that the exception can only be reached deliberately.
+func (u *UI) Help(text Prose) {
+	fmt.Fprint(u.out, sanitizeLines(string(text)))
+}
+
+// New returns a UI wired to the given streams and this process's
+// environment.
+//
+// IT TAKES ITS STREAMS RATHER THAN READING THEM, so that the process's
+// own stdout and stderr are named in exactly one place — main — and
+// every byte a person sees has passed through here. It used to read
+// os.Stdout and os.Stderr itself, which made this package a second
+// place the real streams were obtained and left the entry point free to
+// keep its own copies: the flag parser wrote errors straight to stderr
+// before this ever existed, and the MCP server was handed a raw one.
+//
+// It is still the only constructor that touches the operating system,
+// for the environment and for the terminal questions: newUI takes the
+// answers as arguments, and this function is where they are obtained.
+func New(in io.Reader, out, errw io.Writer) *UI {
+	u := newUI(in, out, errw, os.LookupEnv,
+		interactiveStreams(in, errw),
+		func() bool { return terminalUnderstandsEscapes(errw) })
 
 	// Capture the terminal's state now, while it is certainly untouched,
 	// so the interrupt handler has something to put back. GetState fails
 	// on anything that is not a terminal, and that failure is not an
 	// error condition — it means there is nothing to restore.
-	if fd, ok := terminalFd(os.Stdin); ok {
+	if fd, ok := terminalFd(in); ok {
 		if state, err := term.GetState(fd); err == nil {
 			u.restore = func() { _ = term.Restore(fd, state) }
 		}
@@ -316,6 +337,25 @@ func (u *UI) styled(s string) string {
 		return s
 	}
 	return boldSequence + s + resetSequence
+}
+
+// Written composes a paragraph of this program's prose that has values
+// in it, and it is how a failure carries an identifier.
+//
+// A FAILURE'S PROSE KEEPS ITS LINE BREAKS, because they are the layout;
+// its quotation does not, because every byte of that is content. An
+// identifier sat in the first of those — "The deploy is " + id + "." —
+// so it kept ITS line breaks too, and a server-supplied id carrying one
+// could add a paragraph in this program's voice. That was the residue
+// left when the quotation became a field, disclosed at the time.
+//
+// This closes it without moving the sentence: the FORMAT is the
+// caller's own copy, layout and all, and every string argument is
+// escaped whole before it is placed in. go vet holds the seam, because
+// this forwards its own format and variadic to Sprintf.
+func Written(format string, args ...any) string {
+	escapeInPlace(args)
+	return fmt.Sprintf(format, args...)
 }
 
 // Prose is THIS PROGRAM'S OWN WORDS, marked as such.

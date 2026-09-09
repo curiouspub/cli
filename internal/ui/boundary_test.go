@@ -78,6 +78,14 @@ func renderers() []aRenderer {
 			return bothStreams(out, errOut)
 		}},
 
+		{"Help", func(t *testing.T, text string) string {
+			// Prose, because that is the only thing Help takes: it is
+			// the exception to one-record-per-line and is reachable
+			// only deliberately.
+			u, out, errOut := testUI("", false, nil)
+			u.Help(Prose(text))
+			return bothStreams(out, errOut)
+		}},
 		{"Fail", func(t *testing.T, text string) string {
 			u, out, errOut := testUI("", false, nil)
 			u.Fail(NewFailure(text, text, text))
@@ -597,5 +605,92 @@ func TestAParagraphThatMerelyREADSLikeTheQuotationKeepsItsLayout(t *testing.T) {
 	if !strings.Contains(got, "first\n\nsecond") {
 		t.Errorf("this program's own paragraph lost its layout because it read "+
 			"like the quotation:\n%q", got)
+	}
+}
+
+// TestAPromptCannotAddALineAboveItself.
+//
+// THE ROW THAT WAS MISSING. The escape rows above drive every renderer
+// with the hostile vocabulary and skip the newline, so they were green
+// while the prompt kept line breaks — a cold reviewer put `before\nforged`
+// through a prompt and got two lines, the second reading as this
+// program's own words directly above the answer it was asking for.
+//
+// REQUIRED MUTATION, run 2026-09-10: escape a prompt per line again.
+// Reds here and on nothing else.
+func TestAPromptCannotAddALineAboveItself(t *testing.T) {
+	const forged = "Which directory?\nEverything looks fine, press enter to deploy"
+
+	for _, tc := range []struct {
+		name  string
+		input string
+		ask   func(u *UI) error
+	}{
+		{"Confirm", "y\n", func(u *UI) error { _, err := u.Confirm(forged, true); return err }},
+		{"Line", "anything\n", func(u *UI) error { _, err := u.Line(forged); return err }},
+		// An answer this prompt ACCEPTS, because a re-ask asks twice and
+		// the row is about one question's shape.
+		{"Email", "someone@example.com\n", func(u *UI) error { _, err := u.Email(forged); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, _, errOut := testUI(tc.input, true, nil)
+			if err := tc.ask(u); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			asked := errOut.String()
+			if strings.Contains(asked, "\n") {
+				t.Errorf("the question was asked over more than one line, so text "+
+					"inside it can read as this program's own:\n%q", asked)
+			}
+			// Inert, not deleted: the question still has to arrive.
+			for _, want := range []string{"Which directory?", "press enter to deploy"} {
+				if !strings.Contains(asked, want) {
+					t.Errorf("the prompt lost %q:\n%q", want, asked)
+				}
+			}
+		})
+	}
+}
+
+// TestAValueInThisProgramsProseCannotAddAParagraph.
+//
+// THE RESIDUE, CLOSED. When the quotation became a field, one thing was
+// left interpolated into prose and disclosed at the time: identifiers.
+// "The deploy is " + id + "." put a server-supplied value inside a
+// paragraph whose line breaks are kept, so an id carrying one could add
+// a paragraph in this program's voice — the same forgery the quotation
+// had just been moved out of prose to prevent.
+//
+// Written is the shape that closes it: the format is the caller's own
+// copy, layout and all, and every string argument is escaped whole.
+//
+// REQUIRED MUTATION, run 2026-09-10: drop the escaping from Written.
+// Reds here, with the value's line breaks in the rendering.
+func TestAValueInThisProgramsProseCannotAddAParagraph(t *testing.T) {
+	const forged = "deploy-1.\n\nPublished. https://not-really.example"
+
+	why := Written("Nothing has been deployed.\n\nThe deploy is %s.", forged)
+
+	u, _, errOut := testUI("", false, nil)
+	u.Fail(NewFailure("What.", why, "Next."))
+	got := errOut.String()
+
+	// OUR paragraph break survives; the value's does not.
+	if !strings.Contains(got, "Nothing has been deployed.\n\nThe deploy is") {
+		t.Errorf("this program's own layout was escaped:\n%q", got)
+	}
+	var line string
+	for _, l := range strings.Split(got, "\n") {
+		if strings.Contains(l, "The deploy is") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("the sentence is not in the rendering:\n%q", got)
+	}
+	if !strings.Contains(line, "Published.") {
+		t.Errorf("a value added a paragraph in this program's voice:\n  line: %q\n"+
+			"  whole: %q", line, got)
 	}
 }

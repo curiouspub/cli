@@ -21,6 +21,26 @@ import (
 // constant and a variable, and it is the only thing in this repository
 // that can.
 
+// WHAT THE ANALYSER DOES NOT SEE, recorded rather than left to be
+// rediscovered. A cold review checked three shapes and go vet reported
+// none of them: somebody else's text passed as the format through an
+// INTERFACE method, through a FUNCTION VALUE, and through a STRUCT
+// FIELD holding a function. The printf analyser propagates its wrapper
+// fact to a named function; an indirect call is not one.
+//
+// It is not a live hole. No call site in this repository takes any of
+// those shapes today, and the rendering methods are called directly or
+// through the flow package's own two-method interface, which vet does
+// report on because a concrete wrapper in the same package gives it the
+// fact.
+//
+// THE WIDER NET IS THE OTHER GUARD. TestNothingOutsideTheUIPackage-
+// ReachesATerminal enumerates the ROUTES to a stream rather than the
+// call shapes, so a package that started rendering through an indirect
+// call would still have to reach a stream, and only internal/ui may.
+// What would slip through both is a format string travelling through a
+// function value INSIDE internal/ui — revisit this if one ever does.
+
 // runVet runs go vet and hands back everything it said.
 func runVet(t *testing.T, args ...string) (string, bool) {
 	t.Helper()

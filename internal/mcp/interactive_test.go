@@ -73,7 +73,7 @@ func TestAToolThatWouldPromptReachesTheNoTerminalSentinel(t *testing.T) {
 	// The instrument reads first: if these streams were somehow
 	// interactive, everything below would be measuring the harness
 	// rather than the rule.
-	if ui.New().Interactive() {
+	if ui.New(os.Stdin, os.Stdout, os.Stderr).Interactive() {
 		t.Fatal("a pipe pair was reported as interactive, so this row measures nothing")
 	}
 
@@ -82,7 +82,7 @@ func TestAToolThatWouldPromptReachesTheNoTerminalSentinel(t *testing.T) {
 	s.Register(Tool{
 		Name: "would-prompt",
 		Handler: func(json.RawMessage) Result {
-			_, asked = ui.New().Confirm("Continue anyway?", true)
+			_, asked = ui.New(os.Stdin, os.Stdout, os.Stderr).Confirm("Continue anyway?", true)
 			if errors.Is(asked, ui.ErrNotInteractive) {
 				return ErrorResult("There was nobody to ask, so nothing was assumed.")
 			}
