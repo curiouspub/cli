@@ -253,6 +253,8 @@ func TestEveryErrorCodeConstantIsPinned(t *testing.T) {
 		"CodeCapacityClosed": "capacity_closed",
 		"CodeMaintenance":    "maintenance",
 		"CodeInternal":       "internal",
+		"CodeDeployFailed":   "deploy_failed",
+		"CodeDeployNotReady": "deploy_not_ready",
 	}
 
 	declared := declaredErrorCodeValues(t)
@@ -600,6 +602,13 @@ func TestCarriesRetryAfterIsPinned(t *testing.T) {
 		CodeCapacityClosed: true, // resets_at, always known
 		CodeMaintenance:    false,
 		CodeInternal:       false,
+		// Neither carries one, and neither is an oversight. A failed
+		// build has nothing to wait for. A build still running has no
+		// honest figure — the server cannot say how long one has left,
+		// and a made-up number is worse than none, because a client
+		// would sleep on it and report a failure at the wrong moment.
+		CodeDeployFailed:   false,
+		CodeDeployNotReady: false,
 	}
 
 	listed := map[ErrorCode]bool{}

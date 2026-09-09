@@ -262,6 +262,18 @@ var errorRouting = map[wire.ErrorCode]verifyRoute{
 	// variable rather than a server fault, so the stop names the base
 	// URL it called, because that is the thing that is wrong.
 	wire.CodeNotFound: routeStop,
+	// A DEPLOY'S STATE HAS NOTHING TO DO WITH LOGGING IN, and both stop
+	// rather than recover — not because the login could act on them, but
+	// because a code with no stated routing would fall through to a stop
+	// that looks identical while nobody had decided anything. Stating it
+	// is the difference between a decision and a default.
+	//
+	// Neither can arrive here: the publish endpoint is the only one that
+	// answers with them, and this flow does not call it. Declared, not
+	// reachable — the same shape the create's table already uses for the
+	// capacity code.
+	wire.CodeDeployFailed:   routeStop,
+	wire.CodeDeployNotReady: routeStop,
 }
 
 // routeFor reports the stated routing for code, and whether there is

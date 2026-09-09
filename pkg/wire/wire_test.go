@@ -343,6 +343,7 @@ func TestAllErrorCodesOrder(t *testing.T) {
 	want := []ErrorCode{
 		"bad_request", "unauthorized", "forbidden", "not_found",
 		"rate_limited", "capacity_closed", "maintenance", "internal",
+		"deploy_failed", "deploy_not_ready",
 	}
 	if !reflect.DeepEqual(AllErrorCodes, want) {
 		t.Fatalf("AllErrorCodes = %v, want %v — declaration order, as its doc states", AllErrorCodes, want)

@@ -126,6 +126,39 @@ const (
 	CodeCapacityClosed ErrorCode = "capacity_closed"
 	CodeMaintenance    ErrorCode = "maintenance"
 	CodeInternal       ErrorCode = "internal"
+
+	// CodeDeployFailed and CodeDeployNotReady both say a deploy cannot be
+	// published, and they exist as two codes because a client must do
+	// two different things about them.
+	//
+	// Publishing refuses anything not in the built state, and the state
+	// it observed used to reach the client only inside the human message
+	// — with bad_request as the code for every one of them. So a client
+	// wanting to tell "this build failed, stop" from "this build has not
+	// finished, wait" had to parse prose written for a person. That is
+	// the same thing this contract already refuses to do with an object
+	// store's error body, and refusing it here while doing it there
+	// would have been a rule that only applies to other people's
+	// substrates.
+	//
+	// A MESSAGE IS READ BY A PERSON; A CODE IS SWITCHED ON BY A CLIENT.
+	// The distinction a client needs belongs on the side of that line
+	// that is stable, and putting it there is what the additive-only
+	// vocabulary is for.
+	//
+	// CodeDeployFailed is terminal: the build did not produce something
+	// publishable and never will. Note that it can arrive AFTER a stream
+	// has ended saying the build finished — the terminal event carries
+	// the builder's own claim, and validation runs after it — so a client
+	// seeing this has not been lied to twice, it has been told the second
+	// half.
+	//
+	// CodeDeployNotReady is not terminal: the deploy is still queued or
+	// building, and asking again later can succeed. It carries no
+	// Retry-After, because the server has no honest figure for how long
+	// a build has left.
+	CodeDeployFailed   ErrorCode = "deploy_failed"
+	CodeDeployNotReady ErrorCode = "deploy_not_ready"
 )
 
 // AllErrorCodes is every ErrorCode this contract defines, in declaration
@@ -150,6 +183,8 @@ var AllErrorCodes = []ErrorCode{
 	CodeCapacityClosed,
 	CodeMaintenance,
 	CodeInternal,
+	CodeDeployFailed,
+	CodeDeployNotReady,
 }
 
 // retryAfterCodes is the set behind CarriesRetryAfter. It is unexported

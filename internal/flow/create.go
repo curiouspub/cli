@@ -88,6 +88,15 @@ var createRouting = map[wire.ErrorCode]createRoute{
 	wire.CodeForbidden: createStop,
 	wire.CodeNotFound:  createStop,
 	wire.CodeInternal:  createStop,
+	// THE PUBLISH STEP'S TWO CODES, declared here and not reachable from
+	// this call — the same shape the closed-capacity code already has.
+	// The create cannot receive them: they say a deploy is not in a
+	// publishable state, and this call is what brings a deploy into
+	// existence. Stated anyway, because the contract's list is what this
+	// table is keyed to, and a code with no entry would be answered by a
+	// fallback nobody chose.
+	wire.CodeDeployFailed:   createStop,
+	wire.CodeDeployNotReady: createStop,
 }
 
 // deployCreator is the slice of the API client this step needs. It is
