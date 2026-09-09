@@ -16,6 +16,42 @@ permissions:
   contents: read
 
 jobs:
+  # FIRST, AND EVERYTHING ELSE DEPENDS ON IT. A tag push does not run the
+  # ordinary CI workflow at all, and a tag is the surface with the least
+  # chance of a second look: a name a person typed under time pressure,
+  # carrying a message they wrote in the same minute. Both are published
+  # the instant this workflow starts.
+  #
+  # It holds no write permission and names no credential, like the job
+  # below it.
+  surfaces:
+    name: the published surfaces that are not files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The range needs its own endpoints, and the checker proves
+          # itself against a commit in this repository's history before it
+          # examines any of them.
+          #
+          # AND A TAG PUSH IS THE NEW-REF CASE EVERY TIME: there is no
+          # before-sha, so what the tag publishes is measured against the
+          # default branch. The checkout action fetches only the pushed
+          # ref unless the depth is unbounded, in which case it fetches
+          # every head and tag — read at the pinned commit above rather
+          # than remembered. Reduce this to a number and this job refuses
+          # every release tag, correctly and unhelpfully.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      - name: make surface-check
+        shell: bash
+        run: make surface-check
+
   # THE PRECONDITION, and it is a separate job on purpose: it holds no
   # write permission and names no credential, so nothing it runs can
   # publish anything even if the check itself is wrong.
@@ -25,6 +61,7 @@ jobs:
   # rewritten out of the branch afterwards. Without this, the tag is the
   # only thing deciding what gets published.
   reachable:
+    needs: surfaces
     name: the tag names a commit the default branch already carries
     runs-on: ubuntu-latest
     steps:
@@ -62,7 +99,11 @@ jobs:
   # its own, because a pending deployment lists what is waiting.
   publish:
     name: build, sign and publish
-    needs: reachable
+    # Both named rather than relying on the chain through reachable. A
+    # dependency that holds by transitivity holds until somebody edits the
+    # middle of the chain, and the edit that removes it will not look like
+    # it removed anything.
+    needs: [surfaces, reachable]
     environment: release
     runs-on: ubuntu-latest
     permissions:

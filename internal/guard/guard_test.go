@@ -41,6 +41,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/citations"
 )
 
 // moduleRoot walks up from the test binary's working directory (which
@@ -197,9 +199,14 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 //     this guard and inside the leak scan's.
 //
 // Two further stated limits. File CONTENTS are matched, never file
-// NAMES: a branch name, a commit message, a tag or a pull-request title
-// is a published surface no pattern here can see, and those are
-// hand-checked at the publish point. And `--exclude-standard` honours
+// NAMES: a branch name, a commit message, a tag and its message, and a
+// pull request's own text are published surfaces no pattern here can
+// see. They are no longer hand-checked — tools/surfacecheck reads them
+// over the range being published, out of the same two rule files this
+// guard reads, so the vocabulary cannot be enforced in a comment and
+// evadable in the message of the commit that adds it. What is left to a
+// person is named there and is smaller than this sentence used to
+// describe. And `--exclude-standard` honours
 // the operator's GLOBAL ignore file as well as this repository's, so a
 // personal global rule could in principle drop a real file out of scope
 // on one machine — CI checks out clean with no global excludes, which is
@@ -950,89 +957,71 @@ func loadVendorTerms(t *testing.T, root string) map[string]bool {
 	return terms
 }
 
-// splitSubwords splits one alphanumeric run the way an identifier is
-// actually built: an acronym run, a capitalised word, a lowercase word,
-// or a bare digit run. Digits stay attached to the letters they follow,
-// so a name ending in a digit survives as one subword.
+// TestEveryTermInTheVocabularySurvivesTokenisation ties a number chosen
+// in one package to the file that decides whether it is still right.
 //
-// Written by hand rather than as a pattern because the natural
-// expression for the acronym boundary needs a negative lookahead, and
-// RE2 — Go's engine, chosen for its linear-time guarantee — does not
-// have one. The first version of this used one and panicked at init.
-func splitSubwords(run string) []string {
-	isUpper := func(b byte) bool { return b >= 'A' && b <= 'Z' }
-	isLower := func(b byte) bool { return b >= 'a' && b <= 'z' }
-	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
-
-	var out []string
-	for i := 0; i < len(run); {
-		start := i
-		switch {
-		case isUpper(run[i]):
-			for i < len(run) && isUpper(run[i]) {
-				i++
-			}
-			// An uppercase run followed by lowercase is an acronym whose
-			// last letter opens the next word: a run then a capitalised
-			// word splits between them, not after them.
-			if i-start > 1 && i < len(run) && isLower(run[i]) {
-				i--
-			}
-			for i < len(run) && (isLower(run[i]) || isDigit(run[i])) {
-				i++
-			}
-		case isLower(run[i]):
-			for i < len(run) && (isLower(run[i]) || isDigit(run[i])) {
-				i++
-			}
-		default:
-			for i < len(run) && isDigit(run[i]) {
-				i++
-			}
+// The tokeniser bounds the length of the tokens it builds, because
+// without a bound the work grows as the cube of the input and the input
+// is a stranger's text. The bound was chosen off this file: it is twice
+// the longest term the vocabulary declared at the time. A constant chosen
+// off a file and then left alone is a constant that goes quietly wrong
+// the first time somebody adds a longer line — nothing would fail, the
+// term would simply never match anything, and the vocabulary would have
+// grown a word that is enforced nowhere.
+//
+// So the tie is mechanical rather than arithmetical: every term must come
+// back out of the tokeniser AS ITSELF. That catches the length case and
+// also the other way a term can be unmatchable — spelling it with
+// anything the tokeniser does not treat as part of a token.
+//
+// MUTATION RUN, and what ACTUALLY reddened rather than what was
+// predicted. Lowering the bound in internal/citations to twelve reds this
+// row three times, naming a 14-, a 14- and a 16-byte term and quoting
+// none of them. It was predicted that nothing in that package would move,
+// on the reasoning that its length rows are written against the bound
+// rather than against this file. One does move: the join row there names
+// a seventeen-byte join it expects, so it reds too — a second falsifier
+// for a bound set too low, from the other side of the tie.
+func TestEveryTermInTheVocabularySurvivesTokenisation(t *testing.T) {
+	terms := loadVendorTerms(t, moduleRoot(t))
+	longest := 0
+	for _, term := range sortedKeys(terms) {
+		if len(term) > longest {
+			longest = len(term)
 		}
-		out = append(out, run[start:i])
-	}
-	return out
-}
-
-// alphanumericRun finds the maximal runs a line is tokenised from.
-var alphanumericRun = regexp.MustCompile(`[A-Za-z0-9]+`)
-
-// identifierTokens returns every whole subword of a line, plus every
-// CONTIGUOUS JOIN of adjacent subwords.
-//
-// This is the whole of why the vendor rule is not a regular expression,
-// and both halves are load bearing.
-//
-// SPLITTING is what catches the real spellings. A word-boundary pattern
-// sees no boundary inside an identifier, so every camelCase and
-// snake_case spelling of a forbidden name walked straight past the
-// pattern that replaced it — which is how the rule shipped evadable in
-// the first place.
-//
-// JOINING is what catches a name that is itself split by the convention:
-// a two-part product name written in camelCase arrives as two subwords
-// and matches neither, until the adjacent pair is rejoined.
-//
-// And matching a whole subword rather than a SUBSTRING is what keeps the
-// guard quiet: an ordinary English word for a defect contains one of
-// these terms outright, and a substring match reds on it. Splitting
-// distinguishes an identifier that NAMES a provider from a word that
-// merely contains those letters.
-func identifierTokens(line string) map[string]bool {
-	out := map[string]bool{}
-	for _, run := range alphanumericRun.FindAllString(line, -1) {
-		subs := splitSubwords(run)
-		for i := range subs {
-			joined := ""
-			for j := i; j < len(subs); j++ {
-				joined += strings.ToLower(subs[j])
-				out[joined] = true
-			}
+		if !citations.IdentifierTokens(term)[term] {
+			// NAMED BY LENGTH, NOT QUOTED. This message reaches a run's
+			// log, and spelling the term out there is the same disclosure
+			// the vendor rule exists to prevent — arriving through the row
+			// that maintains it.
+			t.Errorf("a %d-byte term in the vocabulary does not come back out of the "+
+				"tokeniser as itself, so the vendor check can never match it.\n"+
+				"Either it is longer than the %d-byte bound in internal/citations, or it is "+
+				"spelled with something the tokeniser does not treat as part of a token. A "+
+				"term nothing can match is a rule that is written down and enforced nowhere.",
+				len(term), citations.MaxTokenLength)
 		}
 	}
-	return out
+	// THE FLOOR. A vocabulary of one-letter terms would satisfy the row
+	// above while proving nothing about the bound, and an empty one is
+	// already refused by the loader.
+	if longest < 2 {
+		t.Errorf("the longest term in the vocabulary is %d byte(s), so the row above says "+
+			"nothing about a bound of %d", longest, citations.MaxTokenLength)
+	}
 }
+
+// THE TOKENISER USED TO SIT HERE and now lives in internal/citations,
+// unchanged. It moved because a second reader of these same rule files
+// arrived — the surface check under tools/, which reads a commit message,
+// a branch name and a tag rather than a file — and a package holding
+// nothing but tests cannot be imported by anything. Keeping this package
+// tests-only is worth more than the proximity: it is where rules ABOUT
+// this repository live, and giving it production code to export would
+// make it importable.
+//
+// The two readers must tokenise identically or the vocabulary is enforced
+// in a comment and evadable in the message of the commit that adds it.
 
 // TestNoPrivateCitations scans EVERY text file this repository ships —
 // Go sources, tests, the Makefile, the CI workflow, shell scripts,
@@ -1142,7 +1131,7 @@ func TestGeneratedManifestExemptionIsRealAndNarrow(t *testing.T) {
 
 	for name, fixture := range map[string]string{"hash": hashField, "path": pathField} {
 		var tripped []string
-		for token := range identifierTokens(fixture) {
+		for token := range citations.IdentifierTokens(fixture) {
 			if vendorTerms[token] {
 				tripped = append(tripped, token)
 			}
@@ -1153,7 +1142,7 @@ func TestGeneratedManifestExemptionIsRealAndNarrow(t *testing.T) {
 		}
 		t.Logf("%s fixture tokenises to banned terms: %v", name, tripped)
 	}
-	for token := range identifierTokens(cleanHash) {
+	for token := range citations.IdentifierTokens(cleanHash) {
 		if vendorTerms[token] {
 			t.Fatalf("the clean-hash fixture unexpectedly tokenises to %q, so the "+
 				"path-column rows would pass for the wrong reason", token)
@@ -1203,7 +1192,7 @@ func TestGeneratedManifestExemptionIsRealAndNarrow(t *testing.T) {
 			scanText, ok := vendorScanLine(tc.relPath, tc.line, tc.ruleFile)
 			var found []string
 			if ok {
-				for token := range identifierTokens(scanText) {
+				for token := range citations.IdentifierTokens(scanText) {
 					if vendorTerms[token] {
 						found = append(found, token)
 					}
@@ -1411,7 +1400,7 @@ func TestNoPrivateCitations(t *testing.T) {
 			// private identifier ship on a data line, which was measured
 			// rather than argued.
 			if scanText, ok := vendorScanLine(rel, line, isRuleFile); ok {
-				for token := range identifierTokens(scanText) {
+				for token := range citations.IdentifierTokens(scanText) {
 					if vendorTerms[token] {
 						t.Errorf("%s:%d names infrastructure (%q) in authored text\n"+
 							"What serves the API is not a fact this repository carries. "+

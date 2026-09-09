@@ -1216,6 +1216,15 @@ const cutReleaseScript = "scripts/cut-release.sh"
 // script that lost its executable bit to an in-place rewrite passes every
 // test invoked as `bash script` and fails the moment anything runs it the
 // way an operator does.
+//
+// THE UNIVERSE IS WHAT THE FILE DECLARES ITSELF TO BE, not what it is
+// called. This row used to select on a .sh suffix, and a suffix is a
+// naming habit rather than a fact about the file — so the git hook under
+// scripts/, which carries a shebang, is run by path, and has no extension
+// because the directory git installs it into does not allow one, sat
+// outside the guard entirely. It had the bit; nothing kept it. Reading
+// the first line asks the question the mode is actually about: is this a
+// file something will try to execute?
 func TestScriptsAreExecutableAsGitRecordsThem(t *testing.T) {
 	root := moduleRoot(t)
 	cmd := exec.Command("git", "ls-files", "-s", "--", "scripts")
@@ -1224,14 +1233,15 @@ func TestScriptsAreExecutableAsGitRecordsThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing scripts/ from the index: %v", err)
 	}
-	checked := 0
+	checked, skipped := 0, 0
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			continue
 		}
 		name := fields[len(fields)-1]
-		if !strings.HasSuffix(name, ".sh") {
+		if !hasShebang(t, filepath.Join(root, filepath.FromSlash(name))) {
+			skipped++
 			continue
 		}
 		checked++
@@ -1242,8 +1252,34 @@ func TestScriptsAreExecutableAsGitRecordsThem(t *testing.T) {
 		}
 	}
 	if checked == 0 {
-		t.Fatal("no shell script is tracked under scripts/ — this row would pass over an empty set")
+		t.Fatal("no executable script is tracked under scripts/ — this row would pass over an empty set")
 	}
+	// AND THE OTHER HALF, because "look for a shebang" is only a
+	// narrowing if something is narrowed. The rule files under scripts/
+	// are data and carry none, so a reader that found a shebang in
+	// everything — or in nothing — would satisfy the loop above while
+	// measuring the wrong set.
+	if skipped == 0 {
+		t.Error("every tracked file under scripts/ was read as executable, including the rule " +
+			"files, so this row is not distinguishing a script from data")
+	}
+}
+
+// hasShebang reports whether a file begins with the two bytes that make
+// the kernel look for an interpreter.
+func hasShebang(t *testing.T, path string) bool {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	defer f.Close()
+	var first [2]byte
+	n, err := f.Read(first[:])
+	if err != nil && n == 0 {
+		return false
+	}
+	return n == 2 && first[0] == '#' && first[1] == '!'
 }
 
 // TestCutReleaseMakesNoOutwardChangeWithoutConsent drives the script with
@@ -1469,4 +1505,115 @@ func TestCutReleaseRefusesAVersionThatIsNotOne(t *testing.T) {
 			t.Errorf("the script refused a well-formed version: %v\n%s", err, out)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------
+// The surface check's own triggers and history.
+// ---------------------------------------------------------------------
+
+// ciWorkflow is the workflow that runs on every ref.
+const ciWorkflow = ".github/workflows/ci.yml"
+
+// surfaceCheckCommand is what a job runs to read the published surfaces
+// a scan of file contents cannot see.
+const surfaceCheckCommand = "surface-check"
+
+// TestTheSurfaceCheckRunsWhenItMustAndCanSeeWhatItNeeds holds two
+// settings that decide whether that check is coverage or decoration, and
+// which nothing else in this repository can observe.
+//
+// A WORKFLOW IS A CLAIM ABOUT WHEN SOMETHING RUNS, and neither of these
+// can be tested by running the check: one is about an event that has not
+// happened, the other about a checkout that has not been made. They are
+// asserted from the file, which is the only place the fact exists.
+func TestTheSurfaceCheckRunsWhenItMustAndCanSeeWhatItNeeds(t *testing.T) {
+	root := moduleRoot(t)
+
+	t.Run("a pull request's title and body are re-read after they are edited",
+		func(t *testing.T) {
+			// The title and body are checked surfaces because a squash
+			// merge composes its commit message out of them — and both can
+			// be rewritten in a browser after the check has passed. The
+			// default activity types are opened, synchronize and reopened;
+			// an edit is not among them, so without `edited` the title
+			// that becomes the commit message is the one nobody read.
+			//
+			// ALL FOUR ARE REQUIRED, because naming types REPLACES the
+			// defaults rather than adding to them. Dropping synchronize
+			// would stop this running on every push to a pull request, and
+			// nothing about the line would look wrong.
+			data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ciWorkflow)))
+			if err != nil {
+				t.Fatalf("reading %s: %v", ciWorkflow, err)
+			}
+			lines := readYAMLLines(string(data))
+			triggers, ok := topLevelBlock(lines, "on")
+			if !ok {
+				t.Fatalf("%s declares no triggers at all", ciWorkflow)
+			}
+			at := findKey(triggers, "pull_request")
+			if at < 0 {
+				t.Fatalf("%s does not run on a pull request", ciWorkflow)
+			}
+			typesAt := findKey(blockAt(triggers, at), "types")
+			if typesAt < 0 {
+				t.Fatalf("%s names no activity types for a pull request, so it takes the "+
+					"defaults — and an edit to the title is not one of them", ciWorkflow)
+			}
+			got := map[string]bool{}
+			for _, v := range listValues(blockAt(triggers, at), typesAt) {
+				got[v] = true
+			}
+			for _, want := range []string{"opened", "synchronize", "reopened", "edited"} {
+				if !got[want] {
+					t.Errorf("%s does not run on a pull request being %s.\n"+
+						"Naming types replaces the defaults rather than adding to them, so "+
+						"every one this check needs has to be spelled out.", ciWorkflow, want)
+				}
+			}
+		})
+
+	t.Run("every job that runs the surface check checks out the whole history",
+		func(t *testing.T) {
+			// THE CHECK FAILS CLOSED WITHOUT IT, which is the good half:
+			// a range it cannot resolve is undetermined rather than clean.
+			// The bad half is that it fails for every new branch and every
+			// release tag, blaming a shallow checkout — which is true, and
+			// leaves whoever reads it looking at the wrong line.
+			//
+			// A push of a new ref carries no before-sha, so what is new is
+			// measured against the default branch. The checkout action
+			// fetches only the pushed ref UNLESS the depth is unbounded,
+			// in which case it fetches every head and tag. That behaviour
+			// is a property of the pinned action rather than of this
+			// repository, so what is asserted here is the input this
+			// repository chooses.
+			found := 0
+			for _, path := range workflowFiles(t, root) {
+				rel := filepath.ToSlash(mustRel(t, root, path))
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("reading %s: %v", rel, err)
+				}
+				for _, j := range jobs(readYAMLLines(string(data))) {
+					body := strings.Join(textsOf(j.Body), "\n")
+					if !strings.Contains(body, surfaceCheckCommand) {
+						continue
+					}
+					found++
+					if !hasEntry(j.Body, "fetch-depth", "0") {
+						t.Errorf("%s:%d — the job %q reads a published range and does not ask "+
+							"for the history to read it in.\nA new branch and a release tag "+
+							"both have to be measured against the default branch, which a "+
+							"shallow checkout does not carry.", rel, j.N, j.Name)
+					}
+				}
+			}
+			// THE FLOOR. Both workflows run this check, and a reader that
+			// found neither would report every workflow as compliant.
+			if found < 2 {
+				t.Fatalf("found %d job(s) running the surface check, want at least 2 — the "+
+					"row above would pass over an empty set", found)
+			}
+		})
 }

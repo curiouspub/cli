@@ -78,10 +78,28 @@ exactly as world-readable as a `.go` file. Ignored files are out of
 scope — git will not publish them, which is the same property that makes
 `CLAUDE.local.md` safe to write in.
 
-**The guard reads file CONTENTS, never file NAMES.** A branch name, a
-commit message, a tag, a pull-request title and a release note are all
-published surfaces that no pattern here can see. Those are checked by
-hand at the moment of publishing.
+**The guard reads file CONTENTS, never file NAMES**, and that is a
+statement about that guard rather than about this rule's coverage. A
+branch name, a commit message, a tag and its message, and a pull
+request's title and body are published exactly as loudly as a file and
+are not files, so they are read by a **second** check — `make
+surface-check`, which runs in CI over the range being published and in an
+optional pre-push hook before it leaves your machine. It reads the same
+two rule files this one does, at both ends of the range, and it is
+described where it lives.
+
+That check exists because the hand-check it replaces failed twice here,
+once by the same hand that had written the sentence describing the hole.
+**A rule with no mechanism gets followed until the moment somebody is
+busy**, and that is the moment a release is cut.
+
+**What is still hand-checked, stated exactly, because implying coverage
+is worse than having none:** a release note, which is authored after the
+tag and is not a git object at all; and a message hand-edited in the
+merge button at the moment of merging, which the push check on the
+default branch sees only after publication. That is detection plus
+repair, and calling it enforcement would be the claim this whole
+mechanism exists because somebody made once already.
 
 ## What this binary is — and what it is today
 
@@ -217,7 +235,7 @@ Three workflows run today, and only the first can fail an ordinary change:
 
 | workflow | trigger | what it does |
 |---|---|---|
-| `ci.yml` | every push and pull request | `make ci`, on the three-OS matrix — **the gate** |
+| `ci.yml` | every push, every pull request, every merge-queue entry | `make ci` on the three-OS matrix — **the gate** — and `make surface-check` on one leg |
 | `snapshot.yml` | pull requests touching the release surface | `make snapshot`: the full build matrix, archives and checksums, no upload and no tokens |
 | `release.yml` | a version tag only | the real publish, behind an environment with a required reviewer |
 
@@ -230,6 +248,37 @@ YAML is a step nobody can run before pushing.
 - `make fmt` `make vet` `make test` `make build` — `ci` runs them in that
   order, formatting first, so a formatting failure is not discovered
   after a five-minute suite.
+- **`make surface-check` is the one check `ci` cannot carry, and the
+  reason is the shape of its subject rather than its cost.** There is no
+  push range in a working copy: a checkout is one state, and that check is
+  about the difference between two. What `ci` does carry is the checker's
+  own suite, so the instrument is tested by every run even though the
+  measurement needs a range to point at. It also runs FIRST in
+  `release.yml`, with every later job depending on it, because a tag push
+  does not run `ci.yml` at all.
+
+  **ONE PIECE OF IT IS AN OPERATOR ACTION AND IS NOT DONE, so it is
+  written here rather than left in a comment.** `ci.yml` is wired to the
+  merge-queue event, which is where the commit a squash merge composes —
+  out of a pull request's title and body — can be read before it lands.
+  That event only ever fires if somebody with repository settings enables
+  the merge queue on the default branch **and** marks this check
+  required. Until both are done, the trigger is a line that never runs,
+  which is exactly what a check that reads as coverage and is decoration
+  looks like. The pull-request job reads the title and the body directly,
+  so the surface is covered before publication either way; what the queue
+  adds is the composed commit itself. A setting nobody can make from
+  inside the repository belongs in a list somebody reads, and this is the
+  list this repository has.
+- **`make hooks` installs the same check as a pre-push hook, and it is opt
+  in.** A hook lives in a directory git does not clone, is skipped by
+  `--no-verify` and is absent on CI, so it is a convenience and never the
+  gate — anything that has to hold holds in the workflow. What it buys is
+  the failure arriving in a couple of seconds on the machine that wrote
+  the message. What lands in the hooks directory is a shim that runs the
+  tracked script, so it cannot go stale when that script changes; a copy
+  would, and the copy nobody re-installed is the one running when it
+  matters.
 - Builds use `-trimpath` and `CGO_ENABLED=0`, matching what the release
   will ship, so a release is not the first time those flags are
   exercised.
