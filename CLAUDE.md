@@ -256,6 +256,20 @@ YAML is a step nobody can run before pushing.
   measurement needs a range to point at. It also runs FIRST in
   `release.yml`, with every later job depending on it, because a tag push
   does not run `ci.yml` at all.
+
+  **ONE PIECE OF IT IS AN OPERATOR ACTION AND IS NOT DONE, so it is
+  written here rather than left in a comment.** `ci.yml` is wired to the
+  merge-queue event, which is where the commit a squash merge composes —
+  out of a pull request's title and body — can be read before it lands.
+  That event only ever fires if somebody with repository settings enables
+  the merge queue on the default branch **and** marks this check
+  required. Until both are done, the trigger is a line that never runs,
+  which is exactly what a check that reads as coverage and is decoration
+  looks like. The pull-request job reads the title and the body directly,
+  so the surface is covered before publication either way; what the queue
+  adds is the composed commit itself. A setting nobody can make from
+  inside the repository belongs in a list somebody reads, and this is the
+  list this repository has.
 - **`make hooks` installs the same check as a pre-push hook, and it is opt
   in.** A hook lives in a directory git does not clone, is skipped by
   `--no-verify` and is absent on CI, so it is a convenience and never the

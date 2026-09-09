@@ -21,6 +21,12 @@ name: CI
 # surface is covered before publication either way; what the queue adds
 # is the composed commit itself.
 #
+# A COMMENT IS NOT WHERE AN UNDONE ACTION LIVES. This one is read by
+# whoever next edits this file, which is nobody in particular, and the
+# thing it describes is a setting somebody has to go and make. It is
+# recorded in CLAUDE.md under the workflow table as well, which is the
+# list this repository has for work that cannot be done from inside it.
+#
 # THE ACTIVITY TYPES ARE NAMED, and `edited` is the reason. A pull
 # request's title and body are checked surfaces here, because a squash
 # merge composes its commit message out of them — and both can be
