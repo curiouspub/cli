@@ -502,6 +502,25 @@ function openTunnel(proxy, target, signal, sockets) {
 // v22.23.2 refuses, v24.19.0 refuses, v24.20.0 accepts, v26.3.0
 // accepts — and printed from inside both CI legs that failed on it.
 //
+// WHICH REAL PATHS PUT AN ADDRESS THERE, since a mechanism in a script
+// somebody is meant to audit has to be reachable by a user and not only
+// by a row. Three, and none of them needs a test harness:
+//
+//   1. CURIOUS_RELEASE_BASE_URL. releaseBase() sends it to checkScheme
+//      above, which returns on `https:` and asks nothing about the
+//      host — so https://[2001:db8::1]/dl is an accepted release
+//      origin, and it reaches TLS at sendGet or, behind a proxy, at
+//      secureThrough.
+//   2. THE PROXY VARIABLES — npm_config_https_proxy, npm_config_proxy,
+//      HTTPS_PROXY, https_proxy. proxyFor() permits exactly the http
+//      and https schemes and likewise asks nothing about the host, so
+//      an https proxy given by address reaches TLS at openTunnel. A
+//      proxy named by IP rather than by name is ordinary in a corporate
+//      network, which makes this the likeliest of the three.
+//   3. A REDIRECT, which is not the user's choice at all. The download
+//      host may answer with a Location the loop resolves and follows,
+//      and the per-hop checkScheme permits any https host.
+//
 // THE REPAIR CANNOT ACCEPT ANYTHING THE PLATFORM SHOULD REFUSE. It
 // runs only after the platform has already refused, only when the name
 // under check is itself an address, and it hands the comparison to
