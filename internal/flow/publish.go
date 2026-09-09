@@ -384,7 +384,7 @@ func renderPublished(render publishRenderer, resp *wire.DeployPublishResponse, n
 	if line, known := expiresLine(resp.ExpiresAt, now); known {
 		closing += "\n\n" + line
 	}
-	render.Step("%s", closing)
+	render.Step("%s", ui.Prose(closing))
 	render.Result("%s", publishedURL(resp.Subdomain))
 }
 
@@ -476,8 +476,8 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// promised would be wrong either way.
 		return ui.NewFailure(
 			"The server is asking for a pause.",
-			apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+deployID+".",
-			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".")
+			nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message)
 
 	case wire.CodeCapacityClosed:
 		// The door, which costs ExitServerClosed rather than 1 — the
@@ -485,8 +485,8 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// "this went wrong".
 		return ui.ServerClosed(ui.NewFailure(
 			closedHeadline,
-			apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+deployID+".",
-			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+"."))
+			nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message))
 
 	case wire.CodeDeployFailed, wire.CodeBadRequest:
 		return buildRefusedFailure(deployID)
@@ -494,18 +494,18 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	case wire.CodeNotFound:
 		return ui.NewFailure(
 			"The server doesn't know that deploy.",
-			apiErr.Message+"\n\nThe deploy is "+deployID+". That usually "+
+			"The deploy is "+deployID+". That usually "+
 				"means it has already\nexpired, or that it belongs to a different login "+
 				"from the one this run\nis using. "+nothingDeployed,
-			"Run `curious deploy` again to make a fresh one.")
+			"Run `curious deploy` again to make a fresh one.").Quoting(apiErr.Message)
 
 	case wire.CodeMaintenance:
 		// The kill switch. The build is fine and the archive got there;
 		// the service simply is not taking this step right now.
 		return ui.ServerClosed(ui.NewFailure(
 			"curious.pub isn't giving out addresses right now.",
-			apiErr.Message+"\n\n"+nothingDeployed,
-			"Try again a little later."))
+			nothingDeployed,
+			"Try again a little later.").Quoting(apiErr.Message))
 
 	case wire.CodeInternal:
 		// NO RETRY ADVICE. The server's own message for the case this
@@ -515,10 +515,10 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// printed directly above it.
 		return ui.NewFailure(
 			"The server couldn't finish the deploy.",
-			apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+
+			nothingDeployed+"\n\nThe deploy is "+
 				deployID+".",
 			"There is nothing to fix at this end and nothing here worth retrying.\n"+
-				"If it keeps happening, please get in touch.")
+				"If it keeps happening, please get in touch.").Quoting(apiErr.Message)
 	}
 
 	// Routed to a stop with no copy of its own, or a code this build
@@ -526,10 +526,10 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.NewFailure(
 		"The server wouldn't give this deploy an address.",
-		apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+
+		nothingDeployed+"\n\nThe deploy is "+
 			deployID+".",
 		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
-			"help — this build may be older than the server.")
+			"help — this build may be older than the server.").Quoting(apiErr.Message)
 }
 
 // buildRefusedFailure is what a deploy the server will not take ends the
@@ -599,10 +599,10 @@ func publishNotConfirmedFailure(deployID string) error {
 func publishUnansweredFailure(err error, deployID string) error {
 	return ui.NewFailure(
 		"curious didn't hear back after asking for the deploy's address.",
-		err.Error()+"\n\nThe deploy may or may not have got one — curious cannot "+
+		"The deploy may or may not have got one — curious cannot "+
 			"tell whether\nthe request arrived, and it does not ask twice, because "+
 			"asking again is\nnot a way of finding out. It never learned the address "+
 			"either: that\narrives in the answer that did not come.\n\nThe deploy is "+
 			deployID+".",
-		"Run `curious deploy` again when the connection is back.")
+		"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 }

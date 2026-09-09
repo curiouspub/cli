@@ -32,6 +32,24 @@ type Failure struct {
 	What string
 	Why  string
 	Next string
+
+	// Detail is what SOMEBODY ELSE said — a server's own sentence, an
+	// error's own text — and it is a field rather than something a
+	// caller joins into Why because of what the renderer can then do
+	// with it.
+	//
+	// Prose has layout: a Why is paragraphs, and its line breaks are
+	// this program's. A quotation has none: every byte of it is content,
+	// including a line break, which is why Detail is escaped WHOLE and
+	// Why is escaped per line. Joined into one string by the caller the
+	// two are indistinguishable, and a server sentence carrying a
+	// newline could add a line that reads as ours — a second paragraph
+	// in this program's voice, written by the far end.
+	//
+	// It renders FIRST, after the headline, because that is where every
+	// call site already put it: the server says what happened and this
+	// program says what it means.
+	Detail string
 }
 
 // Error makes a Failure travel as an error, so a check deep in a flow
@@ -59,6 +77,25 @@ func (f *Failure) Error() string { return f.What }
 // not: the third is the only one the reader can act on.
 func NewFailure(what, why, next string) *Failure {
 	return &Failure{What: what, Why: why, Next: next}
+}
+
+// Quoted is a failure whose middle paragraph is somebody else's sentence
+// and nothing of ours — the commonest shape by far, because where the
+// server knows something this client does not, its words are the only
+// thing that carries it.
+func Quoted(what, detail, next string) *Failure {
+	return &Failure{What: what, Detail: detail, Next: next}
+}
+
+// Quoting returns the failure with somebody else's sentence attached.
+//
+// It is a method rather than a fourth parameter so that the ordinary
+// case — three paragraphs this program wrote — stays a three-argument
+// call, and so the quotation is visible as a quotation at the call site
+// rather than as one more string among four.
+func (f *Failure) Quoting(detail string) *Failure {
+	f.Detail = detail
+	return f
 }
 
 // THE TWO WORKED EXAMPLES USED TO LIVE HERE, and where they went is
@@ -186,20 +223,61 @@ func (u *UI) renderFailure(f *Failure) string {
 	// what this used to look like. Styling is applied after, so the two
 	// escape sequences this program emits on purpose are the only ones
 	// that reach the stream.
-	parts := make([]string, 0, 3)
-	if f.What != "" {
-		parts = append(parts, u.styled(sanitizeLines(f.What)))
-	}
-	if f.Why != "" {
-		parts = append(parts, sanitizeLines(f.Why))
-	}
-	if f.Next != "" {
-		parts = append(parts, sanitizeLines(f.Next))
-	}
+	parts := f.Paragraphs()
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, "\n\n") + "\n"
+	// BY POSITION, NOT BY VALUE. Asking whether a paragraph EQUALS the
+	// quotation gets the right answer for the quotation and the wrong one
+	// for anything that happens to read the same: a Why identical to a
+	// Detail was escaped whole and lost its layout. Paragraphs drops
+	// empties, so the quotation's index is computed the same way.
+	quoted := -1
+	if f.Detail != "" {
+		if f.What != "" {
+			quoted = 1
+		} else {
+			quoted = 0
+		}
+	}
+	rendered := make([]string, 0, len(parts))
+	for i, part := range parts {
+		switch {
+		case i == 0 && f.What != "":
+			rendered = append(rendered, u.styled(sanitizeLines(part)))
+		case i == quoted:
+			// WHOLE, newline included. See the field.
+			rendered = append(rendered, Sanitize(part))
+		default:
+			rendered = append(rendered, sanitizeLines(part))
+		}
+	}
+	return strings.Join(rendered, "\n\n") + "\n"
+}
+
+// Paragraphs is the failure's parts in the order they are shown, empties
+// dropped. It is EXPORTED because it is the only honest way for anything
+// outside this package to know what a failure says.
+//
+// A test that joins What, Why and Next has reconstructed the rendering
+// rather than read it, and a reconstruction drifts: this one did, the
+// day a fourth part arrived, and it went on reporting that a server's
+// message was missing from output the shipped renderer was putting it
+// in. That is the same reason renderFailure exists at all — an assertion
+// about an artefact should come from the artefact — arriving one package
+// over. There is now one place that decides the order, and both the
+// renderer and anybody asking use it.
+func (f *Failure) Paragraphs() []string {
+	if f == nil {
+		return nil
+	}
+	parts := make([]string, 0, 4)
+	for _, part := range []string{f.What, f.Detail, f.Why, f.Next} {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
 }
 
 // internalWhat, internalWhy and internalNext are the copy for a failure

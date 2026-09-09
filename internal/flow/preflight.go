@@ -108,7 +108,7 @@ func RenderPreflight(p Prompter, report check.Report, elapsed time.Duration) err
 	// user fixes the hard stop, re-runs, and only then meets them. That
 	// is the round-trip this program exists to prevent.
 	for _, f := range warnings {
-		p.Step("%s", advisoryLines(f))
+		p.Step("%s", ui.Prose(advisoryLines(f)))
 	}
 
 	if len(hardStops) > 0 {

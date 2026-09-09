@@ -469,3 +469,133 @@ func TestTheProseFormEscapesToo(t *testing.T) {
 		})
 	}
 }
+
+// TestAQuotedSentenceCannotAddALineOfItsOwn is the Failure's half of the
+// rule the renderers already keep.
+//
+// A FAILURE IS PARAGRAPHS THIS PROGRAM WROTE, and one of them is a
+// quotation. The two used to arrive as one string a caller had joined,
+// which made them indistinguishable — and a server's sentence carrying a
+// line break could add a paragraph in this program's voice. Now the
+// quotation is a field: it is escaped whole, so it stays one line, while
+// the copy around it keeps its layout.
+//
+// REQUIRED MUTATION, run 2026-09-09: escape Detail per line, as the
+// prose around it is. Reds here on the line count, and on nothing else.
+func TestAQuotedSentenceCannotAddALineOfItsOwn(t *testing.T) {
+	const forged = "not built\n\nPublished. https://not-really.example"
+
+	u, _, errOut := testUI("", false, nil)
+	u.Fail(NewFailure(
+		"The build finished, and the server would not take the result.",
+		"Nothing has been deployed.\n\nThe deploy is deploy-1.",
+		"Run it again.").Quoting(forged))
+	got := errOut.String()
+
+	// THE QUOTATION IS ONE LINE. Both halves of the forged sentence have
+	// to arrive on it — asserted by finding the line rather than by
+	// counting paragraphs, because this program's own copy has
+	// paragraphs of its own and a count cannot say whose they are.
+	var quoted string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "not built") {
+			quoted = line
+			break
+		}
+	}
+	if quoted == "" {
+		t.Fatalf("the quotation is not in the rendering at all:\n%q", got)
+	}
+	if !strings.Contains(quoted, "Published.") {
+		t.Errorf("the quoted sentence was split across lines — the far end wrote "+
+			"a paragraph in this program's voice:\n  line: %q\n  whole: %q",
+			quoted, got)
+	}
+	if !strings.Contains(got, `not built\n\nPublished.`) {
+		t.Errorf("the quotation's line breaks were not escaped:\n%q", got)
+	}
+	// AND THE COPY AROUND IT KEEPS ITS LAYOUT, which is the whole reason
+	// the two are separate fields rather than one escaping rule.
+	if !strings.Contains(got, "Nothing has been deployed.\n\nThe deploy is deploy-1.") {
+		t.Errorf("this program's own paragraphs were escaped:\n%q", got)
+	}
+	// Inert, not deleted.
+	for _, want := range []string{"not built", "Published."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the quotation lost %q:\n%q", want, got)
+		}
+	}
+}
+
+// TestThisProgramsComposedProseKeepsItsParagraphs.
+//
+// THE DEFECT THIS ROW EXISTS FOR SHIPPED, and nothing here saw it. An
+// argument is escaped whole so that a server's sentence cannot add a
+// line — and this program's own closing narration is composed at run
+// time and passed as an argument, so every successful deploy printed
+// "Published.\n\nIt can take..." on ONE line with visible backslash-n.
+// The flow suite renders through a double that formats and does not
+// escape, so the mangling existed only in the shipped path.
+//
+// Prose is the mark that says whose words these are. Both halves are
+// asserted here: the mark keeps the layout, and its absence does not.
+//
+// REQUIRED MUTATION, run 2026-09-09: escape a Prose argument like a
+// string one — `case Prose: args[i] = Prose(Sanitize(string(v)))`. Reds
+// on the first half.
+func TestThisProgramsComposedProseKeepsItsParagraphs(t *testing.T) {
+	const composed = "Published.\n\nIt can take up to about a minute." + hostileCSI
+
+	u, _, marked := testUI("", false, nil)
+	u.Step("%s", Prose(composed))
+	got := marked.String()
+
+	if !strings.Contains(got, "Published.\n\nIt can take") {
+		t.Errorf("this program's own paragraphs were turned into text:\n%q", got)
+	}
+	// AND IT IS STILL INERT. Prose says whose words they are, not that
+	// they may drive a terminal.
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("a Prose argument carried a raw ESC to the terminal:\n%q", got)
+	}
+	if !strings.Contains(got, "[2Jafter") {
+		t.Errorf("the escape was dropped rather than rendered inert:\n%q", got)
+	}
+
+	// The other half: an unmarked string is still somebody else's, and
+	// its line breaks are still content.
+	u2, _, plain := testUI("", false, nil)
+	u2.Step("%s", composed)
+	if strings.Contains(plain.String(), "Published.\n\nIt can take") {
+		t.Errorf("an unmarked argument kept line breaks, so the mark means "+
+			"nothing:\n%q", plain.String())
+	}
+}
+
+// TestAParagraphThatMerelyREADSLikeTheQuotationKeepsItsLayout.
+//
+// The quotation used to be found by asking whether a paragraph EQUALS
+// Detail, which is the right answer for the quotation and the wrong one
+// for anything that happens to read the same — a Why identical to a
+// Detail was escaped whole and lost its paragraphs. It is found by
+// position now.
+//
+// REQUIRED MUTATION, run 2026-09-09: identify the quotation by value
+// again. Reds here, and on nothing else.
+func TestAParagraphThatMerelyREADSLikeTheQuotationKeepsItsLayout(t *testing.T) {
+	const same = "first\n\nsecond"
+
+	u, _, errOut := testUI("", false, nil)
+	u.Fail(NewFailure("What.", same, "Next.").Quoting(same))
+	got := errOut.String()
+
+	// The quotation is one line; the Why that reads the same is two
+	// paragraphs. Both appear, and they must not look alike.
+	if !strings.Contains(got, `first\n\nsecond`) {
+		t.Errorf("the quotation kept its line breaks:\n%q", got)
+	}
+	if !strings.Contains(got, "first\n\nsecond") {
+		t.Errorf("this program's own paragraph lost its layout because it read "+
+			"like the quotation:\n%q", got)
+	}
+}

@@ -555,17 +555,17 @@ func startFailure(err error) error {
 	if !errors.As(err, &apiErr) {
 		return ui.NewFailure(
 			"curious didn't hear back after asking the server to build.",
-			err.Error()+"\n\n"+buildMayBeRunning+" — curious cannot tell whether the\n"+
+			buildMayBeRunning+" — curious cannot tell whether the\n"+
 				"request arrived, and it does not ask twice: everything you would be\n"+
 				"waiting for arrives on the build log rather than in a second answer\n"+
 				"to this question.",
-			"Run `curious deploy` again when the connection is back.")
+			"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 	}
 
 	if apiErr.Code == wire.CodeMaintenance {
 		// The kill switch. The service declined; the project is fine, and
 		// the archive is already where it was going.
-		return ui.ServerClosed(ui.NewFailure(
+		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not building right now.",
 			apiErr.Message,
 			"Try again a little later."))
@@ -575,7 +575,7 @@ func startFailure(err error) error {
 	// table here: one would have a single column. What the reader needs
 	// is what the server said, and the contract is additive-only, so this
 	// build may be older than the code it is being shown.
-	return ui.NewFailure(
+	return ui.Quoted(
 		"The server wouldn't start the build.",
 		apiErr.Message,
 		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
@@ -587,12 +587,12 @@ func startFailure(err error) error {
 // decoded, and it will say the same thing next time.
 func streamRefusedFailure(apiErr *api.APIError) error {
 	if apiErr.Code == wire.CodeMaintenance {
-		return ui.ServerClosed(ui.NewFailure(
+		return ui.ServerClosed(ui.Quoted(
 			"curious.pub stopped sending the build log.",
 			apiErr.Message,
 			"Try again a little later."))
 	}
-	return ui.NewFailure(
+	return ui.Quoted(
 		"The server wouldn't send the build log.",
 		apiErr.Message,
 		"Run `curious deploy` again. If it keeps happening, please report it.")

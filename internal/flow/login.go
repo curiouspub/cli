@@ -451,7 +451,7 @@ func Login(ctx context.Context, deps LoginDeps) error {
 			// noise to somebody deploying their first site.
 			p.Step("%s", lastMessage)
 			if consecutiveRefusals >= unauthorizedFailuresBeforeHint && !cooldownHintShown {
-				p.Step("%s", cooldownHint)
+				p.Step("%s", ui.Prose(cooldownHint))
 				cooldownHintShown = true
 			}
 			p.Step("%s", escapeHatchLine)
@@ -527,13 +527,13 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 	case wire.CodeBadRequest:
 		return ui.NewFailure(
 			"curious sent something this server wouldn't accept.",
-			apiErr.Message+"\n\nSending it again would not go any better, so the run "+
+			"Sending it again would not go any better, so the run "+
 				"stopped here rather than spending another of your attempts.",
 			"Check that you are running a current version — `curious version` says\n"+
-				"which one — and please report this if it keeps happening.")
+				"which one — and please report this if it keeps happening.").Quoting(apiErr.Message)
 
 	case wire.CodeRateLimited:
-		return ui.NewFailure(
+		return ui.Quoted(
 			"Too many requests from here.",
 			apiErr.Message,
 			retryAdvice(apiErr.RetryAfter, now))
@@ -566,13 +566,13 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name, which is why
 		// the contract does not promise one for it.
-		return ui.ServerClosed(ui.NewFailure(
+		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not taking logins right now.",
 			apiErr.Message,
 			"Try again a little later. Nothing has been uploaded."))
 
 	case wire.CodeForbidden:
-		return ui.NewFailure(
+		return ui.Quoted(
 			"That login was refused.",
 			apiErr.Message,
 			"If you think this is wrong, please get in touch — there is nothing\n"+
@@ -601,7 +601,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 // nothing is broken here, the server simply said something newer than
 // this build.
 func unknownCodeFailure(apiErr *api.APIError) error {
-	return ui.NewFailure(
+	return ui.Quoted(
 		"curious couldn't finish logging you in.",
 		apiErr.Message,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
@@ -647,7 +647,7 @@ func retryAdvice(retryAfter time.Duration, now time.Time) string {
 // the step ever starts spending, this copy becomes a lie and no suite on
 // either side goes red. Change one end, come to the other.
 func writeFailure(err error) error {
-	return ui.NewFailure(
+	return ui.Quoted(
 		"Logged in, but the login could not be saved.",
 		err.Error(),
 		"Check that the folder above exists, is writable and has space, then\n"+
