@@ -618,6 +618,24 @@ function statusError(status, url) {
       : 'Nothing was downloaded.'));
 }
 
+// The certificate failures whose codes carry no CERT in the name, so
+// the shape rule in translate cannot see them.
+//
+// UNABLE_TO_VERIFY_LEAF_SIGNATURE is what a host that serves its own
+// certificate and nothing beside it produces — the commonest
+// arrangement there is, and exactly what a TLS-inspecting proxy looks
+// like from here. Unclassified it read as a fault worth trying again,
+// so the one failure with a specific way out of it got three attempts
+// and then a message about the network.
+//
+// EVERY ENTRY IS A CODE THIS PACKAGE'S OWN SUITE PRODUCES, from a
+// fixture, rather than a list copied out of the library's headers: a
+// code nobody has seen is a branch nobody has run.
+const CERTIFICATE_CODES = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+]);
+
 // translate turns whatever the transport produced into something a
 // person can read, and leaves anything already decided alone.
 //
@@ -640,10 +658,16 @@ function translate(err, signal) {
   // failures against real servers while this was written; keying on a
   // code nobody has seen is how a branch that never runs gets written.
   if (typeof err.code === 'string' &&
-      (err.code.includes('CERT') || err.code.startsWith('ERR_TLS'))) {
+      (CERTIFICATE_CODES.has(err.code) ||
+       err.code.includes('CERT') || err.code.startsWith('ERR_TLS'))) {
     return new Refused(
       'The TLS certificate the download host presented could not be verified:\n\n' +
-      `  ${err.message}\n\n` +
+      // THE CODE IS PRINTED BESIDE THE SENTENCE. It is the half a person
+      // can search for and the half a row can assert on: a message can
+      // be reworded by a platform upgrade, and a row that matched only
+      // the word "certificate" would pass against a different failure
+      // entirely.
+      `  ${err.code}: ${err.message}\n\n` +
       'If you are behind a proxy that inspects TLS, point NODE_EXTRA_CA_CERTS\n' +
       'at your organisation\'s certificate authority file and install again.\n' +
       'curious will not skip this check.');

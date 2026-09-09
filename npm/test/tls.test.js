@@ -94,3 +94,46 @@ test('a rejected certificate is not tried again three times', async (t) => {
   // seconds of a person wondering what is happening.
   assert.strictEqual(server.connections.length, 1);
 });
+
+test('a certificate whose issuer is nowhere still names the way through', async (t) => {
+  // THE COMMONEST CERTIFICATE FAILURE OF ALL, and the one the classifier
+  // could not see. A host that serves its own certificate and nothing
+  // beside it leaves the client with a signature it cannot check against
+  // anything — which is what an inspecting proxy looks like from here far
+  // more often than a chain does — and the platform reports that with a
+  // code carrying no CERT in its name.
+  //
+  // Unclassified, it read as a fault worth trying again: three attempts,
+  // three waits, and then a message about the network with the one
+  // variable a person can act on nowhere in it. THE ROW ASSERTS THE CODE
+  // rather than the shape of the failure, because a row that asked only
+  // for the word "certificate" passes against a different one.
+  const trusted = h.authority('issuer-known');
+  const caFile = h.writeCA(t, trusted.caPem);
+  const stranger = h.authority('issuer-nowhere');
+
+  const server = await h.serveAssets(t, {
+    tlsCert: { certPem: stranger.leafPem, keyPem: stranger.keyPem },
+  });
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+  const run = await h.runInstall(t, dir, { base: server.origin, ca: caFile, ...TARGET });
+
+  assert.notStrictEqual(run.code, 0, run.output);
+  assert.match(run.output, /UNABLE_TO_VERIFY_LEAF_SIGNATURE/);
+  assert.match(run.output, /NODE_EXTRA_CA_CERTS/);
+  // A certificate nobody can verify will not verify in a second's time,
+  // and the count is where "this was classified" is observable.
+  assert.strictEqual(server.connections.length, 1,
+    `the same certificate was fetched ${server.connections.length} times`);
+  assert.strictEqual(h.installedBinary(dir, 'curious'), null);
+  assert.deepStrictEqual(h.leftovers(dir), []);
+
+  // THE POSITIVE CONTROL, and it is the same server with its issuer put
+  // where the client can see it: the leaf alone, trusted through the
+  // authority that signed it, installs.
+  const ownCA = h.writeCA(t, stranger.caPem);
+  const ok = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+  const installed = await h.runInstall(t, ok, { base: server.origin, ca: ownCA, ...TARGET });
+  assert.strictEqual(installed.code, 0, installed.output);
+  assert.deepStrictEqual(h.installedBinary(ok, 'curious'), h.BINARY_BODY);
+});

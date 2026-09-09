@@ -234,6 +234,14 @@ function authority(label, extraHosts = []) {
     // The chain, leaf first: a client that trusts the root can build a
     // path to the leaf without fetching anything.
     certPem: leaf + root,
+    // THE LEAF ON ITS OWN, and it fails DIFFERENTLY. A chain a client
+    // cannot trust ends at a root it can see and refuse; a leaf with no
+    // issuer beside it ends at a certificate whose signer is simply not
+    // there, and the platform says so with a different code. It is also
+    // the commoner arrangement in the wild — a server configured with
+    // its certificate and nothing else — so it is the shape a row about
+    // the honest way through has to run on.
+    leafPem: leaf,
     keyPem: leafKey.privateKey.export({ type: 'pkcs8', format: 'pem' }),
   };
 }
