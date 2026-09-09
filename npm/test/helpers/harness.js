@@ -274,7 +274,7 @@ function writeCA(t, pem) {
 // would reach the first address, and the first address is watched.
 function serveProxy(t, {
   dialPort = null, respondWith = null, respondBody = null, tlsCert = null,
-  tunnelHead = null,
+  tunnelHead = null, host = '127.0.0.1',
 } = {}) {
   const connects = [];
   // EVERY SOCKET THIS PROXY OPENS, tracked. A tunnel is two sockets and
@@ -358,12 +358,14 @@ function serveProxy(t, {
 
   t.after(() => shutdown(server, open));
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(0, host, () => {
       const { port } = server.address();
       resolve({
         port,
         connects,
-        url: `${tlsCert ? 'https' : 'http'}://127.0.0.1:${port}`,
+        // An address literal is bracketed in a URL and bare everywhere
+        // else, which is the whole subject of more than one row here.
+        url: `${tlsCert ? 'https' : 'http'}://${net.isIPv6(host) ? `[${host}]` : host}:${port}`,
       });
     });
   });

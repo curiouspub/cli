@@ -442,14 +442,16 @@ function openTunnel(proxy, target, signal, sockets) {
     if (proxy.url.username) {
       headers['proxy-authorization'] = proxyAuthorization(proxy);
     }
-    const request = module.request({
+    // A proxy may itself be reached at an address literal and speak TLS,
+    // which is the same identity check one connection earlier.
+    const request = module.request(withIdentity({
       host: unbracket(proxy.url.hostname),
       port: defaultPort(proxy.url),
       method: 'CONNECT',
       path: authority,
       headers,
       signal,
-    });
+    }, unbracket(proxy.url.hostname)));
     request.on('socket', (socket) => sockets.add(socket));
 
     // THE STATUS IS CHECKED. Without this a refusal surfaces as a
@@ -482,6 +484,61 @@ function openTunnel(proxy, target, signal, sockets) {
   });
 }
 
+// ADDRESS LITERALS AND THE PLATFORM'S IDENTITY CHECK.
+//
+// A host may be an address rather than a name, and a certificate says
+// so with an IP entry rather than a DNS one. Between Node v22.23.2 and
+// v24.20.0 the platform cannot make that comparison for an IPv6
+// literal: checkServerIdentity normalises the host through IDNA before
+// deciding whether it is an address (v22.23.2 lib/tls.js:408 and :430),
+// and domainToASCII of an IPv6 literal is the empty string — so the
+// certificate's address entries are never consulted, the literal is
+// compared against the DNS names instead, and that question always
+// answers no. Fixed upstream in v24.20.0 (lib/tls.js:434-441, whose
+// comment says exactly this). The v22 line still carries it at
+// v22.23.2, and v22 is this package's declared floor.
+//
+// Measured on one machine over five builds — v22.22.3 accepts,
+// v22.23.2 refuses, v24.19.0 refuses, v24.20.0 accepts, v26.3.0
+// accepts — and printed from inside both CI legs that failed on it.
+//
+// THE REPAIR CANNOT ACCEPT ANYTHING THE PLATFORM SHOULD REFUSE. It
+// runs only after the platform has already refused, only when the name
+// under check is itself an address, and it hands the comparison to
+// OpenSSL's own iPAddress matching rather than doing string work here
+// — the same comparison the fixed platform makes. On a version without
+// the defect it never runs, because there is no refusal to reconsider.
+function addressIdentity(host) {
+  if (!net.isIP(host)) {
+    return null;
+  }
+  return (name, cert) => {
+    const refusal = tls.checkServerIdentity(name, cert);
+    if (!refusal || !net.isIP(name) || !cert || !cert.raw) {
+      return refusal;
+    }
+    try {
+      return new crypto.X509Certificate(cert.raw).checkIP(name) ? undefined : refusal;
+    } catch {
+      // A certificate this platform will not parse is not a reason to
+      // overrule it. The refusal stands.
+      return refusal;
+    }
+  };
+}
+
+// withIdentity sets the option only when there is one to set. Node
+// installs its default by spreading a defaults object, so a key that is
+// present and undefined REPLACES the default with nothing and the
+// handshake throws where it should have checked.
+function withIdentity(options, host) {
+  const identity = addressIdentity(host);
+  if (identity) {
+    options.checkServerIdentity = identity;
+  }
+  return options;
+}
+
 // secureThrough wraps a tunnel in TLS for the real target.
 //
 // THE NAME IS NOT OPTIONAL AND IT IS NOT ALWAYS A NAME. Without a
@@ -494,7 +551,7 @@ function openTunnel(proxy, target, signal, sockets) {
 function secureThrough(tunnel, target, sockets) {
   return new Promise((resolve, reject) => {
     const host = unbracket(target.hostname);
-    const options = { socket: tunnel, host };
+    const options = withIdentity({ socket: tunnel, host }, host);
     if (!net.isIP(host)) {
       options.servername = host;
     }
@@ -525,6 +582,10 @@ function sendGet(url, signal, sockets, socket) {
       const agent = new https.Agent({ keepAlive: false, maxSockets: 1 });
       agent.createConnection = () => socket;
       options.agent = agent;
+    } else if (url.protocol === 'https:') {
+      // The direct route reaches TLS here rather than in secureThrough,
+      // and an address literal is as legal in the base URL as a name.
+      withIdentity(options, unbracket(url.hostname));
     }
     const request = module.request(url, options);
     request.on('socket', (s) => sockets.add(s));

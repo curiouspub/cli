@@ -210,7 +210,10 @@ function issue({ subject, issuer, subjectKey, issuerKey, isCA, hosts }) {
 // it can mint a certificate for a name that does. Nothing resolves such
 // a name on this machine, which is the point: only a proxy can reach
 // it, so the route taken is observable rather than inferred.
-function authority(label, extraHosts = []) {
+// hosts, when given, REPLACES the default set rather than adding to it —
+// a row about a certificate that names somewhere else needs a leaf that
+// does not quietly also name here.
+function authority(label, extraHosts = [], hosts = null) {
   const rootKey = newKeyPair();
   const leafKey = newKeyPair();
   const rootName = `curious test root ${label}`;
@@ -227,7 +230,7 @@ function authority(label, extraHosts = []) {
     subjectKey: leafKey,
     issuerKey: rootKey,
     isCA: false,
-    hosts: ['localhost', '127.0.0.1', '::1', ...extraHosts],
+    hosts: hosts || ['localhost', '127.0.0.1', '::1', ...extraHosts],
   });
   return {
     caPem: root,

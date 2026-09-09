@@ -137,3 +137,49 @@ test('a certificate whose issuer is nowhere still names the way through', async 
   assert.strictEqual(installed.code, 0, installed.output);
   assert.deepStrictEqual(h.installedBinary(ok, 'curious'), h.BINARY_BODY);
 });
+
+test('an address literal on the direct route is checked against the certificate', async (t) => {
+  // NO PROXY, so the identity check happens where the request is made
+  // rather than on a tunnel somebody else opened. It is a second call
+  // site asking the same question, and the platform defect install.js
+  // repairs — an IPv6 literal never reaching the certificate's address
+  // entries, between Node v22.23.2 and v24.20.0 — is in the question
+  // rather than in either call site. A repair at one of them leaves
+  // half this package's routes broken on its own declared floor.
+  const ca = h.authority('direct-literal');
+  const caFile = h.writeCA(t, ca.caPem);
+  const server = await h.serveAssets(t, { tlsCert: ca, host: '::1' });
+  assert.ok(server.origin.startsWith('https://[::1]:'), server.origin);
+
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+  const run = await h.runInstall(t, dir, { base: server.origin, ca: caFile, ...TARGET });
+
+  assert.strictEqual(run.code, 0, run.output);
+  // Bracketed in the URL, bare at the certificate, and never a name.
+  assert.strictEqual(server.requests[0].servername, null);
+  assert.deepStrictEqual(h.installedBinary(dir, 'curious'), h.BINARY_BODY);
+});
+
+test('a certificate that names somewhere else is refused at an address literal too', async (t) => {
+  // THE OTHER SIDE OF THE REPAIR, and the reason it needs one.
+  // install.js supplies its own identity check for an address literal,
+  // because the platform between v22.23.2 and v24.20.0 cannot make that
+  // comparison — and a supplied identity check is the single hook that
+  // can turn verification off without ever naming rejectUnauthorized,
+  // which is what the grep row above watches for. The absence row
+  // cannot see this; only running it can.
+  //
+  // So: a certificate carrying no entry for this address, presented at
+  // this address, on the route the repair sits on.
+  const ca = h.authority('elsewhere', [], ['other.example']);
+  const caFile = h.writeCA(t, ca.caPem);
+  const server = await h.serveAssets(t, { tlsCert: ca, host: '::1' });
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+
+  const run = await h.runInstall(t, dir, { base: server.origin, ca: caFile, ...TARGET });
+
+  assert.notStrictEqual(run.code, 0, run.output);
+  assert.match(run.output, /certificate/i);
+  assert.strictEqual(h.installedBinary(dir, 'curious'), null);
+  assert.deepStrictEqual(h.leftovers(dir), []);
+});

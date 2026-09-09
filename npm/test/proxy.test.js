@@ -16,12 +16,20 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { X509Certificate } = require('node:crypto');
 
 const h = require('./helpers/harness');
 
 const V = h.VERSION;
 const ASSET = `curious_${V}_linux_amd64.gz`;
 const TARGET = { platform: 'linux', arch: 'x64' };
+
+// The leaf on its own. authority() hands back the chain, leaf first,
+// and what a row wants to read is the certificate the server presents.
+function leafOf(ca) {
+  const end = '-----END CERTIFICATE-----';
+  return new X509Certificate(ca.certPem.slice(0, ca.certPem.indexOf(end) + end.length));
+}
 
 // A trusted https asset server, a watched address the URL will name,
 // and a CONNECT proxy that joins the two.
@@ -233,6 +241,15 @@ test('an address literal is bracketed for the proxy and bare for the certificate
   const proxy = await h.serveProxy(t, { dialPort: assets.port });
   const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
 
+  // WHAT THE CERTIFICATE OFFERS, stated rather than assumed. The
+  // address is an IP entry and it is not a name, in either spelling —
+  // so an install that succeeds here succeeded on an ADDRESS
+  // comparison. There is no DNS entry it could have matched instead,
+  // which is what makes the rest of this row about the representation
+  // rather than about the certificate.
+  assert.match(leafOf(ca).subjectAltName, /IP Address:0:0:0:0:0:0:0:1/);
+  assert.ok(!/DNS:\[?::1/.test(leafOf(ca).subjectAltName), leafOf(ca).subjectAltName);
+
   const run = await h.runInstall(t, dir, {
     base: 'https://[::1]:9/', ca: caFile, ...TARGET,
     env: { HTTPS_PROXY: proxy.url },
@@ -244,6 +261,35 @@ test('an address literal is bracketed for the proxy and bare for the certificate
   // host and a port.
   assert.strictEqual(run.code, 0, run.output);
   assert.strictEqual(proxy.connects[0].target, '[::1]:9');
+  // AND NOTHING WENT OVER AS A NAME. The platform refuses an address
+  // as a server name, so the handshake carries no SNI at all and the
+  // certificate check had the bare address and nothing else to work
+  // with. Between them the two assertions pin both spellings: bracketed
+  // in the CONNECT line, bare at the certificate, and never a name.
+  assert.strictEqual(assets.requests[0].servername, null);
+  assert.deepStrictEqual(h.installedBinary(dir, 'curious'), h.BINARY_BODY);
+});
+
+test('a proxy at an address literal is checked the same way', async (t) => {
+  // The identity check one connection earlier. A proxy may be reached
+  // at an address and speak TLS itself, and the platform defect this
+  // package works around is in the check, not in who is being checked —
+  // so the route to the proxy needs the repair as much as the route
+  // through it.
+  const ca = h.authority('proxy-literal');
+  const caFile = h.writeCA(t, ca.caPem);
+  const assets = await h.serveAssets(t, { tlsCert: ca });
+  const proxy = await h.serveProxy(t, { dialPort: assets.port, tlsCert: ca, host: '::1' });
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+
+  assert.ok(proxy.url.startsWith('https://[::1]:'), proxy.url);
+  const run = await h.runInstall(t, dir, {
+    base: `https://127.0.0.1:${assets.port}`, ca: caFile, ...TARGET,
+    env: { HTTPS_PROXY: proxy.url },
+  });
+
+  assert.strictEqual(run.code, 0, run.output);
+  assert.strictEqual(proxy.connects.length, 1);
   assert.deepStrictEqual(h.installedBinary(dir, 'curious'), h.BINARY_BODY);
 });
 
