@@ -939,23 +939,43 @@ func TestEveryPublishFailureLeavesTheArchiveRemoved(t *testing.T) {
 // A wait that was cut off from outside
 // -------------------------------------------------------------------
 
-// runWith drives a whole deploy on a context the row owns, which is what
-// a row about cancellation needs and t.Context cannot give it.
-func runWith(t *testing.T, ctx context.Context, run *deployRun) (*Handoff, error) {
-	t.Helper()
-	return Deploy(ctx, run.deps)
+// waitingForever is a publish that answers "not ready" every time, and
+// says when it has been asked.
+type waitingForever struct {
+	asks  int
+	asked chan struct{}
 }
 
-// waitingForever scripts a publish that answers "not ready" every time,
-// with a pace long enough that the run is certainly inside the sleep
-// when the row does something to its context.
-func waitingForever(t *testing.T) *deployRun {
+func (w *waitingForever) DeployPublish(context.Context, string) (*wire.DeployPublishResponse, error) {
+	w.asks++
+	if w.asked != nil {
+		close(w.asked)
+		w.asked = nil
+	}
+	return nil, &api.APIError{Code: wire.CodeDeployNotReady, Message: "still building"}
+}
+
+// stoppedFromOutside drives the wait with a context that is ALREADY over,
+// and returns what the run ends as.
+//
+// NOT A WHOLE RUN, AND NOT A CLOCK RACE. The first shape of these two
+// rows gave a whole deploy a 150ms deadline and asserted publish copy —
+// which held here and, on the second Windows run it ever had, killed the
+// CREATE instead and asserted the wrong step's words. A wall-clock
+// deadline racing a multi-step run is a margin nobody measured, which is
+// the thing this project has a whole task about. The context is settled
+// before the call, so both arms are decided rather than timed.
+func stoppedFromOutside(t *testing.T, ctx context.Context) (*waitingForever, error) {
 	t.Helper()
-	run := publishRun(t)
-	run.script.publishOutcome = fails(http.StatusConflict, wire.CodeDeployNotReady,
-		`this deploy is "building" and cannot be given an address yet`)
-	run.deps.PublishRetryInterval = time.Minute
-	return run
+	client := &waitingForever{}
+	_, err := publishDeploy(ctx, publishDeps{
+		Client:        client,
+		DeployID:      "deploy-1",
+		Render:        silentRenderer{},
+		Now:           func() time.Time { return fixedNowLocal },
+		RetryInterval: time.Minute,
+	})
+	return client, err
 }
 
 // TestACancelledRunSaysCancelledAndClaimsNothingAboutTheServer.
@@ -972,23 +992,15 @@ func waitingForever(t *testing.T) *deployRun {
 // exit code (1, want 130) and on the copy, which starts naming a window
 // nobody waited out.
 func TestACancelledRunSaysCancelledAndClaimsNothingAboutTheServer(t *testing.T) {
-	run := waitingForever(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	go func() {
-		// Long enough for the run to reach the wait, short enough to be
-		// a test. The row asserts the run was actually in the retry loop
-		// below, so a cancellation that landed early cannot pass.
-		time.Sleep(150 * time.Millisecond)
-		cancel()
-	}()
+	cancel()
 
-	_, err := runWith(t, ctx, run)
+	client, err := stoppedFromOutside(t, ctx)
 	if err == nil {
-		t.Fatal("a cancelled run reported success")
+		t.Fatal("a cancelled wait reported success")
 	}
-	if run.script.publishes == 0 {
-		t.Fatalf("the cancellation landed before the publish was ever asked, so "+
-			"this row is not about the retry wait (%d asks)", run.script.publishes)
+	if client.asks == 0 {
+		t.Fatal("the wait was never entered, so this row is not about it")
 	}
 
 	text, code := renderedBytes(t, err)
@@ -1006,8 +1018,6 @@ func TestACancelledRunSaysCancelledAndClaimsNothingAboutTheServer(t *testing.T) 
 			t.Errorf("the cancellation copy claims %q:\n%s", forbidden, text)
 		}
 	}
-	// And the cause survives, so nothing downstream has to guess which
-	// of the two arms it was.
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("ctx.Err() was discarded: %v", err)
 	}
@@ -1020,14 +1030,18 @@ func TestACancelledRunSaysCancelledAndClaimsNothingAboutTheServer(t *testing.T) 
 // control for the row above: the copy that was wrong for a cancellation
 // is exactly right here, so it must still be produced.
 func TestADeadlineOnTheRunStillReadsAsATimeout(t *testing.T) {
-	run := waitingForever(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	// A deadline in the past: already exceeded, with no waiting.
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	_, err := runWith(t, ctx, run)
+	client, err := stoppedFromOutside(t, ctx)
 	if err == nil {
-		t.Fatal("a run whose deadline passed reported success")
+		t.Fatal("a wait whose deadline had passed reported success")
 	}
+	if client.asks == 0 {
+		t.Fatal("the wait was never entered, so this row is not about it")
+	}
+
 	text, code := renderedBytes(t, err)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1 — a deadline is a failure, not a "+
