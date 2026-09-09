@@ -226,9 +226,10 @@ func joinedStop(email string, resetsAt, now time.Time) *ui.Failure {
 func signupFailedStop(err error, resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
 		"That didn't get you onto the list.",
-		serverSaid(err)+"\n\n"+uploadedNothing,
+		uploadedNothing,
 		"Email "+supportAddress+" and we'll add you by hand.\nRun `curious deploy` "+
-			"again "+afterTheReset(resetsAt, now)+".")
+			"again "+afterTheReset(resetsAt, now)+".").
+		Quoting(serverSaid(err))
 }
 
 // serverSaid prefers the server's own message and falls back to the

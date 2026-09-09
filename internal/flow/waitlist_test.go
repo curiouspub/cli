@@ -464,11 +464,15 @@ func TestEveryStopOnThisPathNamesAnAction(t *testing.T) {
 		{"no reset time to name", declinedStop(time.Time{}, fixedNowLocal)},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			if row.f.What == "" || row.f.Why == "" || row.f.Next == "" {
-				t.Errorf("half-filled failure (what=%q why=%q next=%q)",
-					row.f.What, row.f.Why, row.f.Next)
+			// The middle paragraph may be OURS or the far end's; what
+			// must not happen is a stop with no explanation at all.
+			if row.f.What == "" || (row.f.Why == "" && row.f.Detail == "") ||
+				row.f.Next == "" {
+				t.Errorf("half-filled failure (what=%q detail=%q why=%q next=%q)",
+					row.f.What, row.f.Detail, row.f.Why, row.f.Next)
 			}
-			whole := strings.Join([]string{row.f.What, row.f.Why, row.f.Next}, "\n")
+			// The package's own assembly, not a copy of it.
+			whole := strings.Join(row.f.Paragraphs(), "\n")
 			// A person whose deploy stopped has no way of knowing, from
 			// out here, whether their files went anywhere.
 			if !strings.Contains(whole, "Nothing has been uploaded") {

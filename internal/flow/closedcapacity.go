@@ -138,12 +138,17 @@ func countOf(n int, unit string) string {
 // back. The login flow's own stop calls this rather than carrying a
 // second wording of the same event.
 func closedCapacityFailure(serverMessage string, resetsAt, now time.Time) *ui.Failure {
-	why := serverMessage
-	if why == "" {
+	// THE SERVER'S SENTENCE IS A QUOTATION, and ours is the fallback for
+	// when there isn't one — two different things that used to share one
+	// local called `why`, which is how a laundered value gets past a
+	// sweep looking for `apiErr.Message`.
+	why := ""
+	if serverMessage == "" {
 		why = capacityUsedUp
 	}
 	return ui.NewFailure(
 		closedHeadline,
 		why,
-		"Try again "+afterTheReset(resetsAt, now)+". "+uploadedNothing)
+		"Try again "+afterTheReset(resetsAt, now)+". "+uploadedNothing).
+		Quoting(serverMessage)
 }
