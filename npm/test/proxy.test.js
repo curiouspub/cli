@@ -192,6 +192,40 @@ test('a failing credentialled proxy is named without its password', async (t) =>
   assert.match(run.output, /\*\*\*/);
 });
 
+test('a proxy credential nobody can decode names the proxy, not the network', async (t) => {
+  // A percent sign that begins an escape and does not finish one, which
+  // is what a hand-edited or mistyped proxy address looks like. Reading
+  // it throws, and an unclassified throw is a fault worth trying again —
+  // so a person with a typo in their proxy password was told three times
+  // over that their connection was bad, and never that a proxy was in
+  // play at all.
+  //
+  // THE REFUSAL IS PART OF THE PROXY CONTRACT this package already
+  // states: a configured proxy is never quietly ignored, and a failure
+  // says which variable was read and what value was used.
+  const password = 'oh%zz';
+  const s = await tunnelled(t);
+  const run = await h.runInstall(t, s.dir, {
+    base: s.base, ca: s.ca, ...TARGET,
+    env: { HTTPS_PROXY: `http://someone:${password}@127.0.0.1:${s.proxy.port}` },
+  });
+
+  assert.notStrictEqual(run.code, 0, run.output);
+  // Masked, in the one place a credential could actually leak: the
+  // success path prints nothing at all.
+  h.assertNoSecretIn(run.output, password, /HTTPS_PROXY/);
+  assert.match(run.output, /\*\*\*/);
+  assert.match(run.output, /proxy/i);
+  // NOT A NETWORK FAULT AND NOT TRIED AGAIN. A password does not become
+  // readable on the second attempt.
+  assert.ok(!/\d+ attempts/.test(run.output),
+    `an unreadable credential was reported as a network fault:\n${run.output}`);
+  assert.strictEqual(s.proxy.connects.length, 0);
+  assert.strictEqual(s.direct.arrivals.length, 0);
+  assert.strictEqual(s.assets.requests.length, 0);
+  assert.strictEqual(h.installedBinary(s.dir, 'curious'), null);
+});
+
 test('an address literal is bracketed for the proxy and bare for the certificate', async (t) => {
   const ca = h.authority('literal');
   const caFile = h.writeCA(t, ca.caPem);

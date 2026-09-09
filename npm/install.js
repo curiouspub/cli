@@ -400,6 +400,36 @@ function proxyFor(url) {
   return { name: configured.name, url: parsed };
 }
 
+// proxyAuthorization renders the credentials an address carries into the
+// header the proxy expects.
+//
+// A CREDENTIAL THAT CANNOT BE READ IS THE PROXY'S PROBLEM AND NOT THE
+// NETWORK'S. Percent-decoding throws on a half-written escape — a
+// mistyped password, an address edited by hand — and a throw nobody
+// classified is a fault worth trying again, so a person with a typo in
+// their proxy password was told three times over to check their
+// connection, with the proxy named nowhere in it. This package's own
+// rule is that a configured proxy is never quietly ignored and that a
+// failure says which variable was read; an unreadable password is that
+// rule's case exactly.
+//
+// The value is never in the message. maskProxy keeps the username,
+// because a person reading a failure needs to recognise which setting
+// is in play, and replaces the half that must not be printed.
+function proxyAuthorization(proxy) {
+  let user;
+  let secret;
+  try {
+    user = decodeURIComponent(proxy.url.username);
+    secret = decodeURIComponent(proxy.url.password);
+  } catch {
+    throw new Refused(proxyFailure(proxy,
+      'the credentials in that address cannot be read — a percent sign begins\n' +
+      'an escape, and one in there never finishes one'));
+  }
+  return `Basic ${Buffer.from(`${user}:${secret}`).toString('base64')}`;
+}
+
 // openTunnel asks the proxy to join us to the target and hands back the
 // raw socket. THE PORT COMES FROM THE ADDRESS rather than a hard-coded
 // 443, and the address literal keeps its brackets here — a CONNECT line
@@ -410,10 +440,7 @@ function openTunnel(proxy, target, signal, sockets) {
     const authority = `${target.hostname}:${defaultPort(target)}`;
     const headers = { host: authority };
     if (proxy.url.username) {
-      const user = decodeURIComponent(proxy.url.username);
-      const secret = decodeURIComponent(proxy.url.password);
-      headers['proxy-authorization'] =
-        `Basic ${Buffer.from(`${user}:${secret}`).toString('base64')}`;
+      headers['proxy-authorization'] = proxyAuthorization(proxy);
     }
     const request = module.request({
       host: unbracket(proxy.url.hostname),
