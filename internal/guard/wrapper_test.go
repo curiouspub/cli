@@ -19,7 +19,9 @@ package guard
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -161,8 +163,108 @@ func TestCIRunsTheWrapperOnItsDeclaredFloor(t *testing.T) {
 	}
 }
 
-// TestThePublishMeasuresTheRegistryRatherThanAssumingIt pins the order
-// of the two commands the wrapper's publish rests on.
+// wrapperJobName is the job that publishes the package.
+//
+// THE ROWS BELOW ARE ABOUT THAT JOB RATHER THAN ABOUT THE FILE. A
+// property asserted over a whole workflow is satisfied by any job in it,
+// which is how a row keeps its name while it stops pinning what the name
+// says — and this is the job that holds an identity token, which is the
+// worst place for a row that checks a silhouette.
+const wrapperJobName = "wrapper"
+
+func wrapperJob(t *testing.T, lines []yamlLine) job {
+	t.Helper()
+	for _, j := range jobs(lines) {
+		if j.Name == wrapperJobName {
+			return j
+		}
+	}
+	t.Fatalf("%s has no %q job, and it is the one that publishes the package",
+		releaseWorkflow, wrapperJobName)
+	return job{}
+}
+
+// lineWith returns the first line of a block containing text.
+func lineWith(lines []yamlLine, text string) (yamlLine, bool) {
+	for _, l := range lines {
+		if strings.Contains(l.Text, text) {
+			return l, true
+		}
+	}
+	return yamlLine{}, false
+}
+
+// runBlock returns the shell script of the step whose text mentions
+// marker, reconstructed from the workflow's own lines.
+func runBlock(body []yamlLine, marker string) ([]yamlLine, bool) {
+	for _, step := range sequenceEntries(body) {
+		if _, ok := lineWith(step, marker); !ok {
+			continue
+		}
+		at := findKey(step, "run")
+		if at < 0 {
+			return nil, false
+		}
+		return blockAt(step, at), true
+	}
+	return nil, false
+}
+
+// inlineNodeProgram lifts the program out of a `node -e` invocation
+// whose quote opens at the end of a line and closes at the start of a
+// later one, which is the only spelling a shell script can use for a
+// program of more than one line.
+//
+// The indentation is gone by the time these lines arrive here, and that
+// costs nothing: the program is JavaScript, and the only thing the block
+// reader drops is a line beginning with a hash, which this language has
+// no use for.
+func inlineNodeProgram(script []yamlLine) (string, bool) {
+	start := -1
+	for i, l := range script {
+		if strings.HasSuffix(l.Text, "node -e '") {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return "", false
+	}
+	var out []string
+	for _, l := range script[start:] {
+		if strings.HasPrefix(l.Text, "'") {
+			return strings.Join(out, "\n"), len(out) > 0
+		}
+		out = append(out, l.Text)
+	}
+	return "", false
+}
+
+// runNodeProgram executes the readback's own program and returns what it
+// did.
+//
+// IT FAILS RATHER THAN SKIPS when the interpreter is absent. This
+// repository's gate already refuses to run without one — the wrapper's
+// suite is a prerequisite of make test — and a row that quietly stops
+// asserting looks exactly like a row that passed.
+func runNodeProgram(t *testing.T, program string, args ...string) (int, string) {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatalf("node is not on PATH, and this row RUNS the release's readback rather than "+
+			"reading it: %v", err)
+	}
+	cmd := exec.Command(node, append([]string{"-e", program}, args...)...)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatalf("running the readback: %v", err)
+	}
+	return cmd.ProcessState.ExitCode(), string(out)
+}
+
+// TestThePublishMeasuresTheRegistryRatherThanAssumingIt RUNS the
+// readback the release rests on, rather than reading it.
 //
 // Whether publishing a version moves the registry's newest-version
 // pointer, when a HIGHER version is already published under that name,
@@ -171,30 +273,82 @@ func TestCIRunsTheWrapperOnItsDeclaredFloor(t *testing.T) {
 // then asks the registry what it now believes, and a disagreement fails
 // the job.
 //
-// THE ORDER IS THE PROPERTY. A readback before the publish measures the
-// state the publish was meant to change.
+// THE ORDER OF TWO COMMANDS WAS ALL THIS ROW USED TO CHECK, and an order
+// is a silhouette. It found the first "npm publish" anywhere in the file
+// and the first readback anywhere after it, so deleting the comparison
+// that makes the readback mean anything left it green — and so would a
+// readback belonging to some other job. Both are now bound to the job
+// that holds the identity token, and the comparison itself is executed:
+// against a registry that agrees it must exit zero, and against one
+// pointing elsewhere it must exit non-zero and say where.
 func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 	root := moduleRoot(t)
-	body := readRepoFile(t, root, releaseWorkflow)
+	lines := readYAMLLines(readRepoFile(t, root, releaseWorkflow))
+	wrapper := wrapperJob(t, lines)
 
-	publish := strings.Index(body, "npm publish")
-	if publish < 0 {
-		t.Fatalf("%s publishes no package", releaseWorkflow)
+	publish, ok := lineWith(wrapper.Body, "npm publish")
+	if !ok {
+		t.Fatalf("the %q job publishes no package", wrapperJobName)
 	}
-	readback := strings.Index(body, "npm view curiouspub dist-tags")
-	if readback < 0 {
-		t.Fatalf("%s publishes and never asks the registry what it did\n"+
-			"The one behaviour nobody could settle by reading is the one this release "+
-			"depends on, so it is measured on every release instead.", releaseWorkflow)
-	}
-	if readback < publish {
-		t.Errorf("%s reads the registry's tags before it publishes, which measures the state "+
-			"the publish was supposed to change", releaseWorkflow)
-	}
-	if !strings.Contains(body, "--provenance") {
-		t.Errorf("%s publishes without provenance\n"+
+	if !strings.Contains(publish.Text, "--provenance") {
+		t.Errorf("%s:%d publishes without provenance\n"+
 			"The attestation tying this package to the run that built it is half of what "+
-			"makes the embedded digest worth anything.", releaseWorkflow)
+			"makes the embedded digest worth anything.", releaseWorkflow, publish.N)
+	}
+	readback, ok := lineWith(wrapper.Body, "npm view curiouspub dist-tags")
+	if !ok {
+		t.Fatalf("the %q job publishes and never asks the registry what it did\n"+
+			"The one behaviour nobody could settle by reading is the one this release "+
+			"depends on, so it is measured on every release instead.", wrapperJobName)
+	}
+	// THE ORDER IS STILL A PROPERTY. A readback before the publish
+	// measures the state the publish was meant to change.
+	if readback.N < publish.N {
+		t.Errorf("%s reads the registry's tags at line %d and publishes at line %d",
+			releaseWorkflow, readback.N, publish.N)
+	}
+
+	script, ok := runBlock(wrapper.Body, "npm view curiouspub dist-tags")
+	if !ok {
+		t.Fatalf("the readback is not a script this row can read, so nothing below it ran")
+	}
+	joined := strings.Join(textsOf(script), "\n")
+
+	// THE HALF THAT IS READ RATHER THAN RUN, and saying which is which is
+	// the point. The version being compared has to come from the tag that
+	// triggered the release, and the shell that derives it cannot be
+	// executed from here on every machine this suite runs on. So the
+	// derivation is read, and the comparison — the part the finding was
+	// about — is executed below.
+	if !strings.Contains(joined, `version="${GITHUB_REF_NAME#v}"`) {
+		t.Errorf("the readback does not take its version from the tag that triggered it:\n%s",
+			joined)
+	}
+	if !strings.Contains(joined, `"${version}"`) {
+		t.Errorf("the readback compares against something other than that version:\n%s", joined)
+	}
+
+	program, ok := inlineNodeProgram(script)
+	if !ok {
+		t.Fatalf("the readback carries no program this row can run:\n%s", joined)
+	}
+
+	// The arrangement nobody could find documented, which is this
+	// package's own: a placeholder already published at a higher version
+	// than the one being released.
+	if code, out := runNodeProgram(t, program, "0.1.0", `{"latest":"0.1.0"}`); code != 0 {
+		t.Errorf("the readback fails a release the registry agrees with (exit %d):\n%s", code, out)
+	}
+	code, out := runNodeProgram(t, program, "0.1.0", `{"latest":"1.0.0"}`)
+	if code == 0 {
+		t.Errorf("the readback passes while the registry points at another version\n" +
+			"Without the comparison this step is a command whose output nobody reads, and " +
+			"the release ships a package nobody can install by name.")
+	}
+	if !strings.Contains(out, "1.0.0") {
+		t.Errorf("the readback refuses without saying where the registry points:\n%s\n"+
+			"The operator action on a red readback is to move the pointer by hand, which "+
+			"needs to know what it points at now.", out)
 	}
 }
 
