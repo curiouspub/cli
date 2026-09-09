@@ -266,19 +266,54 @@ YAML is a step nobody can run before pushing.
   `release.yml`, with every later job depending on it, because a tag push
   does not run `ci.yml` at all.
 
-  **ONE PIECE OF IT IS AN OPERATOR ACTION AND IS NOT DONE, so it is
-  written here rather than left in a comment.** `ci.yml` is wired to the
-  merge-queue event, which is where the commit a squash merge composes —
-  out of a pull request's title and body — can be read before it lands.
-  That event only ever fires if somebody with repository settings enables
-  the merge queue on the default branch **and** marks this check
-  required. Until both are done, the trigger is a line that never runs,
-  which is exactly what a check that reads as coverage and is decoration
-  looks like. The pull-request job reads the title and the body directly,
-  so the surface is covered before publication either way; what the queue
-  adds is the composed commit itself. A setting nobody can make from
-  inside the repository belongs in a list somebody reads, and this is the
-  list this repository has.
+  **THE OPERATOR ACTION IS DONE — 2026-09-09 — and what it turned on is
+  recorded here because nothing inside the repository can read it back.**
+  `ci.yml` is wired to the merge-queue event, which is where the commit a
+  squash merge composes — out of a pull request's title and body — can be
+  read before it lands. That event only ever fires if somebody with
+  repository settings enables the merge queue on the default branch
+  **and** marks this check required; until both were done the trigger was
+  a line that never ran.
+
+  `main` now carries a ruleset: pull requests required, force-push and
+  deletion blocked, branches up to date before merging, merge queue on.
+  A direct push is refused with *"Changes must be made through the merge
+  queue"* — verified by attempting one.
+
+  **The seven required checks, spelled exactly as GitHub names them:**
+
+  | required check |
+  |---|
+  | `ci (ubuntu-latest)` |
+  | `ci (macos-latest)` |
+  | `ci (windows-latest)` |
+  | `the wrapper package, on the Node floor and on current (22)` |
+  | `the wrapper package, on the Node floor and on current (current)` |
+  | `the published surfaces that are not files` |
+  | `build every artefact and publish none of them` |
+
+  **THE `(22)` ENTRY IS A VERSION NUMBER IN A SETTING NOBODY HERE CAN
+  EDIT, and that is the sharp edge.** A required check is matched by
+  NAME. The Node floor moves — it is in `npm/package.json` and it will
+  rise — and the day the matrix says `["24", "current"]` the check called
+  `… (22)` stops being produced. GitHub does not fail a merge for a
+  required check that never arrives from a job that no longer exists; it
+  simply has one fewer gate, and `main` is un-gated on the floor leg
+  until somebody edits the ruleset to match. The same is true of any job
+  RENAME: the name in this table, the name in the workflow and the name
+  in the ruleset are three copies of one string, and only two of them
+  live in this repository.
+
+  So a guard compares the first two — `internal/guard` derives the check
+  names from the workflows and requires them to be exactly this table.
+  A rename reds in CI, loudly, before it goes quiet in the ruleset. The
+  third copy is still a setting somebody has to change by hand, and the
+  guard's message says so.
+
+  **This section is the pointer the surface check's task called "the
+  runbook".** There is no runbook; this is the list this repository has,
+  and a reference to a document that does not exist is worse than no
+  reference at all.
 - **`make hooks` installs the same check as a pre-push hook, and it is opt
   in.** A hook lives in a directory git does not clone, is skipped by
   `--no-verify` and is absent on CI, so it is a convenience and never the
