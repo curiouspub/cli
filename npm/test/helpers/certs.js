@@ -59,11 +59,33 @@ const explicit = (n, contents) => tlv(0xa0 | n, contents);
 // is whole bytes, so the count is always zero.
 const bits = (b) => tlv(0x03, Buffer.concat([Buffer.from([0]), b]));
 
+// A DER integer is signed AND minimal, and both halves are load-bearing
+// here because one of the values below is eight random bytes.
+//
+// Signed: a leading byte with its high bit set has to be padded with a
+// zero or the value reads as negative.
+//
+// MINIMAL: a leading zero byte is permitted ONLY when the byte after it
+// has its high bit set. A zero in front of a byte that does not is a
+// value written longer than it needs to be, and a real verifier refuses
+// the whole certificate for it — "illegal padding", raised where the
+// certificate is loaded rather than where it was made.
+//
+// That is not a theoretical branch. It is what a random serial produces
+// whenever its first byte is zero and its second is under 0x80, which is
+// about one certificate in every two hundred and fifty-six: rare enough
+// to read as an unrelated flake in whichever row happened to mint it,
+// common enough to redden a suite that makes a couple of dozen.
 function integer(buf) {
-  // DER integers are signed, so a leading byte with its high bit set
-  // has to be padded or the value reads as negative.
-  const body = buf[0] & 0x80 ? Buffer.concat([Buffer.from([0]), buf]) : buf;
-  return tlv(0x02, body);
+  let start = 0;
+  while (start + 1 < buf.length && buf[start] === 0 && (buf[start + 1] & 0x80) === 0) {
+    start += 1;
+  }
+  const trimmed = buf.subarray(start);
+  const body = trimmed[0] & 0x80
+    ? Buffer.concat([Buffer.from([0]), trimmed])
+    : trimmed;
+  return tlv(0x02, Buffer.from(body));
 }
 
 function oid(dotted) {
@@ -157,7 +179,13 @@ function issue({ subject, issuer, subjectKey, issuerKey, isCA, hosts }) {
 
   const tbs = seq(
     explicit(0, integer(Buffer.from([2]))),
-    integer(crypto.randomBytes(8).map((b, i) => (i === 0 ? b & 0x7f : b))),
+    // The serial is handed over as it comes. Clearing the top bit here
+    // was an attempt to keep the value positive that only moved the
+    // problem: it turns a first byte of 0x00 or 0x80 into a zero the
+    // encoder then had no reason to remove. Both the sign and the
+    // shortest form belong to the encoder, which knows about the byte
+    // that follows.
+    integer(crypto.randomBytes(8)),
     ECDSA_SHA256,
     name(issuer),
     // An hour behind and a day ahead. A certificate that is only valid
@@ -202,4 +230,8 @@ function authority(label) {
   };
 }
 
-module.exports = { authority };
+// derInteger is exported for the row that pins the encoding rule. It is
+// the one piece of this file a caller cannot observe through a finished
+// certificate: a verifier either accepts the whole thing or refuses it,
+// and the bytes that decided which are the ones worth asserting on.
+module.exports = { authority, derInteger: integer };
