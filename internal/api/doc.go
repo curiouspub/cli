@@ -1,9 +1,9 @@
 // Package api is the HTTP client this CLI uses to talk to the public
 // /v1 API: capacity checks, the email + code login flow, deploy
-// creation, the call that starts a build, and the build-log event
-// stream. It knows only pkg/wire's types; it never reshapes them into a
-// second, "nicer" shape, and it never invents an endpoint the contract
-// does not define.
+// creation, the call that starts a build, the build-log event stream,
+// and the call that gives a built deploy an address. It knows only
+// pkg/wire's types; it never reshapes them into a second, "nicer"
+// shape, and it never invents an endpoint the contract does not define.
 //
 // The upload is deliberately NOT here. It goes to a link the server
 // signed, at an origin this client holds no credential for and answers in
@@ -40,9 +40,11 @@
 // a per-identity hourly send budget on every attempt, and the second
 // consumes its code atomically, so a retry after an ambiguous timeout
 // could report failure for a call that had already succeeded. The create
-// is never retried because a repeat makes a second deploy record, and
-// the start is never retried because everything a caller is waiting for
-// afterwards arrives on the event stream — see DeployStart.
+// is never retried because a repeat makes a second deploy record, the
+// start is never retried because everything a caller is waiting for
+// afterwards arrives on the event stream — see DeployStart — and the
+// publish is never retried because whether it landed is the very
+// question a retry would be asking, and asking twice cannot answer it.
 //
 // # The event stream is not a request in that sense
 //

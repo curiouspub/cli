@@ -101,6 +101,33 @@ func (c *Client) DeployStart(ctx context.Context, deployID string) (*wire.Deploy
 	return &out, nil
 }
 
+// DeployPublish calls POST /v1/deploys/{id}/publish: the last call of a
+// deploy, and the one that gives a built deploy an address.
+//
+// NEVER RETRIED, and the reason is the same one the create carries
+// rather than the start's. A failure after the request left this process
+// is indistinguishable from one before it, and the two possible truths —
+// the deploy has an address, or it has none — are exactly what a caller
+// would be retrying to find out. Asking again cannot answer that
+// question: a second call arriving after a first one succeeded is a
+// second decision about a deploy this client has already been told
+// nothing about.
+//
+// The success body carries a subdomain LABEL and an expiry, and per the
+// contract's own rule no client behaviour depends on either: they are
+// shown to a person. The label is the half a client cannot derive, and
+// assembling an address out of it belongs to whoever knows the domain,
+// which is not this package.
+//
+// It authenticates per call, like the create and the start.
+func (c *Client) DeployPublish(ctx context.Context, deployID string) (*wire.DeployPublishResponse, error) {
+	var out wire.DeployPublishResponse
+	if err := c.do(ctx, http.MethodPost, deployPath(deployID, "publish"), nil, &out, false, c.withBearerToken()); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // AuthVerify calls POST /v1/auth/verify, the second step of the login
 // flow, and returns the bearer token for every subsequent authenticated
 // call. NEVER retried: the submitted code is consumed atomically, so a
