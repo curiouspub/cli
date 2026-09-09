@@ -7,7 +7,7 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test vet fmt lint snapshot surface-check hooks ci
+.PHONY: build test test-go test-npm e2e-npm vet fmt lint snapshot surface-check hooks ci
 
 build:
 	go build -trimpath ./...
@@ -45,8 +45,39 @@ build:
 # Making the whole suite verbose would surface the same three lines
 # inside ten thousand, which is a way of hiding them that also annoys
 # everybody.
-test:
+test: test-go test-npm
+
+test-go:
 	go run ./tools/skipcheck -- -count=1 ./...
+
+# The wrapper package's own suite. It is a PREREQUISITE OF test rather
+# than a separate command somebody has to know about, because a check
+# outside the gate is a check nobody runs before pushing — and this one
+# covers a postinstall script that downloads and executes a binary on
+# other people's machines.
+#
+# IT FAILS RATHER THAN SKIPS when Node is absent, and that is the same
+# ruling as the skip manifest one line up: a check that quietly does not
+# run looks exactly like one that passed. The floor is the package's own
+# declared engines range, and the suite reports what it found.
+#
+# The pattern is quoted so the glob reaches the test runner rather than
+# the shell, and it is a glob rather than a directory because a
+# directory argument is not one the runner accepts.
+test-npm:
+	@command -v node >/dev/null 2>&1 || { \
+		echo "node is not installed, and the npm wrapper's suite is part of this gate."; \
+		echo "Install Node (the floor is in npm/package.json), or run make test-go for the Go half."; \
+		exit 1; \
+	}
+	cd npm && node --test "test/**/*.test.js"
+
+# The end-to-end run: pack the wrapper, serve a built binary from this
+# machine, install the tarball into a temporary prefix and run the
+# command it installs. It is NOT part of ci: it builds the real binary
+# and stands up a server, which is minutes rather than seconds.
+e2e-npm:
+	npm/test/e2e-local.sh
 
 vet:
 	go vet ./...
@@ -91,8 +122,16 @@ lint:
 # an identity that exists only inside an approved release run. Asking for
 # a signature here would mean either a check that cannot pass or an
 # identity on a pull request from a stranger, and the second is worse.
+# THE CHECK AFTER THE BUILD is the only thing that can see a
+# member-count error or a misspelled archive name: the release tool's
+# own validator reads the schema, and a format that cannot hold what it
+# was given fails in the pipe rather than in the document. It asks the
+# wrapper's own mapping for the six names it expects, so the release
+# template and the install script's table are tied together instead of
+# being two restatements of the same six names in different files.
 snapshot:
 	goreleaser release --snapshot --clean --skip=sign
+	node scripts/check-release-assets.js dist
 
 # surface-check reads the surfaces the test suite cannot: the messages,
 # names and titles of a range being published. It is the same program the

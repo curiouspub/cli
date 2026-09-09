@@ -1,0 +1,4 @@
+{
+  "hosts": ["localhost", "127.0.0.1", "::1"],
+  "why": "The exact set of hosts this project's clients may reach over plaintext http, and nothing wider. Every other host must arrive over https. It is an exact set rather than a range: no other address in 127.0.0.0/8 is in it. This file is the one place the set is written; the Go client's own copy is held equal to it by a test, so the two cannot drift into being two different rules with one name."
+}

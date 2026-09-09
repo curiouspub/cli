@@ -80,6 +80,13 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
+      # The gate now includes the wrapper package's own suite, which
+      # needs a Node the runner image does not promise. The version
+      # comes from the package's own declared floor rather than from a
+      # number written here, so there is one place it lives.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: npm/package.json
       # windows-latest has no GNU Make: the runner image ships MSYS2 but
       # deliberately keeps it off PATH, and `shell: bash` on Windows is
       # Git Bash, whose /usr/bin has none either. Without this the job
@@ -149,3 +156,26 @@ jobs:
       - name: make surface-check
         shell: bash
         run: make surface-check
+  # THE FLOOR AND CURRENT, and the floor is the leg that matters: it is
+  # the only one that can catch an interface that arrived after the
+  # version the package promises to run on, and current is what everyone
+  # developing this will otherwise use by accident.
+  #
+  # The job above already runs this suite on all three operating systems,
+  # against whichever Node satisfies the declared range. This one varies
+  # the dimension that job holds fixed.
+  wrapper:
+    name: the wrapper package, on the Node floor and on current
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "current"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: make test-npm
+        shell: bash
+        run: make test-npm

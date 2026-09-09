@@ -210,6 +210,70 @@ func valueOf(lines []yamlLine, key string) (string, bool) {
 	return strings.Trim(strings.TrimSpace(after), `"'`), true
 }
 
+// sequenceEntries splits a block into the entries of a YAML sequence:
+// each line introduced by a dash at the shallowest indent, plus
+// everything indented under it.
+//
+// It exists because a row about ONE member of a list cannot be written
+// against the whole list. Asking whether a block CONTAINS a setting is
+// satisfied by any sibling that happens to carry it, which is how a row
+// keeps its name while it stops pinning what the name says.
+func sequenceEntries(lines []yamlLine) [][]yamlLine {
+	depth := -1
+	for _, l := range lines {
+		if strings.HasPrefix(l.Text, "- ") && (depth < 0 || l.Indent < depth) {
+			depth = l.Indent
+		}
+	}
+	var out [][]yamlLine
+	for i, l := range lines {
+		if l.Indent != depth || !strings.HasPrefix(l.Text, "- ") {
+			continue
+		}
+		out = append(out, append([]yamlLine{l}, blockAt(lines, i)...))
+	}
+	return out
+}
+
+// listOf reads a named sequence, or nothing when the key is absent.
+//
+// SEPARATE FROM listValues BECAUSE OF WHAT ABSENCE DOES THERE: an index
+// of -1 indexes a slice out of range and the guard panics. A panicking
+// guard still fails the build, and it fails it with a stack trace
+// instead of the sentence explaining what is missing — which is the
+// difference between a row that reports and a row that merely stops.
+// Found by running the mutation that removes the key.
+func listOf(lines []yamlLine, key string) []string {
+	at := findKey(lines, key)
+	if at < 0 {
+		return nil
+	}
+	return listValues(lines, at)
+}
+
+// entryWithID finds the sequence entry whose id is the one named.
+func entryWithID(lines []yamlLine, id string) ([]yamlLine, bool) {
+	for _, entry := range sequenceEntries(lines) {
+		if got, ok := valueOf(entry, "id"); ok && got == id {
+			return entry, true
+		}
+	}
+	return nil, false
+}
+
+// contains is the one-line membership test these rows need. The module
+// targets a toolchain that has this in the standard library; it is
+// written out here to keep the guard's import list to what it reads
+// rather than what it computes.
+func contains(haystack []string, needle string) bool {
+	for _, got := range haystack {
+		if got == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // hasEntry reports whether any line is exactly the given key and value.
 func hasEntry(lines []yamlLine, key, value string) bool {
 	for _, l := range lines {
@@ -1143,17 +1207,82 @@ func TestReleaseConfig(t *testing.T) {
 	})
 
 	t.Run("the archives are the shapes each platform can open", func(t *testing.T) {
+		// THE ROW NAMES WHICH BLOCK IT IS TALKING ABOUT, and that is the
+		// correction rather than the original shape. This asked whether
+		// the archives block CONTAINED a tar.gz and a windows override,
+		// which a second archive alongside it satisfies without being
+		// the archive under discussion — a row that would pass on either
+		// of two blocks has stopped pinning the thing it names.
 		archives, ok := topLevelBlock(lines, "archives")
 		if !ok {
 			t.Fatalf("%s produces no archives", releaseConfig)
 		}
-		text := strings.Join(textsOf(archives), "\n")
-		if !strings.Contains(text, "tar.gz") {
-			t.Errorf("%s does not produce a tar.gz archive", releaseConfig)
+		human, found := entryWithID(archives, "curious")
+		if !found {
+			t.Fatalf("%s has no archive named curious — the one a person downloads", releaseConfig)
 		}
-		if !strings.Contains(text, "zip") || !strings.Contains(text, "goos: windows") {
+		formats := listOf(human, "formats")
+		if len(formats) != 1 || formats[0] != "tar.gz" {
+			t.Errorf("%s builds the human archive as %v, want exactly tar.gz", releaseConfig, formats)
+		}
+		if !hasEntry(human, "goos", "windows") {
 			t.Errorf("%s does not override the archive format for the one platform whose "+
 				"users cannot be assumed to have a tar", releaseConfig)
+		}
+		overrideAt := findKey(human, "format_overrides")
+		if overrideAt < 0 ||
+			!strings.Contains(strings.Join(textsOf(blockAt(human, overrideAt)), "\n"), "zip") {
+			t.Errorf("%s does not give the one platform without a tar something it can open",
+				releaseConfig)
+		}
+		// The paperwork is the whole reason this archive still exists.
+		files := listOf(human, "files")
+		for _, want := range []string{"LICENSE", "README.md"} {
+			if !contains(files, want) {
+				t.Errorf("%s ships the human archive without %s\n"+
+					"Stripping the licence out of every download of an MIT-licensed tool to "+
+					"please an install script is the wrong trade, and it is the reason there "+
+					"are two archives rather than one.", releaseConfig, want)
+			}
+		}
+	})
+
+	t.Run("the wrapper's archive is a single member with no paperwork", func(t *testing.T) {
+		// The npm wrapper's install script has to OPEN what it
+		// downloads, and it does so with a standard library that reads
+		// neither of the formats above. Every property here is one the
+		// format's own one-member constraint forces: get either wrong
+		// and the release fails to build rather than degrading.
+		archives, ok := topLevelBlock(lines, "archives")
+		if !ok {
+			t.Fatalf("%s produces no archives", releaseConfig)
+		}
+		wrapper, found := entryWithID(archives, "curious-gz")
+		if !found {
+			t.Fatalf("%s publishes nothing the wrapper's install script can open", releaseConfig)
+		}
+		formats := listOf(wrapper, "formats")
+		if len(formats) != 1 || formats[0] != "gz" {
+			t.Errorf("%s builds the wrapper archive as %v, want exactly gz", releaseConfig, formats)
+		}
+		files := listOf(wrapper, "files")
+		if len(files) != 1 || files[0] != "none*" {
+			t.Errorf("%s leaves the wrapper archive's file list as %v\n"+
+				"It defaults to the licence and readme globs, and a compression-only format "+
+				"errors on the second member — so an unemptied list fails the build.",
+				releaseConfig, files)
+		}
+		// RESTATED, NOT INHERITED. The default template spells the name
+		// differently, and every download address the install script
+		// builds would miss by a word.
+		human, _ := entryWithID(archives, "curious")
+		humanName, _ := valueOf(human, "name_template")
+		wrapperName, hasName := valueOf(wrapper, "name_template")
+		if !hasName || wrapperName != humanName {
+			t.Errorf("%s names the wrapper archive %q and the human one %q\n"+
+				"They differ only by extension on purpose; a wrapper archive under the "+
+				"default template is a 404 at the first real release.",
+				releaseConfig, wrapperName, humanName)
 		}
 	})
 

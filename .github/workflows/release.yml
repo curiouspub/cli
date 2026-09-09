@@ -152,3 +152,115 @@ jobs:
           # that could reach every repository would hand this job far
           # more than a tap write.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under
+  # trusted publishing the identity token IS the registry credential, so
+  # putting this step in the job above would place the ability to publish
+  # a package inside a job that runs a full Go build and three actions
+  # from outside the actions organisation. The split is what keeps the
+  # least-privilege claim true rather than merely stated.
+  #
+  # ITS OWN ACTION LIST, written out rather than claimed to be empty:
+  # actions/checkout, because the package files are in the tree, and
+  # actions/setup-node, because publishing needs a newer package manager
+  # than the wrapper's own floor. Both pinned, both from the actions
+  # organisation, and no code fetched at run time.
+  #
+  # NO REGISTRY SECRET EXISTS. The job proves its identity with the token
+  # the runner mints for it, so there is nothing here to leak, rotate or
+  # scope wrongly.
+  #
+  # OPERATOR PRECONDITION, named as one: the trusted publisher is
+  # configured on the registry against this repository, this workflow
+  # file and this environment. A reviewed environment may prompt once per
+  # job, so the first release is what says how many approvals a release
+  # now takes.
+  wrapper:
+    name: publish the npm wrapper
+    needs: publish
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      # WRITTEN IN FULL. A job-level block replaces the workflow floor
+      # rather than adding to it, so "id-token and nothing else" would
+      # literally mean no read access at all.
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # The floor the package itself declares, so this is not a
+          # second place the version lives.
+          node-version-file: npm/package.json
+          registry-url: https://registry.npmjs.org
+
+      # TWO DIFFERENT NUMBERS WITH TWO DIFFERENT REASONS. The package
+      # declares the package manager a person installing it needs; this
+      # is the one a credential-free publish needs, which is newer and is
+      # nobody's business but this job's.
+      - name: the package manager here can publish without a credential
+        run: |
+          set -euo pipefail
+          need=11.5.1
+          have="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
+            echo "::error::publishing without a stored credential needs npm >= ${need}; this runner has ${have}"
+            exit 1
+          fi
+          echo "npm ${have}"
+
+      # The digests come from the run that just built the binaries, over
+      # the release it just made. gh is on the runner image, so this
+      # fetches data and never code.
+      - name: take the checksums from the release this run produced
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern checksums.txt \
+            --dir dist
+
+      # The only thing that holds the tag, the package version and every
+      # key of the shipped table to the same number.
+      - name: build the checksum table the package ships
+        run: |
+          node npm/tools/build-checksums.js \
+            --tag "${GITHUB_REF_NAME}" \
+            --checksums dist/checksums.txt \
+            --out npm/checksums.json
+
+      - name: publish
+        working-directory: npm
+        run: npm publish --provenance --access public --tag latest
+
+      # THE MEASUREMENT THAT REPLACES A GUESS. This name already carries
+      # a published version higher than the one being released, and
+      # whether a publish moves the newest pointer in that situation is
+      # not written down anywhere. So it is not assumed: the registry is
+      # asked, on every release, and a disagreement fails the job rather
+      # than shipping a package nobody can install by name.
+      #
+      # It cannot be two commands. The identity exchange happens inside
+      # the publish and the credential it obtains lives in that process
+      # only, so a second authenticated command in this job would have
+      # nothing to authenticate with.
+      - name: the registry agrees about which version is newest
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          tags="$(npm view curiouspub dist-tags --json)"
+          echo "${tags}"
+          node -e '
+            const [, wanted, raw] = process.argv;
+            const tags = JSON.parse(raw);
+            if (tags.latest !== wanted) {
+              console.error(`::error::the registry points at ${tags.latest}, not ${wanted}. ` +
+                `Move it by hand with one interactive login and npm dist-tag add.`);
+              process.exit(1);
+            }
+            console.log(`the newest published version is ${tags.latest}`);
+          ' "${version}" "${tags}"
