@@ -83,6 +83,10 @@ type confirmAsk struct {
 // pinned to the real type by the compile-time assertion above, which is
 // the same trade the pre-flight renderer's own double already makes.
 type scriptedPrompt struct {
+	// render is the real renderer, built lazily over the two buffers
+	// below. See rendering().
+	render *ui.UI
+
 	out bytes.Buffer
 
 	// results is STDOUT, and it is a SECOND buffer rather than more of
@@ -118,14 +122,36 @@ type scriptedPrompt struct {
 	transcript []string
 }
 
+// rendering is the REAL renderer, writing into this double's buffers.
+//
+// THE DOUBLE USED TO FORMAT THE MESSAGE ITSELF — Sprintf into a buffer —
+// which made it a second implementation of the rendering, and second
+// implementations drift. This one did: when the boundary began escaping
+// arguments, the double went on formatting them raw, so the suite
+// reported clean output for a shipped path that was mangling every
+// multi-paragraph narration into one line of backslash-n. The rows were
+// green the whole time, because they were reading the double.
+//
+// It delegates now. What it keeps for itself is the transcript, which is
+// a record of what was ASKED rather than of what was shown.
+func (s *scriptedPrompt) rendering() *ui.UI {
+	if s.render == nil {
+		s.render = ui.Writing(&s.results, &s.out)
+	}
+	return s.render
+}
+
 func (s *scriptedPrompt) Step(format string, args ...any) {
-	fmt.Fprintf(&s.out, format+"\n", args...)
+	// BEFORE delegating: the boundary escapes string arguments in place,
+	// so a transcript taken afterwards would record what was rendered
+	// rather than what the caller passed.
 	s.transcript = append(s.transcript, "said: "+fmt.Sprintf(format, args...))
+	s.rendering().Step(format, args...)
 }
 
 func (s *scriptedPrompt) Result(format string, args ...any) {
-	fmt.Fprintf(&s.results, format+"\n", args...)
 	s.transcript = append(s.transcript, "printed: "+fmt.Sprintf(format, args...))
+	s.rendering().Result(format, args...)
 }
 
 func (s *scriptedPrompt) Email(prompt string) (string, error) {
@@ -2029,5 +2055,90 @@ func TestACancellationIsNotAFault(t *testing.T) {
 	}
 	if code := exitCodeFor(t, err); code != 0 {
 		t.Errorf("a cancellation exits %d, want 0", code)
+	}
+}
+
+// TestTheTerminalDoubleRendersWHATTHEREALONEDOES.
+//
+// THE FAKE-THAT-LIES CLASS, and this suite had an instance. A double
+// that formats a message the way the package formats one is a second
+// implementation of the rendering, and second implementations drift
+// silently — a fake reports what its author expected rather than what
+// ships, and every row reading it is then about the fake.
+//
+// The instance, 2026-09-09: the boundary began escaping arguments so a
+// server sentence could not add a line, and this program's OWN composed
+// paragraphs are arguments too. Every successful deploy printed its
+// closing narration on one line with visible backslash-n. The double
+// went on calling Sprintf, so the whole flow suite stayed green over a
+// shipped path that was mangling its most-read output, and a cold
+// reviewer found it rather than a test.
+//
+// The double delegates now, so the two cannot differ. This row is what
+// says so: the same inputs, both renderers, byte-identical.
+//
+// REQUIRED MUTATION, run 2026-09-09: format in the double again —
+// `fmt.Fprintf(&s.out, format+"\n", args...)`. Reds on the first case,
+// with the double's raw output beside the real one's escaped output.
+func TestTheTerminalDoubleRendersWhatTheRealOneDoes(t *testing.T) {
+	hostile := "before\x1b]0;pwned\x07after"
+	composed := "Published.\n\nIt can take up to about a minute."
+
+	for _, tc := range []struct {
+		name string
+		call func(r interface {
+			Step(string, ...any)
+			Result(string, ...any)
+		})
+	}{
+		{"a server's sentence as an argument", func(r interface {
+			Step(string, ...any)
+			Result(string, ...any)
+		}) {
+			r.Step("the server said %s.", hostile)
+		}},
+		{"this program's composed paragraphs", func(r interface {
+			Step(string, ...any)
+			Result(string, ...any)
+		}) {
+			r.Step("%s", ui.Prose(composed))
+		}},
+		{"a build log line on stdout", func(r interface {
+			Step(string, ...any)
+			Result(string, ...any)
+		}) {
+			r.Result("%s", hostile)
+		}},
+		{"prose with a per-cent sign and no arguments", func(r interface {
+			Step(string, ...any)
+			Result(string, ...any)
+		}) {
+			r.Step("100% of the files were packed.")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			double := &scriptedPrompt{}
+			tc.call(double)
+
+			var realOut, realErr bytes.Buffer
+			real := ui.Writing(&realOut, &realErr)
+			tc.call(real)
+
+			if double.out.String() != realErr.String() {
+				t.Errorf("stderr differs between the double and the renderer that "+
+					"ships:\n  double: %q\n  real:   %q",
+					double.out.String(), realErr.String())
+			}
+			if double.results.String() != realOut.String() {
+				t.Errorf("stdout differs between the double and the renderer that "+
+					"ships:\n  double: %q\n  real:   %q",
+					double.results.String(), realOut.String())
+			}
+			// The control: a pair of empty buffers agree perfectly.
+			if double.out.Len()+double.results.Len() == 0 {
+				t.Fatal("neither renderer wrote anything, so this row compared " +
+					"nothing")
+			}
+		})
 	}
 }

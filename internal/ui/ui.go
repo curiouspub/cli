@@ -70,6 +70,26 @@ type UI struct {
 	exit func(int)
 }
 
+// Writing returns a UI that renders to the given streams and asks
+// nothing: not interactive, no colour, no environment.
+//
+// IT EXISTS SO A TEST DOUBLE NEED NOT BE A SECOND IMPLEMENTATION. A
+// double that formats a message the way this package formats one is a
+// second copy of the rendering, and the two drift — this repository has
+// the instance: the flow suite's terminal double called Sprintf and
+// wrote the result, so it escaped nothing, and the day the boundary
+// began escaping arguments it went on reporting clean output for a
+// shipped path that was mangling every multi-paragraph narration. A
+// double that DELEGATES cannot drift.
+//
+// It is not a testing-only door in the ordinary sense: what it removes
+// is a second renderer, which is a liability wherever it lives.
+func Writing(out, err io.Writer) *UI {
+	return newUI(strings.NewReader(""), out, err,
+		func(string) (string, bool) { return "", false }, false,
+		func() bool { return false })
+}
+
 // New returns a UI wired to this process's own streams and environment.
 //
 // It is the only constructor that touches the operating system, which is
