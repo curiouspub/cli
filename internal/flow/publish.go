@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"time"
 
@@ -255,6 +256,18 @@ type publishDeps struct {
 	// one clock rather than two.
 	Now func() time.Time
 
+	// ConfirmWindow is the bound on the whole of the asking. Zero means
+	// publishConfirmWindow, which is what production passes.
+	//
+	// IT IS INJECTED FOR A REASON THE CLOCK CANNOT COVER. The window is
+	// measured on Now, and the sleep between two asks is measured on the
+	// real one — which is right, because in production they are the same
+	// clock. A row about the BOUND therefore has to spend real time, and
+	// thirty seconds of it per run is not a row anybody will keep. This
+	// makes the bound small enough to measure and leaves everything else
+	// exactly as it ships.
+	ConfirmWindow time.Duration
+
 	// RetryInterval is the pause between two asks. Zero means
 	// publishRetryInterval, which is what production passes; it is
 	// injected for the reason the clock is, so a row can drive the race
@@ -283,7 +296,11 @@ type publishDeps struct {
 // build outcome arriving late; a deploy it has never heard of will not
 // appear; a closed door does not open by being knocked on again.
 func publishDeploy(ctx context.Context, deps publishDeps) (*wire.DeployPublishResponse, error) {
-	deadline := deps.Now().Add(publishConfirmWindow)
+	window := deps.ConfirmWindow
+	if window <= 0 {
+		window = publishConfirmWindow
+	}
+	deadline := deps.Now().Add(window)
 	interval := deps.RetryInterval
 	if interval <= 0 {
 		interval = publishRetryInterval
@@ -296,6 +313,14 @@ func publishDeploy(ctx context.Context, deps publishDeps) (*wire.DeployPublishRe
 			return resp, nil
 		}
 
+		if errors.Is(err, api.ErrUnusableResponse) {
+			// The answer ARRIVED and cannot be used. Reporting it as a
+			// transport failure would tell a person the request might
+			// not have got there, which is the one thing this branch
+			// knows to be false.
+			return nil, publishUnusableAnswerFailure(deps.DeployID)
+		}
+
 		var apiErr *api.APIError
 		if !errors.As(err, &apiErr) {
 			// No envelope, no code, nothing the server said. The request
@@ -304,10 +329,11 @@ func publishDeploy(ctx context.Context, deps publishDeps) (*wire.DeployPublishRe
 		}
 
 		if publishRouting[apiErr.Code] != publishAskAgain {
-			return nil, publishStopFailure(apiErr, deps.DeployID)
+			return nil, publishStopFailure(apiErr, deps.DeployID, deps.Now())
 		}
 
-		if !deps.Now().Before(deadline) {
+		now := deps.Now()
+		if !now.Before(deadline) {
 			return nil, publishNotConfirmedFailure(deps.DeployID)
 		}
 		if !announced {
@@ -318,10 +344,21 @@ func publishDeploy(ctx context.Context, deps publishDeps) (*wire.DeployPublishRe
 			deps.Render.Step("%s", buildStillBeingChecked)
 			announced = true
 		}
+		// THE SLEEP IS CLAMPED TO WHAT IS LEFT OF THE WINDOW, because
+		// the window says it bounds the whole of the asking and the
+		// interval says it changes the pace and never the bound. Left
+		// unclamped, the last sleep runs past the deadline it was
+		// checked against and the run takes window + interval — which is
+		// a second on the shipped numbers and the whole of the bound if
+		// a caller injects a longer pace through the seam above.
+		wait := interval
+		if remaining := deadline.Sub(now); remaining < wait {
+			wait = remaining
+		}
 		select {
-		case <-time.After(interval):
+		case <-time.After(wait):
 		case <-ctx.Done():
-			return nil, publishNotConfirmedFailure(deps.DeployID)
+			return nil, publishStoppedFromOutside(ctx.Err(), deps.DeployID)
 		}
 	}
 }
@@ -372,6 +409,48 @@ func expiresLine(expiresAt, now time.Time) (string, bool) {
 		" — " + relativePhrase(expiresAt.Sub(now)) + ".", true
 }
 
+// publishStoppedFromOutside is what a wait that was cut off ends the run
+// as, and it asks WHY before it says anything.
+//
+// A DEADLINE AND A CANCELLATION ARE NOT THE SAME EVENT and they used to
+// render the same sentence: "the server was still working on it 30s
+// later. curious stopped asking rather than wait indefinitely." Both
+// clauses are false for a cancellation — seconds may have passed, and
+// it was not curious that stopped. Somebody who interrupted their own
+// run was told a story about the far end.
+//
+// So a deadline keeps that copy, which is exactly what it describes, and
+// a cancellation gets the short word and the interrupted cost. It claims
+// nothing about the server, because nothing here knows anything about
+// the server. The cause is wrapped rather than dropped, so a caller can
+// still tell the two apart.
+func publishStoppedFromOutside(cause error, deployID string) error {
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return publishNotConfirmedFailure(deployID)
+	}
+	return fmt.Errorf("%w: the publish of %s was still being confirmed (%w)",
+		ui.ErrInterrupted, deployID, cause)
+}
+
+// publishUnusableAnswerFailure is a 200 this client cannot act on: the
+// server gave the deploy an address and the label in it is not one.
+//
+// IT DOES NOT SAY NOTHING WAS DEPLOYED, because something may well have
+// been — the server answered success. What it says is that the address
+// cannot be printed, which is the only honest thing a client holding a
+// label like "" can say, and it is a great deal better than printing
+// https://.curiously.dev and exiting zero.
+func publishUnusableAnswerFailure(deployID string) error {
+	return ui.NewFailure(
+		"The server gave this deploy an address that cannot be one.",
+		"The publish itself was accepted, so the deploy may well be live — but\n"+
+			"the label the server sent back is not a label, so curious has no\n"+
+			"address to show you and will not guess at one.\n\n"+
+			"The deploy is "+deployID+".",
+		"Please report this. Running `curious deploy` again would make a second\n"+
+			"deploy rather than answer the question about this one.")
+}
+
 // publishStopFailure is the copy for each code that ends the run.
 //
 // THE SERVER'S OWN MESSAGE IS RENDERED FOR SOME OF THESE AND NOT FOR THE
@@ -384,15 +463,38 @@ func expiresLine(expiresAt, now time.Time) (string, bool) {
 // instead of on the build it is really about, and it names a state the
 // reader can do nothing with, because the action is identical whichever
 // state it was.
-func publishStopFailure(apiErr *api.APIError, deployID string) error {
+func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) error {
 	switch apiErr.Code {
+	case wire.CodeRateLimited:
+		// THE CONTRACT SAYS THESE CARRY A TIME, so this renders it.
+		// wire.CarriesRetryAfter names the set and the row that drives
+		// this is keyed to that function rather than to a list typed
+		// beside it — so a code that joins the set arrives here already
+		// needing an answer, and one that leaves it cannot be left
+		// behind. Whether this endpoint emits them today is the
+		// server's business; a client that threw away a time it was
+		// promised would be wrong either way.
+		return ui.NewFailure(
+			"The server is asking for a pause.",
+			apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".")
+
+	case wire.CodeCapacityClosed:
+		// The door, which costs ExitServerClosed rather than 1 — the
+		// scoped code exists so a script can tell "come back later" from
+		// "this went wrong".
+		return ui.ServerClosed(ui.NewFailure(
+			closedHeadline,
+			apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+deployID+".",
+			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+"."))
+
 	case wire.CodeDeployFailed, wire.CodeBadRequest:
 		return buildRefusedFailure(deployID)
 
 	case wire.CodeNotFound:
 		return ui.NewFailure(
 			"The server doesn't know that deploy.",
-			apiErr.Message+"\n\nThe deploy is "+ui.Sanitize(deployID)+". That usually "+
+			apiErr.Message+"\n\nThe deploy is "+deployID+". That usually "+
 				"means it has already\nexpired, or that it belongs to a different login "+
 				"from the one this run\nis using. "+nothingDeployed,
 			"Run `curious deploy` again to make a fresh one.")
@@ -414,7 +516,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string) error {
 		return ui.NewFailure(
 			"The server couldn't finish the deploy.",
 			apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+
-				ui.Sanitize(deployID)+".",
+				deployID+".",
 			"There is nothing to fix at this end and nothing here worth retrying.\n"+
 				"If it keeps happening, please get in touch.")
 	}
@@ -425,7 +527,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string) error {
 	return ui.NewFailure(
 		"The server wouldn't give this deploy an address.",
 		apiErr.Message+"\n\n"+nothingDeployed+"\n\nThe deploy is "+
-			ui.Sanitize(deployID)+".",
+			deployID+".",
 		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.")
 }
@@ -457,7 +559,7 @@ func buildRefusedFailure(deployID string) *ui.Failure {
 			"produced, and the server refused this deploy at that point — so this\n"+
 			"is the second half of a build outcome arriving late rather than\n"+
 			"anything going wrong at the last step. "+nothingDeployed+"\n\n"+
-			"The deploy is "+ui.Sanitize(deployID)+".",
+			"The deploy is "+deployID+".",
 		"Run `curious deploy` again. What went wrong is in the build log above\n"+
 			"rather than here, and there is nothing at this step to retry on its\n"+
 			"own.")
@@ -477,7 +579,7 @@ func publishNotConfirmedFailure(deployID string) error {
 		"The build log ended with the build reporting that it had finished, and\n"+
 			"the server was still working on it "+publishConfirmWindow.String()+
 			" later. curious stopped\nasking rather than wait indefinitely. "+
-			nothingDeployed+"\n\nThe deploy is "+ui.Sanitize(deployID)+".",
+			nothingDeployed+"\n\nThe deploy is "+deployID+".",
 		"Run `curious deploy` again.")
 }
 
@@ -501,6 +603,6 @@ func publishUnansweredFailure(err error, deployID string) error {
 			"tell whether\nthe request arrived, and it does not ask twice, because "+
 			"asking again is\nnot a way of finding out. It never learned the address "+
 			"either: that\narrives in the answer that did not come.\n\nThe deploy is "+
-			ui.Sanitize(deployID)+".",
+			deployID+".",
 		"Run `curious deploy` again when the connection is back.")
 }

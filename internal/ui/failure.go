@@ -277,6 +277,13 @@ func (u *UI) ExitCode(err error) int {
 		u.Cancelled()
 		return 0
 
+	case errors.Is(err, ErrInterrupted):
+		// The same word as a cancellation and a different number: the
+		// run did not finish, and a wrapper that reads the status has
+		// to be able to tell.
+		u.Cancelled()
+		return interruptExitCode
+
 	case errors.Is(err, ErrNotInteractive):
 		u.Fail(notInteractiveFailure)
 		return 1

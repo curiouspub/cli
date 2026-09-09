@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curiouspub/cli/internal/api"
 	"github.com/curiouspub/cli/internal/ui"
 	"github.com/curiouspub/cli/pkg/wire"
 )
@@ -438,8 +440,18 @@ func TestEveryContractCodeHasAPublishRoute(t *testing.T) {
 		t.Fatal("the contract enumerates no codes, so this row would pass over nothing")
 	}
 	for _, code := range wire.AllErrorCodes {
-		if _, stated := publishRouting[code]; !stated {
+		route, stated := publishRouting[code]
+		if !stated {
 			t.Errorf("the contract defines %q and the publish has no stated route for it", code)
+			continue
+		}
+		// AND THE VALUE IS ONE OF THE TWO. Membership alone was
+		// satisfied by publishRoute(999), which routes to a stop by
+		// accident rather than by decision — the map would have been
+		// exhaustive over the contract and meaningless.
+		if route != publishAskAgain && route != publishStop {
+			t.Errorf("the publish routes %q to %d, which is neither of the two "+
+				"routes this file defines", code, route)
 		}
 	}
 	for code := range publishRouting {
@@ -590,7 +602,7 @@ func TestAStateNobodyNamedIsNotGivenAStoryOfItsOwn(t *testing.T) {
 // at all — the door is shut, the project is fine — which is why it costs
 // a different number.
 func TestEachRefusalHasItsOwnCopyAndItsOwnCost(t *testing.T) {
-	for _, tc := range []struct {
+	table := []struct {
 		name     string
 		outcome  outcome
 		wantCode int
@@ -634,7 +646,82 @@ func TestEachRefusalHasItsOwnCopyAndItsOwnCost(t *testing.T) {
 			says: []string{"something this build has never heard of", "deploy-1",
 				nothingDeployed, "updating curious may"},
 		},
-	} {
+		{
+			// Both codes for one event: a build the server will not take.
+			// The row next door is about the WORD this copy must not use;
+			// these two are here because the completeness check below
+			// asks about every stop code, and an exemption naming
+			// another row is a pointer that goes stale.
+			name: "the build was refused",
+			outcome: fails(http.StatusConflict, wire.CodeDeployFailed,
+				`this deploy is "failed" and cannot be published`),
+			wantCode: 1,
+			says: []string{"The build finished", "deploy-1", nothingDeployed,
+				"`curious deploy` again"},
+			neverSay: []string{"publish"},
+		},
+		{
+			name: "an older server saying the same thing",
+			outcome: fails(http.StatusBadRequest, wire.CodeBadRequest,
+				"not a built deploy"),
+			wantCode: 1,
+			says:     []string{"The build finished", "deploy-1", nothingDeployed},
+			neverSay: []string{"publish"},
+		},
+		{
+			name: "the login is not accepted here",
+			outcome: fails(http.StatusUnauthorized, wire.CodeUnauthorized,
+				"that token is not valid"),
+			wantCode: 1,
+			says: []string{"The server wouldn't give this deploy an address.",
+				"that token is not valid", "deploy-1", nothingDeployed},
+		},
+		{
+			name: "the login is not allowed to",
+			outcome: fails(http.StatusForbidden, wire.CodeForbidden,
+				"that deploy belongs to somebody else"),
+			wantCode: 1,
+			says: []string{"The server wouldn't give this deploy an address.",
+				"that deploy belongs to somebody else", "deploy-1", nothingDeployed},
+		},
+		{
+			name: "the server asks for a pause",
+			outcome: fails(http.StatusTooManyRequests, wire.CodeRateLimited,
+				"too many of those just now").after("90"),
+			wantCode: 1,
+			says: []string{"The server is asking for a pause.",
+				"too many of those just now", "deploy-1", nothingDeployed, "Try again"},
+		},
+		{
+			name: "the door is shut for today",
+			outcome: fails(http.StatusTooManyRequests, wire.CodeCapacityClosed,
+				"full for today").after("3600"),
+			wantCode: ui.ExitServerClosed,
+			says: []string{closedHeadline, "full for today", "deploy-1",
+				nothingDeployed, "Try again"},
+		},
+	}
+	// EACH IS MEASURED, NOT CLAIMED. The table used to name four of the
+	// eight codes the routing table stops on, and the name said "each" —
+	// which is the species of defect this file is otherwise careful
+	// about: a row that measures less than it is called. The check runs
+	// against the routing table, so a code added to the contract needs
+	// copy here rather than inheriting somebody else's silently.
+	driven := map[wire.ErrorCode]bool{}
+	for _, tc := range table {
+		driven[tc.outcome.code] = true
+	}
+	for code, route := range publishRouting {
+		if route != publishStop {
+			continue
+		}
+		if !driven[code] {
+			t.Errorf("the publish stops on %q and no row here says what a person "+
+				"is told when it does", code)
+		}
+	}
+
+	for _, tc := range table {
 		t.Run(tc.name, func(t *testing.T) {
 			run := publishRun(t)
 			run.script.publishOutcome = tc.outcome
@@ -790,26 +877,45 @@ func TestAPublishWithNoAnswerClaimsNeitherOutcome(t *testing.T) {
 // runs: a run that handed over a file nobody will release is a temp file
 // left on somebody's machine by an error path.
 func TestEveryPublishFailureLeavesTheArchiveRemoved(t *testing.T) {
-	for _, tc := range []struct {
+	// EVERY is measured, not asserted by naming four of eight. The stop
+	// codes come from the routing table itself, so a code added to the
+	// contract arrives here with a row of its own rather than leaving
+	// the name overclaiming quietly.
+	cases := []struct {
+		name    string
+		arrange func(*deployRun)
+	}{}
+	for code, route := range publishRouting {
+		if route != publishStop {
+			continue
+		}
+		code := code
+		cases = append(cases, struct {
+			name    string
+			arrange func(*deployRun)
+		}{string(code), func(r *deployRun) {
+			r.script.publishOutcome = fails(http.StatusConflict, code,
+				"the server refused it").after("60")
+		}})
+	}
+	if len(cases) < 8 {
+		t.Fatalf("the routing table names %d stop codes, so this row is about "+
+			"fewer paths than the client has", len(cases))
+	}
+
+	for _, tc := range append(cases, []struct {
 		name    string
 		arrange func(*deployRun)
 	}{
-		{"the build was refused", func(r *deployRun) {
-			r.script.publishOutcome = fails(http.StatusConflict, wire.CodeDeployFailed,
-				"not a built deploy")
-		}},
-		{"the service declined", func(r *deployRun) {
-			r.script.publishOutcome = fails(http.StatusServiceUnavailable,
-				wire.CodeMaintenance, "not right now")
-		}},
 		{"nothing answered", func(r *deployRun) { r.script.publishHangsUp = true }},
+		{"the label was not one", func(r *deployRun) { r.script.publishSubdomain = "" }},
 		{"it was never ready", func(r *deployRun) {
 			r.script.publishOutcome = fails(http.StatusConflict, wire.CodeDeployNotReady,
 				"still building")
 			r.deps.PublishRetryInterval = time.Millisecond
 			r.deps.Now = advancingClock(fixedNowLocal, 10*time.Second)
 		}},
-	} {
+	}...) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := publishRun(t)
 			tc.arrange(run)
@@ -826,5 +932,320 @@ func TestEveryPublishFailureLeavesTheArchiveRemoved(t *testing.T) {
 				t.Errorf("the run left %v behind", left)
 			}
 		})
+	}
+}
+
+// -------------------------------------------------------------------
+// A wait that was cut off from outside
+// -------------------------------------------------------------------
+
+// runWith drives a whole deploy on a context the row owns, which is what
+// a row about cancellation needs and t.Context cannot give it.
+func runWith(t *testing.T, ctx context.Context, run *deployRun) (*Handoff, error) {
+	t.Helper()
+	return Deploy(ctx, run.deps)
+}
+
+// waitingForever scripts a publish that answers "not ready" every time,
+// with a pace long enough that the run is certainly inside the sleep
+// when the row does something to its context.
+func waitingForever(t *testing.T) *deployRun {
+	t.Helper()
+	run := publishRun(t)
+	run.script.publishOutcome = fails(http.StatusConflict, wire.CodeDeployNotReady,
+		`this deploy is "building" and cannot be given an address yet`)
+	run.deps.PublishRetryInterval = time.Minute
+	return run
+}
+
+// TestACancelledRunSaysCancelledAndClaimsNothingAboutTheServer.
+//
+// THE TWO ARMS OF ONE SELECT USED TO RETURN THE SAME FAILURE, and that
+// failure was written for the other one: "the server was still working
+// on it 30s later. curious stopped asking rather than wait
+// indefinitely." Neither clause is true of a cancellation — seconds may
+// have passed, and it was not curious that stopped. Somebody who
+// interrupted their own run was handed a story about the far end.
+//
+// REQUIRED MUTATION, run 2026-09-09: collapse the arms, returning
+// publishNotConfirmedFailure for ctx.Done() again. Reds twice — on the
+// exit code (1, want 130) and on the copy, which starts naming a window
+// nobody waited out.
+func TestACancelledRunSaysCancelledAndClaimsNothingAboutTheServer(t *testing.T) {
+	run := waitingForever(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		// Long enough for the run to reach the wait, short enough to be
+		// a test. The row asserts the run was actually in the retry loop
+		// below, so a cancellation that landed early cannot pass.
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := runWith(t, ctx, run)
+	if err == nil {
+		t.Fatal("a cancelled run reported success")
+	}
+	if run.script.publishes == 0 {
+		t.Fatalf("the cancellation landed before the publish was ever asked, so "+
+			"this row is not about the retry wait (%d asks)", run.script.publishes)
+	}
+
+	text, code := renderedBytes(t, err)
+	if code != 130 {
+		t.Errorf("exit code = %d, want 130 — a run that was stopped rather than "+
+			"finished:\n%s", code, text)
+	}
+	if got := strings.TrimSpace(text); got != "cancelled" {
+		t.Errorf("a cancelled run said more than the word:\n%q", got)
+	}
+	// THE CLAIM THAT MUST NOT BE THERE. Anything about the server, the
+	// window, or who stopped asking is invented at this point.
+	for _, forbidden := range []string{"server", "30s", "stopped asking", "indefinitely"} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(forbidden)) {
+			t.Errorf("the cancellation copy claims %q:\n%s", forbidden, text)
+		}
+	}
+	// And the cause survives, so nothing downstream has to guess which
+	// of the two arms it was.
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("ctx.Err() was discarded: %v", err)
+	}
+	if !errors.Is(err, ui.ErrInterrupted) {
+		t.Errorf("the failure is not marked as an interruption: %v", err)
+	}
+}
+
+// TestADeadlineOnTheRunStillReadsAsATimeout is the other arm, and the
+// control for the row above: the copy that was wrong for a cancellation
+// is exactly right here, so it must still be produced.
+func TestADeadlineOnTheRunStillReadsAsATimeout(t *testing.T) {
+	run := waitingForever(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	defer cancel()
+
+	_, err := runWith(t, ctx, run)
+	if err == nil {
+		t.Fatal("a run whose deadline passed reported success")
+	}
+	text, code := renderedBytes(t, err)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 — a deadline is a failure, not a "+
+			"cancellation:\n%s", code, text)
+	}
+	if !strings.Contains(text, "could not be confirmed in time") {
+		t.Errorf("a deadline lost the copy written for it:\n%s", text)
+	}
+	if errors.Is(err, ui.ErrInterrupted) {
+		t.Errorf("a deadline was reported as an interruption: %v", err)
+	}
+}
+
+// -------------------------------------------------------------------
+// A label that is not one
+// -------------------------------------------------------------------
+
+// TestALabelThatIsNotOneIsRefusedRatherThanPrinted.
+//
+// THE ONE FIELD A CLIENT CANNOT DERIVE is also the one it cannot check
+// against anything else. A 200 carrying "" used to reach the end of the
+// command and print "https://.curiously.dev" as the site's address, with
+// exit 0 — on the single line a script reads.
+//
+// REQUIRED MUTATION, run 2026-09-09: remove the label check from
+// DeployPublish. The empty-label row reds with stdout carrying
+// "https://.curiously.dev" and an exit code of 0.
+func TestALabelThatIsNotOneIsRefusedRatherThanPrinted(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		label string
+	}{
+		{"nothing at all", ""},
+		{"a host rather than a label", "evil.com"},
+		{"a hyphen at the end", "quick-koala-"},
+		{"a byte no label may carry", "quick koala"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := publishRun(t)
+			run.script.publishSubdomain = tc.label
+
+			_, err := run.run()
+			if err == nil {
+				t.Fatal("the run printed an address built from a label that is not one")
+			}
+			text, code := renderedBytes(t, err)
+			if code == 0 {
+				t.Errorf("a refused label cost nothing:\n%s", text)
+			}
+			// NO ADDRESS ON STDOUT. The build log legitimately went
+			// there and stays; what must not be there is anything a
+			// script reading for the site's address could take for one.
+			printed := run.prompt.results.String()
+			if strings.Contains(printed, "//") {
+				t.Errorf("stdout carried something shaped like an address for a "+
+					"label that is not one: %q", printed)
+			}
+			if strings.Contains(printed, siteBaseDomain) {
+				t.Errorf("stdout named the site domain for a label that is not "+
+					"one: %q", printed)
+			}
+			if !strings.Contains(text, "deploy-1") {
+				t.Errorf("the failure never named the deploy:\n%s", text)
+			}
+			// NOT REPORTED AS A TRANSPORT FAILURE. The answer arrived.
+			if strings.Contains(text, "may or may not") {
+				t.Errorf("an answer that arrived was reported as one that might "+
+					"not have:\n%s", text)
+			}
+		})
+	}
+
+	// The control: the ordinary label still produces an address.
+	t.Run("control: a real label still prints", func(t *testing.T) {
+		ok := publishRun(t)
+		handoff, err := ok.run()
+		if err != nil {
+			t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+		}
+		defer handoff.Release()
+		if got := lastNonEmptyLine(ok.prompt.results.String()); got !=
+			publishedURL(defaultPublishSubdomain) {
+			t.Errorf("the address stopped being printed: %q", got)
+		}
+	})
+}
+
+// -------------------------------------------------------------------
+// The bound, in real time
+// -------------------------------------------------------------------
+
+// alwaysBuilding answers "not ready" for ever, and counts.
+type alwaysBuilding struct{ asks int }
+
+func (a *alwaysBuilding) DeployPublish(context.Context, string) (*wire.DeployPublishResponse, error) {
+	a.asks++
+	return nil, &api.APIError{Code: wire.CodeDeployNotReady, Message: "still building"}
+}
+
+// silentRenderer takes the narration and says nothing about it.
+type silentRenderer struct{}
+
+func (silentRenderer) Step(string, ...any)   {}
+func (silentRenderer) Result(string, ...any) {}
+
+// TestTheAskingStopsInsideItsOwnWindow.
+//
+// THE ONE ROW HERE THAT IS NOT A WHOLE RUN, and the reason is the thing
+// being measured. The window is a bound on REAL elapsed time; a whole
+// run against the shipped window would spend thirty real seconds, which
+// is not a row anybody keeps. So this drives the loop directly with the
+// bound made small and the pace made large — the arrangement that makes
+// the defect visible at all.
+//
+// WITHOUT THE CLAMP the sleep between two asks runs past the deadline it
+// was just checked against, so the run takes window + interval. With the
+// shipped numbers that is one second on thirty; with a pace injected
+// through the seam beside it, it is the whole of the bound again.
+//
+// REQUIRED MUTATION, run 2026-09-09: remove the clamp, sleeping the full
+// interval. Reds with an elapsed time of about the interval rather than
+// about the window.
+func TestTheAskingStopsInsideItsOwnWindow(t *testing.T) {
+	const window = 150 * time.Millisecond
+	client := &alwaysBuilding{}
+
+	started := time.Now()
+	_, err := publishDeploy(t.Context(), publishDeps{
+		Client:        client,
+		DeployID:      "deploy-1",
+		Render:        silentRenderer{},
+		Now:           time.Now,
+		ConfirmWindow: window,
+		// Ten times the window. Unclamped, one sleep of this is the
+		// whole of the row's failure.
+		RetryInterval: 10 * window,
+	})
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("the asking never stopped")
+	}
+	if client.asks < 2 {
+		t.Fatalf("the run asked %d times — a bound that stops on the first "+
+			"answer is not what this row is about", client.asks)
+	}
+	// One window, plus room for the latency of the ask that discovers
+	// the window has closed. Half a window of slack on a bound this
+	// small is generous and still nowhere near interval.
+	if limit := window + window/2; elapsed > limit {
+		t.Errorf("the asking took %s against a %s window — the sleep is not "+
+			"clamped to what is left of it (the pace was %s)",
+			elapsed.Round(time.Millisecond), window, 10*window)
+	}
+}
+
+// -------------------------------------------------------------------
+// The contract's own retry-after set
+// -------------------------------------------------------------------
+
+// TestEveryCodeTheContractSaysCarriesATimeRendersOne is keyed to
+// wire.CarriesRetryAfter rather than to a list typed here, so it cannot
+// drift from the contract: a code that joins the set arrives already
+// needing an answer, and one that leaves it cannot be left behind.
+//
+// Whether this endpoint emits either code today is the server's
+// business and is recorded as an open question. A client that threw
+// away a time it was promised would be wrong either way.
+//
+// REQUIRED MUTATION, run 2026-09-09: delete the CodeRateLimited and
+// CodeCapacityClosed cases so both fall to the standing copy. Reds on
+// both, on the missing retry time.
+func TestEveryCodeTheContractSaysCarriesATimeRendersOne(t *testing.T) {
+	carried := 0
+	for _, code := range wire.AllErrorCodes {
+		if !wire.CarriesRetryAfter(code) {
+			continue
+		}
+		carried++
+		t.Run(string(code), func(t *testing.T) {
+			run := publishRun(t)
+			run.script.publishOutcome = fails(http.StatusTooManyRequests, code,
+				"not right now").after("90")
+
+			_, err := run.run()
+			if err == nil {
+				t.Fatalf("%s did not stop the run", code)
+			}
+			text, _ := renderedBytes(t, err)
+			if !strings.Contains(text, "Try again") {
+				t.Errorf("%s threw away the time the contract says it carries:\n%s",
+					code, text)
+			}
+			if !strings.Contains(text, nothingDeployed) {
+				t.Errorf("%s never said nothing was deployed:\n%s", code, text)
+			}
+		})
+	}
+	if carried == 0 {
+		t.Fatal("the contract says no code carries Retry-After, so this row " +
+			"ranged over nothing")
+	}
+}
+
+// TestAClosedDoorAtThePublishCostsTheScopedCode. The door is not a
+// fault, and the scoped exit code is how a script tells "come back
+// later" from "this went wrong".
+func TestAClosedDoorAtThePublishCostsTheScopedCode(t *testing.T) {
+	run := publishRun(t)
+	run.script.publishOutcome = fails(http.StatusTooManyRequests,
+		wire.CodeCapacityClosed, "full for today").after("3600")
+
+	_, err := run.run()
+	if err == nil {
+		t.Fatal("a closed door did not stop the run")
+	}
+	text, code := renderedBytes(t, err)
+	if code != ui.ExitServerClosed {
+		t.Errorf("exit code = %d, want %d:\n%s", code, ui.ExitServerClosed, text)
 	}
 }
