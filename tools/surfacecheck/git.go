@@ -22,9 +22,57 @@ type repo struct {
 // findings that look identical from a distance.
 var errNotInHistory = errors.New("not in this checkout's history")
 
-// run executes one git command and returns its standard output. Standard
-// error is folded into the error, because a git failure this check cannot
-// explain is exactly the case where the operator needs git's own words.
+// gitError is one git command that did not succeed, kept as git left it.
+//
+// THE READING IS THE PART THAT CAN BE WRONG, which is why the exit status
+// and git's own words are carried rather than collapsed into a sentence
+// here. "There is no such revision" and "there is no git here" arrive at
+// the same call site, and a check that maps both to "not in this
+// checkout's history" answers a missing git binary with "fetch the full
+// history and run again" — advice that fixes nothing, given to somebody
+// who has been told the diagnosis and cannot see it is the wrong one.
+type gitError struct {
+	Args   []string
+	Code   int // the exit status, or -1 when git never ran at all
+	Stderr string
+	Err    error
+}
+
+func (e *gitError) Error() string {
+	if e.Stderr == "" {
+		return fmt.Sprintf("git %s: %v", strings.Join(e.Args, " "), e.Err)
+	}
+	return fmt.Sprintf("git %s: %v: %s", strings.Join(e.Args, " "), e.Err, e.Stderr)
+}
+
+func (e *gitError) Unwrap() error { return e.Err }
+
+// answered reports whether git ran, understood the question and said no —
+// as against not answering it at all.
+//
+// KEYED ON SHAPES OBSERVED FROM THE REAL PROGRAM rather than on ones that
+// seemed likely. Watched on the machine this was written on:
+//
+//	rev-parse --verify --quiet <a revision that is absent>  exit 1, nothing on stderr
+//	rev-parse --verify --quiet, outside any repository      exit 128, "fatal: not a git repository ..."
+//	merge-base <two commits with nothing in common>         exit 1, nothing on stderr
+//	merge-base <a name that is not a commit>                exit 128, "fatal: Not a valid commit name ..."
+//
+// An error shape nobody has watched the real program produce is a guess,
+// and the guess here is what decides whether "I could not look" gets
+// reported as "there is nothing there".
+func (e *gitError) answered() bool { return e.Code == 1 && e.Stderr == "" }
+
+// answered lifts the question above through however an error was wrapped.
+func answered(err error) bool {
+	var e *gitError
+	return errors.As(err, &e) && e.answered()
+}
+
+// run executes one git command and returns its standard output. A failure
+// comes back as a gitError carrying the exit status and git's own words,
+// because a git failure this check cannot explain is exactly the case
+// where the operator needs them.
 func (r repo) run(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.dir
@@ -32,8 +80,12 @@ func (r repo) run(args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		failure := &gitError{Args: args, Code: -1, Stderr: strings.TrimSpace(stderr.String()), Err: err}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			failure.Code = exit.ExitCode()
+		}
+		return "", failure
 	}
 	return stdout.String(), nil
 }
@@ -46,18 +98,34 @@ func (r repo) run(args ...string) (string, error) {
 // repository, and a range computed against a checkout missing its own
 // endpoints resolves to nothing. Nothing then gets examined and the run
 // goes green, which is this check's whole failure mode.
+// AND THE SEAM HAS A THIRD SIDE. Mapping every failure to "not in this
+// checkout's history" turns a git that could not be run into a statement
+// about the repository — so the two are separated on the shape git
+// itself produced, and a failure that is not an answer keeps git's words.
 func (r repo) resolve(rev string) (string, error) {
 	out, err := r.run("rev-parse", "--verify", "--quiet", rev+"^{commit}")
-	if err != nil || strings.TrimSpace(out) == "" {
+	if err != nil {
+		if !answered(err) {
+			return "", fmt.Errorf("git could not be asked whether %q is in this checkout: %w",
+				rev, err)
+		}
+		return "", fmt.Errorf("%q is %w", rev, errNotInHistory)
+	}
+	if strings.TrimSpace(out) == "" {
 		return "", fmt.Errorf("%q is %w", rev, errNotInHistory)
 	}
 	return strings.TrimSpace(out), nil
 }
 
-// mergeBase is the commit two revisions last had in common.
+// mergeBase is the commit two revisions last had in common — or an answer
+// that there is none, or git's own words about why it could not say.
 func (r repo) mergeBase(a, b string) (string, error) {
 	out, err := r.run("merge-base", a, b)
 	if err != nil {
+		if !answered(err) {
+			return "", fmt.Errorf("git could not be asked what %q and %q have in common: %w",
+				a, b, err)
+		}
 		return "", fmt.Errorf("no common commit between %q and %q: %w", a, b, errNotInHistory)
 	}
 	return strings.TrimSpace(out), nil
@@ -96,16 +164,47 @@ func (r repo) message(sha string) (string, error) {
 // not exist. Found by the row that asserts a lightweight tag has no
 // message, which is the control for the row that asserts an annotated one
 // does.
+//
+// AND BOTH QUESTIONS ARE ASKED BY EXACT REF, never by name in a position
+// where git reads options. A tag name is chosen by whoever pushed it, and
+// listing tags by pattern puts that name where an option goes. Watched on
+// the machine this was written on, against real tags:
+//
+//   - a tag named "-dash" exits 129, "options '-d' and '--list' cannot be
+//     used together" — which at least fails;
+//   - a tag named "-n1" exits 0 and prints the message of EVERY tag in
+//     the repository, because the name was eaten as an option and the
+//     pattern slot left empty. Four other tags' messages then arrive as
+//     this one's, reported against a surface they did not come from;
+//   - and a name that consumes the pattern slot without matching exits 0
+//     with nothing, which is "no message" said without having looked.
+//
+// Asking by ref also gives this the three-way answer the rest of the
+// check has, and gives it cleanly — measured the same way:
+//
+//	an annotated tag  -> "tag",    exit 0
+//	a lightweight tag -> "commit", exit 0
+//	a ref that is not there -> nothing at all, exit 0
+//	no repository to ask     -> exit 128, "fatal: not a git repository ..."
+//
+// Absent and undetermined are different exits here, so neither has to be
+// inferred from a message. That is why this asks a ref-listing rather
+// than the object store, whose "no such object" and "no such repository"
+// are the same exit and the same shape.
 func (r repo) tagMessage(name string) (string, bool, error) {
 	ref := "refs/tags/" + name
-	kind, err := r.run("cat-file", "-t", ref)
+	kind, err := r.run("for-each-ref", "--format=%(objecttype)", ref)
 	if err != nil {
-		return "", false, fmt.Errorf("the tag %q is %w", name, errNotInHistory)
+		return "", false, fmt.Errorf("git could not be asked what %q is: %w", ref, err)
 	}
-	if strings.TrimSpace(kind) != "tag" {
+	switch strings.TrimSpace(kind) {
+	case "":
+		return "", false, fmt.Errorf("the tag %q is %w", name, errNotInHistory)
+	case "tag":
+	default:
 		return "", false, nil
 	}
-	out, err := r.run("tag", "--list", "--format=%(contents)", name)
+	out, err := r.run("for-each-ref", "--format=%(contents)", ref)
 	if err != nil {
 		return "", false, err
 	}

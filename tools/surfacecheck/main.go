@@ -31,6 +31,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -101,6 +102,13 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	findings, examined, err := examine(r, rules, req, baseSHA, headSHA)
 	if err != nil {
 		fmt.Fprintf(stderr, "the range could not be read: %v\n", err)
+		// WHAT WAS READ BEFORE THAT IS STILL TRUE. A branch name carrying
+		// a citation does not stop carrying it because the commits behind
+		// it could not be walked, and throwing it away leaves the author
+		// with an undetermined run and no idea a surface was found. The
+		// run stays undetermined either way: what could not be read may
+		// carry more.
+		describe(stdout, findings, narrowings)
 		return exitUndetermined
 	}
 	fmt.Fprintf(stdout, "examined %d published surface(s) over %s..%s\n",
@@ -150,13 +158,27 @@ func buildRequest(r repo, getenv func(string) string, base, head, branch string)
 	return requestFromEvent(r, eventName, getenv("GITHUB_REF_NAME"), raw)
 }
 
-// unresolvable is the one message for an endpoint this checkout does not
-// carry, so both ends say the same thing about the same failure.
+// unresolvable is the one message for an endpoint this run could not turn
+// into a commit, so both ends say the same thing about the same failure.
+//
+// THE ADVICE IS NOT UNCONDITIONAL, because there are two failures here
+// and only one of them has that repair. "This checkout does not carry the
+// commit" is fixed by fetching; "git would not answer" is not, and
+// telling somebody to fetch more history when the trouble is that there
+// is no repository to fetch into sends them to the one place the answer
+// is not. Git's own words are printed either way; what changes is whether
+// this check adds a diagnosis on top of them.
 func unresolvable(stderr io.Writer, which, rev string, err error) int {
 	fmt.Fprintf(stderr, "the %s of the range could not be resolved: %v\n", which, err)
-	fmt.Fprintln(stderr, "A checkout without the commits at the ends of its own range "+
-		"produces an empty range, and an empty range examines nothing. Fetch the full "+
-		"history and run again.")
+	if errors.Is(err, errNotInHistory) {
+		fmt.Fprintln(stderr, "A checkout without the commits at the ends of its own range "+
+			"produces an empty range, and an empty range examines nothing. Fetch the full "+
+			"history and run again.")
+		return exitUndetermined
+	}
+	fmt.Fprintln(stderr, "That is git declining to answer rather than answering no, so this "+
+		"says nothing about whether the range is here. Read its words above: fetching more "+
+		"history will not change them.")
 	return exitUndetermined
 }
 
@@ -165,6 +187,15 @@ func unresolvable(stderr io.Writer, which, rev string, err error) int {
 //
 // The count is separate from the findings because zero of each means two
 // different things, and only one of them is good news.
+//
+// A FAILURE PART WAY THROUGH STILL RETURNS WHAT WAS ALREADY READ. The
+// named surfaces are scanned before the range is walked, so a branch name
+// carrying a citation is a fact this function is holding by the time git
+// declines to walk anything — and discarding it on the way out tells the
+// author nothing about the one surface that WAS read. The run is still
+// undetermined, because what could not be read may carry more; that is
+// the caller's decision, and it does not need this evidence destroyed to
+// make it.
 func examine(r repo, rules Rules, req request, baseSHA, headSHA string) ([]Finding, int, error) {
 	var findings []Finding
 	examined := 0
@@ -182,12 +213,12 @@ func examine(r repo, rules Rules, req request, baseSHA, headSHA string) ([]Findi
 
 	shas, err := r.commits(baseSHA, headSHA)
 	if err != nil {
-		return nil, 0, err
+		return findings, examined, err
 	}
 	for _, sha := range shas {
 		message, err := r.message(sha)
 		if err != nil {
-			return nil, 0, err
+			return findings, examined, err
 		}
 		examined++
 		findings = append(findings, rules.Scan("commit "+short(sha), message)...)
@@ -197,6 +228,19 @@ func examine(r repo, rules Rules, req request, baseSHA, headSHA string) ([]Findi
 
 // report prints what was found and decides the exit code.
 func report(stdout io.Writer, findings []Finding, narrowings []Narrowing) int {
+	if describe(stdout, findings, narrowings) {
+		return exitFindings
+	}
+	fmt.Fprintln(stdout, "clean.")
+	return exitClean
+}
+
+// describe prints everything the run has to say about what it read, and
+// reports whether there was anything. It is separate from the exit code
+// above because a run that could not finish still has whatever it read
+// before that to hand over — and the code for THAT run is decided by what
+// it could not do, not by what it found.
+func describe(stdout io.Writer, findings []Finding, narrowings []Narrowing) bool {
 	for _, n := range narrowings {
 		fmt.Fprintf(stdout, "pattern set narrowed: %s no longer declares %s\n", n.Path, n.Line)
 	}
@@ -217,11 +261,7 @@ func report(stdout io.Writer, findings []Finding, narrowings []Narrowing) int {
 			"either came from; a published message cannot be unpublished by a later one.")
 	}
 
-	if len(findings) > 0 || len(narrowings) > 0 {
-		return exitFindings
-	}
-	fmt.Fprintln(stdout, "clean.")
-	return exitClean
+	return len(findings) > 0 || len(narrowings) > 0
 }
 
 // String renders one finding for whoever has to fix it, and NEVER the
