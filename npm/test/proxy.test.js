@@ -327,6 +327,47 @@ test('a proxy that refuses with a page of its own is still read as a refusal', a
   assert.strictEqual(h.installedBinary(s.dir, 'curious'), null);
 });
 
+// A FATAL TLS ALERT, WRITTEN OUT BYTE BY BYTE: record type 21 (alert),
+// version 3.3, a two-byte payload, level 2 (fatal), description 48
+// (unknown certificate authority).
+//
+// It is the one thing a server can say before the client has said
+// anything, and that is what makes it usable here. TLS is client-first,
+// so a proxy behaving realistically has no server flight to hand back
+// with its agreement — the end-to-end version of this row cannot be
+// built. An alert depends on nothing in the handshake, so a socket-level
+// row can inject one and ask whether it arrived.
+//
+// THE NUMBER IS THE ASSERTION. Forty-eight can only appear in the
+// failure if this last byte reached the TLS layer.
+const FATAL_ALERT_UNKNOWN_CA = Buffer.from([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x30]);
+
+test('bytes handed back with a proxy\'s agreement reach the tunnelled protocol', async (t) => {
+  // The mechanism nothing else in this suite holds: the harness sends
+  // extra bytes only with REFUSALS, and every successful row answers
+  // with a bare 200 — so the line that puts those bytes back in front of
+  // the tunnel could be deleted and every row would stay green.
+  //
+  // What is observed is not "a failure happened" but WHICH failure: the
+  // tunnelled protocol reports the exact alert these bytes encode.
+  // Dropped instead, the handshake reaches a socket that has already
+  // ended and the client reports a reset, which is a different sentence.
+  const s = await tunnelled(t, { tunnelHead: FATAL_ALERT_UNKNOWN_CA });
+  const run = await h.runInstall(t, s.dir, {
+    base: s.base, ca: s.ca, ...TARGET,
+    env: { HTTPS_PROXY: s.proxy.url },
+  });
+
+  assert.notStrictEqual(run.code, 0, run.output);
+  assert.ok(s.proxy.connects.length >= 1, 'the proxy was never asked to open a tunnel');
+  assert.strictEqual(s.proxy.connects[0].target, `127.0.0.1:${s.direct.port}`);
+  assert.match(run.output, /alert number 48|unknown ca/i);
+  // And the bytes were not mistaken for something to install.
+  assert.strictEqual(s.direct.arrivals.length, 0);
+  assert.strictEqual(h.installedBinary(s.dir, 'curious'), null);
+  assert.deepStrictEqual(h.leftovers(s.dir), []);
+});
+
 test('a port-qualified NO_PROXY entry matches that port and no other', async (t) => {
   const s = await bothRoutes(t, 'no-proxy-port');
 

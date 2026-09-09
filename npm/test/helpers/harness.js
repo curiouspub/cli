@@ -274,6 +274,7 @@ function writeCA(t, pem) {
 // would reach the first address, and the first address is watched.
 function serveProxy(t, {
   dialPort = null, respondWith = null, respondBody = null, tlsCert = null,
+  tunnelHead = null,
 } = {}) {
   const connects = [];
   // EVERY SOCKET THIS PROXY OPENS, tracked. A tunnel is two sockets and
@@ -297,6 +298,26 @@ function serveProxy(t, {
       authorization: req.headers['proxy-authorization'] || null,
       at: Date.now(),
     });
+    if (tunnelHead) {
+      // AN AGREEMENT AND THEN BYTES, IN ONE WRITE. Whatever follows the
+      // blank line is handed to the client as `head`, and a realistic
+      // proxy has nothing to put there — a tunnel to an https host is
+      // silent until the client speaks, so there is no server flight to
+      // coalesce with the answer.
+      //
+      // THIS ONE PUTS SOMETHING THERE ON PURPOSE, which is the only way
+      // the question can be asked at all: bytes that arrive with the
+      // agreement either reach the tunnelled protocol or are dropped on
+      // the floor, and nothing about a proxy that behaves realistically
+      // can tell those two apart. The socket is ended after the write,
+      // so a client that dropped them stops on the spot rather than
+      // waiting out its own deadline.
+      clientSocket.write(Buffer.concat([
+        Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n', 'ascii'),
+        tunnelHead]));
+      clientSocket.end();
+      return;
+    }
     if (respondWith) {
       // BYTES AFTER THE BLANK LINE BECOME `head` ON THE CLIENT. Node
       // treats every answer to a CONNECT as an upgrade and hands the
