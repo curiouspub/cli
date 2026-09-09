@@ -25,6 +25,11 @@ const { authority } = require('./certs');
 
 const PACKAGE_ROOT = path.join(__dirname, '..', '..');
 const PRELOAD = path.join(__dirname, 'fake-platform.js');
+// The preload that makes an open file refuse to be removed, which is
+// how the one platform nobody here runs behaves. Rows ask for it by
+// name so it is visible at the call site rather than switched on by a
+// flag somewhere else.
+const LOCKED_FILES = path.join(__dirname, 'locked-files.js');
 
 // The version the copied package declares, read from the real
 // package.json rather than chosen here: a row asserting the constructed
@@ -184,6 +189,7 @@ function runInstall(t, dir, {
   arch = null,
   nodeVersion = null,
   ca = null,
+  preload = [],
 } = {}) {
   const passthrough = {};
   for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot',
@@ -212,6 +218,9 @@ function runInstall(t, dir, {
   const args = [];
   if (platform || arch || nodeVersion) {
     args.push('--require', PRELOAD);
+  }
+  for (const extra of preload) {
+    args.push('--require', extra);
   }
   args.push(path.join(dir, 'install.js'));
 
@@ -387,6 +396,7 @@ function assertNoSecretIn(text, secret, evidence) {
 
 module.exports = {
   BINARY_BODY,
+  LOCKED_FILES,
   BINARY_GZ,
   BINARY_DIGEST,
   PACKAGE_ROOT,

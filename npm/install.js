@@ -529,10 +529,46 @@ function readBody(response) {
     const out = fs.createWriteStream(file);
     let bytes = 0;
 
+    // ONE OUTCOME, and cleanup that waits for the handle to go.
+    //
+    // Destroying the stream and removing the file in the next statement
+    // is a race with the close. On Windows, removing a file something
+    // still holds open fails outright with EPERM — and this runs inside
+    // an event handler, so the throw does not become a failed install,
+    // it escapes as an unexpected error and leaves BOTH the partial
+    // temp file and a stack trace where the honest message should be.
+    // That is precisely the "nothing left behind" promise failing, on
+    // the one platform nobody writing this can try it on.
+    //
+    // So: wait for the stream's own close, then remove. And the flag,
+    // because more than one thing can fail at once — a reset connection
+    // ends the response and the write stream both — and the second
+    // arrival must not turn a settled failure into a resolve, nor
+    // report a different error than the first one.
+    let settled = false;
+
     const fail = (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const reason = err instanceof Retryable ? err : new Retryable(err.message);
+      const discardFile = () => {
+        try {
+          fs.rmSync(file, { force: true });
+        } catch {
+          // A temp file that refuses to go is not a reason to replace
+          // the real failure with a different one. The install still
+          // stops, and it stops saying why it stopped.
+        }
+        reject(reason);
+      };
+      if (out.closed) {
+        discardFile();
+        return;
+      }
+      out.once('close', discardFile);
       out.destroy();
-      fs.rmSync(file, { force: true });
-      reject(err instanceof Retryable ? err : new Retryable(err.message));
     };
 
     response.on('data', (chunk) => {
@@ -543,10 +579,14 @@ function readBody(response) {
     out.on('error', fail);
     response.pipe(out);
     out.on('close', () => {
+      if (settled) {
+        return;
+      }
       if (!response.complete) {
         fail(new Retryable('the connection closed before the whole file arrived'));
         return;
       }
+      settled = true;
       resolve({ file, digest: hash.digest('hex'), bytes });
     });
   });

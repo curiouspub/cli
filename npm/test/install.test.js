@@ -329,6 +329,46 @@ test('a failed install leaves nothing that claims to be installed', async (t) =>
     'a failed install left a marker saying the previous binary is current');
 });
 
+test('a download that dies mid-body is cleaned up on a machine that locks open files',
+  async (t) => {
+    // WHAT THIS ROW IS ABOUT IS AN ORDER, and the order is invisible on
+    // this machine. Removing a file something still holds open is
+    // ordinary on POSIX and fails outright on Windows — where the
+    // removal throws inside an event handler, so a download failure that
+    // should print one paragraph becomes an unhandled exception, a stack
+    // trace, and the partial file still sitting in the package
+    // directory. The preload makes this machine behave like that one.
+    const server = await h.serveAssets(t, {
+      handler: (record, res) => {
+        // More promised than delivered, then the connection goes: the
+        // response fails while the file being written is still open.
+        res.writeHead(200, { 'content-length': String(h.BINARY_GZ.length * 2) });
+        res.write(h.BINARY_GZ.subarray(0, 16));
+        setTimeout(() => res.socket.destroy(), 20);
+      },
+    });
+    const dir = h.makePackage(t, { checksums: h.checksumsFor(ALL_NAMES) });
+
+    const run = await h.runInstall(t, dir, {
+      base: server.origin, platform: 'linux', arch: 'x64',
+      preload: [h.LOCKED_FILES],
+    });
+
+    // THE PRESENCE: it failed the way a failed download is meant to
+    // fail, with the message somebody is meant to read.
+    assert.notStrictEqual(run.code, 0, run.output);
+    assert.match(run.output, /3 attempts/);
+    assert.match(run.output, /install again/);
+
+    // THE ABSENCE, both halves of it: no partial file, and no stack
+    // trace where the paragraph should have been.
+    assert.deepStrictEqual(h.leftovers(dir), []);
+    assert.ok(!/EPERM/.test(run.output),
+      `the removal that failed was reported to the person installing:\n${run.output}`);
+    assert.ok(!/\n\s+at /.test(run.output),
+      `a stack trace reached the person installing:\n${run.output}`);
+  });
+
 test('the gzip the fixture serves really is one', () => {
   // The harness's own claim, checked: if BINARY_GZ were not a gzip, the
   // rows above would be asserting that a script fails to decompress
