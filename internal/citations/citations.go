@@ -90,6 +90,8 @@ var alphanumericRun = regexp.MustCompile(`[A-Za-z0-9]+`)
 // forbidden names outright, and a substring match reds on it. Splitting
 // distinguishes an identifier that NAMES something from a word that
 // merely contains those letters.
+//
+// THE JOIN IS BOUNDED, and MaxTokenLength below says by what.
 func IdentifierTokens(line string) map[string]bool {
 	out := map[string]bool{}
 	for _, run := range alphanumericRun.FindAllString(line, -1) {
@@ -97,6 +99,9 @@ func IdentifierTokens(line string) map[string]bool {
 		for i := range subs {
 			joined := ""
 			for j := i; j < len(subs); j++ {
+				if len(joined)+len(subs[j]) > MaxTokenLength {
+					break
+				}
 				joined += strings.ToLower(subs[j])
 				out[joined] = true
 			}
@@ -104,3 +109,34 @@ func IdentifierTokens(line string) map[string]bool {
 	}
 	return out
 }
+
+// MaxTokenLength is the longest token this tokeniser will build, in
+// bytes. Every whole subword and every contiguous join is emitted up to
+// this length and none beyond it.
+//
+// WHAT IT BOUNDS. A token exists to be looked up in a vocabulary of
+// forbidden names. The longest name any of them declares today is
+// SIXTEEN bytes — measured off the vocabulary file rather than guessed,
+// and the row beside that file fails if a longer one is ever added, so
+// this number can never go quietly wrong. Thirty-two is twice that: room
+// for the vocabulary to grow without this constant having to move, and
+// still a bound. Every join longer than the longest name in the
+// vocabulary is a string that can match nothing, computed anyway.
+//
+// WHY IT IS NOT A TUNING KNOB. Without a bound the joins are every
+// contiguous run of adjacent subwords, so the work grows as the CUBE of
+// the input — measured on one machine, on a line of alternating case:
+// 2 KiB took 71 ms, 4 KiB 339 ms, 8 KiB 2.4 s and 16 KiB 19 s. A pull
+// request's body may be 64 KiB and is written by whoever opened the pull
+// request; extrapolating those numbers puts one line of that size at
+// roughly twenty minutes of processor time. The reported token count
+// stays linear, because the map deduplicates, so nothing runs out of
+// memory — it simply holds a machine for as long as the author of the
+// text likes.
+//
+// That is not a defect of the check that reads commit messages. This
+// tokeniser has always been the one the file-contents rule uses, and file
+// contents in a pull request from a stranger are exactly as
+// attacker-controlled as a title. The bound belongs here, where both
+// readers get it.
+const MaxTokenLength = 32

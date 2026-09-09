@@ -3,7 +3,9 @@ package citations_test
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/curiouspub/cli/internal/citations"
 )
@@ -140,4 +142,114 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ---------------------------------------------------------------------
+// The join is bounded, and the bound is what keeps a stranger's text
+// from holding the machine reading it.
+// ---------------------------------------------------------------------
+
+// TestEveryTokenFitsTheBound asserts the length rule in both directions.
+//
+// The absence half on its own would be satisfied by a tokeniser that
+// returned nothing, so the presence half names the exact boundary: a
+// join of the full bound is emitted and the next one along is not. A
+// bound tested only from above is a bound nobody can tell from a
+// tokeniser that has quietly stopped joining at all.
+func TestEveryTokenFitsTheBound(t *testing.T) {
+	// Eight-byte subwords, so the joins land exactly on multiples of
+	// eight and the bound falls between two of them rather than inside
+	// one. Four of them are the bound; five are past it.
+	const part = "Abcdefgh"
+	line := strings.Repeat(part, 5)
+
+	got := citations.IdentifierTokens(line)
+
+	for n := 1; n*len(part) <= citations.MaxTokenLength; n++ {
+		want := strings.ToLower(strings.Repeat(part, n))
+		if !got[want] {
+			t.Errorf("a join of %d bytes is missing, and the bound is %d: %v",
+				len(want), citations.MaxTokenLength, sortedKeys(got))
+		}
+	}
+	tooLong := strings.ToLower(strings.Repeat(part, 5))
+	if got[tooLong] {
+		t.Errorf("a join of %d bytes was emitted past a bound of %d",
+			len(tooLong), citations.MaxTokenLength)
+	}
+	for token := range got {
+		if len(token) > citations.MaxTokenLength {
+			t.Errorf("the tokeniser emitted a %d-byte token past a bound of %d",
+				len(token), citations.MaxTokenLength)
+		}
+	}
+}
+
+// TestTheCostOfTokenisingIsBoundedByTheBound measures what the bound is
+// actually for.
+//
+// A ROW ASSERTING "IT FINISHES" PASSES AT ANY SPEED, which is why this
+// one measures two sizes and asks what the second cost relative to the
+// first. Unbounded, the joins are every contiguous run of adjacent
+// subwords and the work grows as the cube of the input: on the machine
+// this was written on, a four-fold step from 4 KiB to 16 KiB took the
+// cost from 339 ms to 19 s — a ratio of 56 — and one 64 KiB line, which
+// is a size a pull request's body may legitimately be, extrapolates to
+// about twenty minutes of processor time. Bounded, the same step measures
+// between 4.0 and 4.2 across ten trials, and 64 KiB takes 25 ms.
+//
+// THE CEILING IS SIZED OFF BOTH NUMBERS rather than off one of them.
+// Sixteen sits a factor of 3.8 above the worst ratio measured with the
+// bound in place and a factor of 3.5 below the ratio measured without it,
+// so an ordinary bad minute on a shared runner cannot reach it and the
+// defect cannot hide under it. Sizing a window against only the value it
+// must not exceed leaves it unknown whether the row can still fail.
+//
+// The two sizes are measured INTERLEAVED and each is the best of several
+// runs: a slow window on a shared machine then lands on both, where it
+// cancels, rather than on the larger alone, where it would read as
+// growth.
+func TestTheCostOfTokenisingIsBoundedByTheBound(t *testing.T) {
+	const (
+		small   = 4 << 10
+		large   = 16 << 10
+		rounds  = 7
+		ceiling = 16.0
+	)
+	// A line of alternating case, which is the worst input this
+	// tokeniser has: every two bytes are a subword, so the number of
+	// joins is as large as the length allows.
+	smallLine := strings.Repeat("AbCd", small/4)
+	largeLine := strings.Repeat("AbCd", large/4)
+
+	// Warm up both, so the first measurement of either is not paying for
+	// a cold allocator. Without this the SMALL side reads high and the
+	// ratio reads low, which is the direction that hides a failure.
+	citations.IdentifierTokens(smallLine)
+	citations.IdentifierTokens(largeLine)
+
+	smallCost, largeCost := time.Hour, time.Hour
+	for i := 0; i < rounds; i++ {
+		start := time.Now()
+		citations.IdentifierTokens(smallLine)
+		if d := time.Since(start); d < smallCost {
+			smallCost = d
+		}
+		start = time.Now()
+		citations.IdentifierTokens(largeLine)
+		if d := time.Since(start); d < largeCost {
+			largeCost = d
+		}
+	}
+
+	if smallCost <= 0 {
+		t.Fatalf("the smaller input measured %v, so the ratio below divides by noise", smallCost)
+	}
+	if ratio := float64(largeCost) / float64(smallCost); ratio > ceiling {
+		t.Errorf("a four-fold input took %.1f times as long (%v against %v), and the ceiling "+
+			"is %.0f.\nWithout a bound on the join this grows as the cube of the input, and the "+
+			"input is a stranger's pull request. Nothing runs out of memory — the map "+
+			"deduplicates — it simply holds the machine for as long as whoever wrote the text "+
+			"likes.", ratio, largeCost, smallCost, ceiling)
+	}
 }

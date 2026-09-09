@@ -957,6 +957,60 @@ func loadVendorTerms(t *testing.T, root string) map[string]bool {
 	return terms
 }
 
+// TestEveryTermInTheVocabularySurvivesTokenisation ties a number chosen
+// in one package to the file that decides whether it is still right.
+//
+// The tokeniser bounds the length of the tokens it builds, because
+// without a bound the work grows as the cube of the input and the input
+// is a stranger's text. The bound was chosen off this file: it is twice
+// the longest term the vocabulary declared at the time. A constant chosen
+// off a file and then left alone is a constant that goes quietly wrong
+// the first time somebody adds a longer line — nothing would fail, the
+// term would simply never match anything, and the vocabulary would have
+// grown a word that is enforced nowhere.
+//
+// So the tie is mechanical rather than arithmetical: every term must come
+// back out of the tokeniser AS ITSELF. That catches the length case and
+// also the other way a term can be unmatchable — spelling it with
+// anything the tokeniser does not treat as part of a token.
+//
+// MUTATION RUN, and what ACTUALLY reddened rather than what was
+// predicted. Lowering the bound in internal/citations to twelve reds this
+// row three times, naming a 14-, a 14- and a 16-byte term and quoting
+// none of them. It was predicted that nothing in that package would move,
+// on the reasoning that its length rows are written against the bound
+// rather than against this file. One does move: the join row there names
+// a seventeen-byte join it expects, so it reds too — a second falsifier
+// for a bound set too low, from the other side of the tie.
+func TestEveryTermInTheVocabularySurvivesTokenisation(t *testing.T) {
+	terms := loadVendorTerms(t, moduleRoot(t))
+	longest := 0
+	for _, term := range sortedKeys(terms) {
+		if len(term) > longest {
+			longest = len(term)
+		}
+		if !citations.IdentifierTokens(term)[term] {
+			// NAMED BY LENGTH, NOT QUOTED. This message reaches a run's
+			// log, and spelling the term out there is the same disclosure
+			// the vendor rule exists to prevent — arriving through the row
+			// that maintains it.
+			t.Errorf("a %d-byte term in the vocabulary does not come back out of the "+
+				"tokeniser as itself, so the vendor check can never match it.\n"+
+				"Either it is longer than the %d-byte bound in internal/citations, or it is "+
+				"spelled with something the tokeniser does not treat as part of a token. A "+
+				"term nothing can match is a rule that is written down and enforced nowhere.",
+				len(term), citations.MaxTokenLength)
+		}
+	}
+	// THE FLOOR. A vocabulary of one-letter terms would satisfy the row
+	// above while proving nothing about the bound, and an empty one is
+	// already refused by the loader.
+	if longest < 2 {
+		t.Errorf("the longest term in the vocabulary is %d byte(s), so the row above says "+
+			"nothing about a bound of %d", longest, citations.MaxTokenLength)
+	}
+}
+
 // THE TOKENISER USED TO SIT HERE and now lives in internal/citations,
 // unchanged. It moved because a second reader of these same rule files
 // arrived — the surface check under tools/, which reads a commit message,
