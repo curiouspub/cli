@@ -202,7 +202,15 @@ function issue({ subject, issuer, subjectKey, issuerKey, isCA, hosts }) {
 // authority mints a root and one leaf under it. Two calls give two
 // authorities, which is what the untrusted-certificate row needs: a
 // server presenting a chain nobody told the client about.
-function authority(label) {
+//
+// EXTRA NAMES ARE FOR THE ROWS ABOUT ROUTING RATHER THAN ABOUT TRUST. A
+// bypass rule is a decision about a NAME, and the three loopback
+// spellings below are all the same host — so a row asking whether one
+// name is treated as sitting under another has nowhere to stand until
+// it can mint a certificate for a name that does. Nothing resolves such
+// a name on this machine, which is the point: only a proxy can reach
+// it, so the route taken is observable rather than inferred.
+function authority(label, extraHosts = []) {
   const rootKey = newKeyPair();
   const leafKey = newKeyPair();
   const rootName = `curious test root ${label}`;
@@ -219,7 +227,7 @@ function authority(label) {
     subjectKey: leafKey,
     issuerKey: rootKey,
     isCA: false,
-    hosts: ['localhost', '127.0.0.1', '::1'],
+    hosts: ['localhost', '127.0.0.1', '::1', ...extraHosts],
   });
   return {
     caPem: root,

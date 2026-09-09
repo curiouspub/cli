@@ -319,6 +319,44 @@ test('a port-qualified NO_PROXY entry matches that port and no other', async (t)
   assert.deepStrictEqual(h.installedBinary(elsewhere, 'curious'), h.BINARY_BODY);
 });
 
+test('a bare NO_PROXY entry names one host and not everything under it', async (t) => {
+  // THE DIRECTION IS WHAT MAKES THIS MORE THAN A SPELLING. A bypass
+  // entry that matches more hosts than it names sends the download
+  // DIRECT on a machine whose policy says tunnel — the same "no silent
+  // drop" rule this package already carries, arriving from the other
+  // side: the first version was about failing over to direct on error,
+  // this one is about never choosing the proxy at all.
+  //
+  // THE OTHER TWO DIRECTIONS ARE ROWS OF THEIR OWN, and the three are
+  // only complete together: "a host in NO_PROXY is reached directly"
+  // says a bare entry still matches the host it names, and "a dotted
+  // NO_PROXY entry covers what sits under it" says the dot is what
+  // widens it. Without the first, an implementation that ignored bare
+  // entries altogether would satisfy this row.
+  //
+  // Nothing on this machine answers to the name in the address, so the
+  // proxy is the only route that can carry this install: a binary that
+  // arrives is a binary that was tunnelled.
+  const ca = h.authority('no-proxy-bare', ['storage.example.invalid']);
+  const caFile = h.writeCA(t, ca.caPem);
+  const assets = await h.serveAssets(t, { tlsCert: ca });
+  const proxy = await h.serveProxy(t, { dialPort: assets.port });
+  const dir = h.makePackage(t, { checksums: h.checksumsFor([ASSET]) });
+
+  const run = await h.runInstall(t, dir, {
+    base: 'https://storage.example.invalid:9', ca: caFile, ...TARGET,
+    env: { HTTPS_PROXY: proxy.url, NO_PROXY: 'example.invalid' },
+  });
+
+  assert.strictEqual(run.code, 0, run.output);
+  assert.strictEqual(proxy.connects.length, 1,
+    'the bare entry bypassed the proxy for a host it does not name');
+  assert.strictEqual(proxy.connects[0].target, 'storage.example.invalid:9');
+  assert.strictEqual(assets.requests.length, 1);
+  assert.strictEqual(assets.requests[0].servername, 'storage.example.invalid');
+  assert.deepStrictEqual(h.installedBinary(dir, 'curious'), h.BINARY_BODY);
+});
+
 test('a leading dot in NO_PROXY names the host it is attached to', async (t) => {
   const s = await bothRoutes(t, 'no-proxy-dot');
 

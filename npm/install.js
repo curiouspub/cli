@@ -319,8 +319,20 @@ function bypassed(url) {
     if (parsed.port && parsed.port !== port) {
       continue;
     }
-    const wanted = parsed.host.replace(/^\./, '');
-    if (host === wanted || host.endsWith(`.${wanted}`)) {
+    // THE DOT IS THE WHOLE DIFFERENCE BETWEEN TWO OF THE THREE FORMS,
+    // and taking it off before the comparison collapses them: every
+    // entry becomes a domain-wide one, so a bare example.com bypasses
+    // evil.example.com as well.
+    //
+    // THAT ERROR RUNS IN THE DANGEROUS DIRECTION. It turns the proxy
+    // OFF for hosts nobody exempted, so on a machine whose egress is
+    // controlled the download goes direct where the policy said tunnel
+    // — the same thing this script refuses to do when a tunnel fails,
+    // arriving from the other side: not falling back to direct, but
+    // never choosing the proxy at all.
+    const under = parsed.host.startsWith('.');
+    const wanted = under ? parsed.host.slice(1) : parsed.host;
+    if (host === wanted || (under && host.endsWith(`.${wanted}`))) {
       return true;
     }
   }
