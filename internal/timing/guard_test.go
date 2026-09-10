@@ -34,13 +34,13 @@ import (
 //     describe.
 //   - Assignments and composite-literal fields whose field name is one
 //     of stallFields, wherever they appear in a file: inside a function
-//     body, and — since R3-3 — in a PACKAGE-LEVEL DECLARATION as well. A
+//     body, and in a PACKAGE-LEVEL DECLARATION as well. A
 //     window reaching the same field through a helper function's
 //     parameter is still outside the resolver's view; it is said here
 //     rather than left to be found, because a guard with an undocumented
 //     blind spot reads as total coverage and ends the search.
 //
-//     The declaration half was a blind spot until R3-3 closed it, and it
+//     The declaration half was a blind spot until it was closed, and it
 //     was a cheap one: the walk visited file.Decls, kept the FuncDecls
 //     and dropped everything else, so
 //
@@ -409,7 +409,7 @@ func scanModule(t *testing.T) []stallSite {
 // The positive control at the foot stays green, because the other four
 // sites still resolve.
 //
-// REQUIRED MUTATION FOR R3-3'S DECLARATION SCAN, RUN 2026-09-10: add
+// REQUIRED MUTATION FOR THE DECLARATION SCAN, RUN 2026-09-10: add
 //
 //	var mutantDeps = DeployDeps{StallTimeout: 60 * time.Millisecond}
 //
@@ -529,7 +529,7 @@ func TestTheResolverAcceptsARegistryWindowAndRefusesEverythingElse(t *testing.T)
 			src:  "d.StallTimeout = elsewhere." + known + ".Window",
 			want: "",
 		},
-		// R3-3's blind spot, from both sides. Before it closed, every
+		// The declaration blind spot, from both sides. Before it closed, every
 		// one of these three resolved to nothing — not because the
 		// resolver said no, but because the walk never reached them.
 		{

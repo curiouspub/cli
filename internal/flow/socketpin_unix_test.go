@@ -31,3 +31,17 @@ const (
 func socketBuffer(fd uintptr, option int) (int, error) {
 	return syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, option)
 }
+
+// setSocketBuffer asks for a buffer size on a raw descriptor.
+//
+// IT TAKES A DESCRIPTOR RATHER THAN A net.TCPConn so that the request
+// and the read-back can happen inside ONE raw.Control call. Through the
+// standard library's SetReadBuffer the two are several operations apart,
+// and on darwin that gap is long enough for the kernel's own receive
+// autosizing to move the buffer in between — which reads back as a size
+// nobody asked for and makes two connections in one run disagree about
+// a request they both had honoured. Measured, on the row that asserts
+// they agree: 16,384 on one connection and 277,696 on the next.
+func setSocketBuffer(fd uintptr, option, size int) error {
+	return syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, option, size)
+}

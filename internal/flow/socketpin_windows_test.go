@@ -18,3 +18,10 @@ const (
 func socketBuffer(fd uintptr, option int) (int, error) {
 	return syscall.GetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, option)
 }
+
+// setSocketBuffer asks for a buffer size on a raw handle. See the file
+// beside this one for why the request goes through the descriptor rather
+// than through net.TCPConn.
+func setSocketBuffer(fd uintptr, option, size int) error {
+	return syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, option, size)
+}

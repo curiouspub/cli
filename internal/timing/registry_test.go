@@ -61,7 +61,7 @@ func sortedEntries() []*timing.Entry {
 // entry is still registered and every site still resolves. Both the fill
 // and the blanking were reverted by preserved copy and checksum.
 //
-// REQUIRED MUTATIONS FOR R3-3'S FLOOR AND DATE, RUN 2026-09-10, each
+// REQUIRED MUTATIONS FOR THE FLOOR AND THE DATE, RUN 2026-09-10, each
 // reverted. Both of these counted as evidence before this round:
 //
 //  1. Set StreamGoesQuiet's darwin run count to 19, one short of
@@ -119,7 +119,7 @@ func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 		{"no run count", timing.Measurement{WorstGap: time.Millisecond, Date: "2026-09-09"}},
 		{"no date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20}},
 		{"nothing at all", timing.Measurement{}},
-		// R3-3's floor and its date. One run under the floor is not a
+		// The floor and the date. One run under the floor is not a
 		// distribution, and a date that does not parse cannot be
 		// compared with anything — which is the only thing a date is
 		// for. Both of these were evidence before this round.
@@ -175,7 +175,7 @@ func carryProblem(entry *timing.Entry, in map[string]*timing.Entry) string {
 		return "carries from " + source.Name + " through a different reader (" +
 			entry.Instrument + " against " + source.Instrument + ")"
 	}
-	// CARRY MEANS EQUAL, and until R3-3 nothing here checked that it
+	// CARRY MEANS EQUAL, and for a while nothing here checked that it
 	// did. A carried entry named a source, gave a reason, matched its
 	// side and its reader, and was then free to hold any window and any
 	// measurement it liked: a source at 2s beside a carrier at 1s passed
@@ -243,7 +243,7 @@ func measurementText(m timing.Measurement) string {
 //
 // The entry it carries FROM stays green, because it carries nothing.
 //
-// REQUIRED MUTATIONS FOR R3-3'S TWO NEW CLAUSES, RUN 2026-09-10, each
+// REQUIRED MUTATIONS FOR THE TWO CLAUSES BELOW, RUN 2026-09-10, each
 // reverted. Before them, a carrier could name a source, give a reason,
 // match its side and its reader, and then hold any window and any
 // evidence it liked — which is two rows agreeing to look like one.
@@ -320,7 +320,8 @@ func TestACarriedMeasurementRecordsItsReason(t *testing.T) {
 			Name: "C", Side: timing.Write, Instrument: "another reader",
 			Window: time.Second, Measurements: evidence,
 			Carried: &timing.Carried{From: "Source", Reason: "because"}}},
-		// THE TWO R3-3 ADDED, and both passed everything before it.
+		// THE TWO ADDED WITH THE EQUALITY RULE, and both passed
+		// everything before it.
 		{"half the source's window", &timing.Entry{
 			Name: "C", Side: timing.Write, Instrument: "the same reader",
 			Window: 500 * time.Millisecond, Measurements: evidence,
@@ -568,7 +569,7 @@ func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
 				"report none of that — so a pin nobody read back is a claim rather than " +
 				"a condition"
 		}
-		// THE COHERENCE BAND (R3-3). A read-back is evidence only if it
+		// THE COHERENCE BAND. A read-back is evidence only if it
 		// stands in a known relation to the request. Linux stores twice
 		// what was asked for and hands the doubled number back, so
 		// [Requested, 2*Requested] is the honest band and nothing
@@ -624,7 +625,7 @@ func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
 //     the row saying it is running a margin over a number that was
 //     measured somewhere else.
 //
-// REQUIRED MUTATION FOR R3-3'S COHERENCE BAND, RUN 2026-09-10: set the
+// REQUIRED MUTATION FOR THE COHERENCE BAND, RUN 2026-09-10: set the
 // send end's ReadBack to 1 against a Requested of 16384. Reds here —
 // "asked for 16384 bytes and read back 1, which is outside
 // [16384, 32768]" — and, unpredicted, in the carry row above, because
@@ -705,7 +706,7 @@ func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 					Send:    timing.Pin{Requested: 131072},
 					Receive: timing.Pin{Requested: 131072, ReadBack: 131072},
 				}}},
-		// R3-3'S BAND, from both sides. The first is the literal case
+		// THE BAND, from both sides. The first is the literal case
 		// that passed before it existed.
 		{"a read-back of one byte against a 128 KiB request", timing.Write,
 			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",

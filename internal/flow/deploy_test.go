@@ -1025,7 +1025,7 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 // pinned to receivePin from the instant its listener exists.
 //
 // IT IS A SECOND CONSTRUCTOR RATHER THAN A SETTER, which is the whole of
-// R3-1 in one line: a setter can only run after the listener is already
+// this whole change in one line: a setter can only run after the listener is already
 // accepting, and a connection accepted in that gap is a connection under
 // a condition nobody chose. Two constructors is the cost of there being
 // no such gap.

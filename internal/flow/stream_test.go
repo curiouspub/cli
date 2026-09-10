@@ -1286,6 +1286,39 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 	if printed := run.prompt.results.String(); !strings.Contains(printed, partialLineMarker) {
 		t.Errorf("the line delivered in pieces never reached stdout:\n%s", printed)
 	}
+
+	// THE FIXTURE'S OWN WIDEST PAUSE, checked the way the keep-alive row
+	// beside this one checks its own, and added because a runner
+	// supplied the instance. On a hosted macOS runner this row's probe
+	// measured a 272 ms gap between two arrivals while the FIXTURE's own
+	// widest gap between flushes was 220 ms — the server goroutine was
+	// starved, and the client was blamed for it.
+	//
+	// A window is a margin over the quantity this client depends on. A
+	// gap that is mostly the fixture failing to write is a measurement
+	// about the machine, and widening the window until it goes quiet is
+	// the "raise the number until the failures stop" this whole
+	// arrangement exists to replace. So it is named instead.
+	//
+	// ITS MUTATION IS NOT AVAILABLE FROM THIS FIXTURE'S KNOBS, and that
+	// is worth writing down rather than leaving as an untested line. The
+	// only knob that widens the fixture's own gap is the pace, and a
+	// pace past the window makes the client legitimately stall — run
+	// 2026-09-10 at fourteen times the pace, the row reds one assertion
+	// EARLIER, on "a stream delivering bytes continuously was treated as
+	// stalled", and never reaches here. What reaches here is a fixture
+	// that paces correctly and is starved once, which is a machine event
+	// rather than a setting. Its sibling guard in the keep-alive row has
+	// the same shape and the same limitation, and the instance that
+	// justifies both was supplied by a hosted runner rather than by a
+	// mutation.
+	widest := run.script.widestGap()
+	t.Logf("the fixture's widest gap between flushes was %v, against a %v window "+
+		"and a %v pace", widest, stall, partialLinePace)
+	if widest >= stall {
+		t.Fatalf("the fixture itself paused %v between flushes, past the %v window "+
+			"— this row measured the machine rather than the client", widest, stall)
+	}
 }
 
 // TestAPhaseIsNotNarratedTwiceAcrossAReconnect. The persisted-event tally

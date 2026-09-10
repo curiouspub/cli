@@ -46,7 +46,7 @@ build:
 # inside ten thousand, which is a way of hiding them that also annoys
 # everybody.
 # EVERY HALF RUNS, AND THE RESULT IS THE AGGREGATE. This was a
-# prerequisite list until R3-3, and a prerequisite list stops at the
+# prerequisite list until the race pass arrived, and a prerequisite list stops at the
 # first failure — which defeats the sentence above it. The moment the
 # stall-window registry reds on a leg nobody has measured yet, which is
 # its designed state, make would stop and the race pass beside it would
@@ -102,8 +102,15 @@ test-go:
 # platforms. The file-level export sets it to 0 for every other target,
 # which is deliberate; this is the one place that has to differ, and it
 # differs in the recipe rather than by moving the default.
+# -timeout IS EXPLICIT AND IT IS NOT A ROUND NUMBER PULLED OUT OF THE
+# AIR. Go defaults to ten minutes per test binary, and internal/flow
+# under the detector on a two-core CI runner does not fit: the linux leg
+# panicked at exactly 10m0s inside the upload probe, having produced no
+# measurement at all, which is the worst of both — the money spent and no
+# number back. The package takes about two minutes there without the
+# detector and something over five times that with it.
 test-race:
-	CGO_ENABLED=1 go test -race -count=1 ./internal/timing/ ./internal/flow/
+	CGO_ENABLED=1 go test -race -count=1 -timeout 25m ./internal/timing/ ./internal/flow/
 
 # The wrapper package's own suite. It is a PREREQUISITE OF test rather
 # than a separate command somebody has to know about, because a check

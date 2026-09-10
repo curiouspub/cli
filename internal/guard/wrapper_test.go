@@ -75,8 +75,8 @@ func declaredNodeFloor(t *testing.T, root string) int {
 //
 // # REACHABLE, WHICH IS NOT THE SAME AS "IN THE PREREQUISITE LINE"
 //
-// This row read the prerequisite line and nothing else until T-223's
-// third round, when `test` became a recipe that invokes each half and
+// This row read the prerequisite line and nothing else until the day
+// `test` became a recipe that invokes each half and
 // collects the status — so that the first red half no longer stops the
 // others from running at all. The gate still ran the wrapper's suite;
 // the row went red anyway, because its KEY was narrower than its claim.

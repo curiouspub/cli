@@ -63,7 +63,7 @@ import (
 // pinnedBuffer is the size both ends of a write-side row's connection
 // ask for, in bytes.
 //
-// # SIXTEEN KIBIBYTES, CHOSEN FROM A MEASURED CURVE (R3-5)
+// # SIXTEEN KIBIBYTES, CHOSEN FROM A MEASURED CURVE
 //
 // Darwin, one probe, one pass of twenty runs at each size, 2026-09-10 —
 // the worst gap between two progress events at the client:
@@ -202,7 +202,7 @@ func (p *socketPin) record() (timing.Pin, int) {
 // reads the record and reds — see pinsWereApplied, and see the Pin field
 // in internal/timing for why a leg that cannot pin stops rather than
 // paying.
-func pinBuffer(conn net.Conn, size, option int, set func(*net.TCPConn, int) error, into *socketPin) {
+func pinBuffer(conn net.Conn, size, option int, into *socketPin) {
 	tcp, ok := conn.(*net.TCPConn)
 	if !ok {
 		into.applied(size, 0, fmt.Errorf(
@@ -210,23 +210,39 @@ func pinBuffer(conn net.Conn, size, option int, set func(*net.TCPConn, int) erro
 				"buffer to pin", conn))
 		return
 	}
-	if err := set(tcp, size); err != nil {
-		into.applied(size, 0, fmt.Errorf("asking for a %d-byte buffer: %w", size, err))
-		return
-	}
 	raw, err := tcp.SyscallConn()
 	if err != nil {
-		into.applied(size, 0, fmt.Errorf("reaching the socket to read the buffer back: %w", err))
+		into.applied(size, 0, fmt.Errorf("reaching the socket to pin its buffer: %w", err))
 		return
 	}
+	// THE REQUEST AND THE READ-BACK HAPPEN IN ONE Control CALL, and that
+	// is a measurement rather than tidiness. Through the standard
+	// library's SetReadBuffer they are several operations apart, and on
+	// darwin the kernel's receive autosizing can move the buffer inside
+	// that gap: the row asserting that two connections in one run agree
+	// saw 16,384 on the first and 277,696 on the second, both having had
+	// the same request honoured. Closed to two adjacent syscalls, the
+	// read-back is an answer to the request rather than a race with the
+	// kernel. It is still only an INSTANT — see socketPin.sample for what
+	// happens to that buffer afterwards.
 	var readBack int
-	var readErr error
-	if err := raw.Control(func(fd uintptr) { readBack, readErr = socketBuffer(fd, option) }); err != nil {
-		into.applied(size, 0, fmt.Errorf("controlling the socket to read the buffer back: %w", err))
+	var opErr error
+	if err := raw.Control(func(fd uintptr) {
+		if setErr := setSocketBuffer(fd, option, size); setErr != nil {
+			opErr = fmt.Errorf("asking for a %d-byte buffer: %w", size, setErr)
+			return
+		}
+		var readErr error
+		readBack, readErr = socketBuffer(fd, option)
+		if readErr != nil {
+			opErr = fmt.Errorf("reading the buffer back: %w", readErr)
+		}
+	}); err != nil {
+		into.applied(size, 0, fmt.Errorf("controlling the socket to pin its buffer: %w", err))
 		return
 	}
-	if readErr != nil {
-		into.applied(size, 0, fmt.Errorf("reading the buffer back: %w", readErr))
+	if opErr != nil {
+		into.applied(size, 0, opErr)
 		return
 	}
 	into.applied(size, readBack, nil)
@@ -365,7 +381,7 @@ func pinnedTransport(size int) (*http.Transport, *socketPin) {
 			if err != nil {
 				return nil, err
 			}
-			pinBuffer(conn, size, soSendBuffer, (*net.TCPConn).SetWriteBuffer, pin)
+			pinBuffer(conn, size, soSendBuffer, pin)
 			return conn, nil
 		},
 	}, pin
@@ -409,7 +425,7 @@ func (l *pinnedListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	if l.size > 0 {
-		pinBuffer(conn, l.size, soReceiveBuffer, (*net.TCPConn).SetReadBuffer, l.pin)
+		pinBuffer(conn, l.size, soReceiveBuffer, l.pin)
 	}
 	return conn, nil
 }
@@ -442,7 +458,7 @@ func observedPin(client, fixture *socketPin) *timing.PinnedPair {
 // on passing, and the number it is a margin over quietly becomes the far
 // end's autotuning.
 //
-// REQUIRED MUTATION FOR R3-4'S STOP, RUN 2026-09-10: make pinBuffer's
+// REQUIRED MUTATION FOR THE STOP, RUN 2026-09-10: make pinBuffer's
 // setsockopt fail with "operation not permitted". The slow-upload row
 // reds here rather than running on:
 //
@@ -468,7 +484,7 @@ func pinsWereApplied(t *testing.T, client, fixture *socketPin) {
 			"autotuning — the listener wrapper is not the one being accepted on")
 	}
 
-	// A LEG THAT CANNOT PIN IS A STOP, NOT A PAYER (R3-4). The earlier
+	// A LEG THAT CANNOT PIN IS A STOP, NOT A PAYER. The earlier
 	// ruling said an unpinned leg pays for its wider window in paced
 	// bytes; it cannot. pacingFor refuses above a window of about
 	// 2.47 seconds, because the body it would need exceeds this
@@ -590,8 +606,8 @@ func confirmPin(t *testing.T, entry *timing.Entry, leg timing.Leg, got *timing.P
 // read-back, satisfy every assertion about it, and still be measuring
 // the far end's autotuning. Two calls is one call somebody forgets.
 //
-// IT IS A CONSTRUCTOR AND NOT A METHOD, which is the shape R3-1 asked
-// for. As a method it could only run on a store that was already
+// IT IS A CONSTRUCTOR AND NOT A METHOD. As a method it could only run
+// on a store that was already
 // listening, so the receive pin was necessarily a thing set after the
 // fact; as a constructor it hands the size to the store's own
 // constructor and the listener is wrapped with it in place. The client
@@ -612,9 +628,8 @@ func pinnedUploadRun(t *testing.T, root string, size int) (run *deployRun, clien
 	return run, client, run.store.pin
 }
 
-// TestEveryConnectionOneRunAcceptsReadsBackTheSameBuffer is R3-1's row,
-// and what it protects is a measurement's CONDITION rather than a
-// measurement.
+// TestEveryConnectionOneRunAcceptsReadsBackTheSameBuffer protects a
+// measurement's CONDITION rather than a measurement.
 //
 // A window is five times a gap, and a gap is that number only under the
 // buffers it was taken over. A run whose connections were not all pinned
