@@ -579,10 +579,16 @@ const MinimumMargin = 5
 //
 // # WHAT THE NUMBER IS, AND WHAT IT IS A NUMBER ABOUT
 //
-// 126.162 ms, the worst gap over 140 consecutive runs on darwin —
-// seven passes of twenty on 2026-09-10, four of them with the whole
-// module's suite running in parallel, all of them under the race
-// detector. An 800 ms window is 6.34 times it.
+// 226.326875 ms, the worst gap over 240 consecutive runs on darwin —
+// twelve passes of twenty on 2026-09-11, all of them with the whole
+// package running, all of them under the race detector. A 1150 ms
+// window is 5.08 times it.
+//
+// IT WAS 126.162 ms OVER 140 RUNS AND THAT NUMBER WAS NOT WRONG, it was
+// short. Seven passes agreed with each other to within six per cent and
+// twelve found a range of 109 to 226. See the darwin measurement below
+// for the readings, for the idle-versus-busy control that failed to
+// find an axis for the spread, and for what is still open about it.
 //
 // The condition is named because a gap is only that number under one:
 // both ends asked for a 131,072-byte socket buffer, the client's held
@@ -625,13 +631,23 @@ const MinimumMargin = 5
 //
 // It was fifteen, and fifteen was chosen while the gate ran these rows
 // once. The gate now runs them TWICE — plainly and under the race
-// detector — and the detector is not a rounding error here: measured on
-// darwin, 2026-09-10, on an idle machine, the two rows cost 7.46 s and
-// 5.78 s under it against 3.16 s and 1.51 s without. Thirteen point two
-// four seconds combined under the detector, four point six seven
-// without. A second measurement of the same pair earlier the same day
-// gave 13.75 s and 4.62 s, which is the spread to expect rather than a
-// disagreement.
+// detector — and the detector is not a rounding error here.
+//
+// RETAKEN 2026-09-11, on the tip this ceiling describes, after the
+// window went 800 ms to 1150: the two rows cost 10.02 s and 7.23 s
+// under the detector against 4.55 s and 1.91 s without. SEVENTEEN POINT
+// TWO FIVE SECONDS COMBINED under the detector, six point four six
+// without.
+//
+// THAT IS 2.75 s OF HEADROOM AND IT IS THE THINNEST THIS CEILING HAS
+// BEEN. At the 800 ms window the same pair cost 13.24 s under the
+// detector (7.46 and 5.78, against 3.16 and 1.51 without), and a second
+// measurement that day gave 13.75 s. The fixture spans three and a half
+// windows by construction, so this cost rises with the window roughly
+// in proportion: another move of the size the last one was would put
+// the pair through the ceiling. Whether the ceiling then moves or the
+// rows change shape is a ruling, and it is one worth having before the
+// number forces it rather than after.
 //
 // So the ceiling restates rather than moves: it is the same intent —
 // the live suite's timeout has to exceed its row budgets, and that is a
@@ -640,9 +656,14 @@ const MinimumMargin = 5
 // be a budget for a run nobody makes, and the number it reported would
 // be the friendlier of two figures with nothing beside it saying which.
 var UploadSlowIsNotStalled = Entry{
-	Name:   "UploadSlowIsNotStalled",
-	Row:    "TestASlowUploadIsNotAStalledOne",
-	Window: 800 * time.Millisecond,
+	Name: "UploadSlowIsNotStalled",
+	Row:  "TestASlowUploadIsNotAStalledOne",
+	// 1150 ms: five times darwin's 226.326875 ms is 1131.63 ms. It was
+	// 800, and 800 was five times a 127.606 ms record taken over seven
+	// passes that all happened to land in the low half of this leg's
+	// range. See the darwin measurement below for what twelve passes
+	// found and for what is still not settled about it.
+	Window: 1150 * time.Millisecond,
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads and by how much window it advertises at a time — not " +
@@ -650,13 +671,68 @@ var UploadSlowIsNotStalled = Entry{
 		"while both ends' buffers are pinned",
 	Instrument: "progressReader, internal/flow/upload.go",
 	Measurements: map[Leg]Measurement{
-		// SEVEN PASSES OF TWENTY on 2026-09-10, every one under the race
-		// detector because that is one of the two conditions the gate
-		// runs this row in and it is the worse of them, and every one
-		// with the whole package running: 108.885, 109.099, 109.526,
-		// 110.223, 112.683, 115.266, 127.605ms. Six of the seven inside
-		// six per cent of each other, which is what a quantity that is
-		// mostly a fixture's own pacing quantum looks like.
+		// TWELVE PASSES OF TWENTY on 2026-09-11, every one under the
+		// race detector because that is one of the two conditions the
+		// gate runs this row in, and every one with the whole package
+		// running:
+		//
+		//	109.329  110.174  111.530  112.024  149.724  181.424  221.993
+		//	110.316  153.796  162.177  203.950  226.327
+		//
+		// 109.329 to 226.327 ms, median 153.796 — a factor of 2.07
+		// between the smallest and the largest, on one machine, on one
+		// tip, under one recorded condition.
+		//
+		// # THE SEVEN PASSES THIS REPLACES SAID SIX PER CENT
+		//
+		// The record here read 127.606 ms over seven passes and said
+		// they sat "inside six per cent of each other, which is what a
+		// quantity that is mostly a fixture's own pacing quantum looks
+		// like." Every one of those seven landed in the low half of the
+		// range above. They were not wrong and they were not enough:
+		// seven readings that agree are evidence about seven readings,
+		// and this leg needed twelve before it showed the top of its
+		// own range.
+		//
+		// # AND CONTENTION IS NOT THE AXIS — MEASURED, NOT ASSUMED
+		//
+		// The obvious reading of a spread like this is that the machine
+		// was busy, and the obvious reading was checked rather than
+		// believed. The first seven passes ran while this record's
+		// author was editing, greping and vetting between them; the
+		// last five ran with nothing else asked of the machine at all.
+		// The IDLE series holds the maximum — 226.327 ms — and its own
+		// spread, 110.316 to 226.327, is wider than the busy series'.
+		// One thing varied, and the answer did not move.
+		//
+		// # WHAT IS NOT ESTABLISHED, AND IS NOT WRITTEN HERE AS THOUGH
+		// # IT WERE
+		//
+		// That the gap follows the receive end. It is the natural story
+		// — this leg's receive buffer autotunes over a factor of five
+		// while the body moves, and a quantity that will not hold still
+		// is the obvious suspect for a gap that will not either — and
+		// the twelve passes do not carry it. Grouped by the ceiling the
+		// kernel ran the receive buffer up to: the four passes at
+		// 646,336 gave 153.796 to 203.950, and the six passes at about
+		// 604,100 gave 109.329 to 226.327. The largest gap of all came
+		// with an ORDINARY ceiling. A weak tendency and a
+		// counterexample is not a mechanism.
+		//
+		// The control that would ask properly cannot run on this leg:
+		// varying one end needs the other to stay where it is put, and
+		// this is the leg where one of them will not. So what is
+		// recorded is the CONDITION and the RANGE, and the window covers
+		// the observed maximum rather than the median.
+		//
+		// # THE MAXIMUM HAS NOT CONVERGED, AND THAT IS THE OPEN ITEM
+		//
+		// Each series found a new high — 221.993 in the first seven,
+		// 226.327 in the next five. Five times a running maximum is a
+		// rule that does not settle while the maximum keeps moving, and
+		// whether the basis should change (a stated quantile with its
+		// sampling written down, rather than a maximum) is a ruling this
+		// record is waiting on rather than a number to keep raising.
 		//
 		// # THE RECEIVE END CARRIES AN ERROR, AND IT IS NOT A FAILURE OF THIS CODE
 		//
@@ -695,7 +771,7 @@ var UploadSlowIsNotStalled = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 127606 * time.Microsecond, Runs: 140, Date: "2026-09-10",
+			WorstGap: 226326875 * time.Nanosecond, Runs: 240, Date: "2026-09-11",
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -767,20 +843,22 @@ var UploadSlowIsNotStalled = Entry{
 var UploadWedgedStops = Entry{
 	Name:   "UploadWedgedStops",
 	Row:    "TestAWedgedUploadStopsAndSaysSo",
-	Window: 800 * time.Millisecond,
+	Window: 1150 * time.Millisecond,
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads — the same quantity its sibling row measures, under " +
 		"the same pin",
 	Instrument: "progressReader, internal/flow/upload.go",
 	Measurements: map[Leg]Measurement{
-		// SEVEN PASSES OF TWENTY on 2026-09-10, every one under the race
-		// detector because that is one of the two conditions the gate
-		// runs this row in and it is the worse of them, and every one
-		// with the whole package running: 108.885, 109.099, 109.526,
-		// 110.223, 112.683, 115.266, 127.605ms. Six of the seven inside
-		// six per cent of each other, which is what a quantity that is
-		// mostly a fixture's own pacing quantum looks like.
+		// THE SAME TWELVE PASSES OF TWENTY, 2026-09-11, because this is
+		// a CARRIED measurement and carrying is sharing one run's
+		// evidence rather than agreeing to have some of one's own. The
+		// range, the idle-versus-busy control that failed to find an
+		// axis, and what is not established about the receive end are
+		// all written once, beside UploadSlowIsNotStalled. The guard
+		// below this file requires the two to agree field for field, so
+		// a reader who finds a difference here has found a bug rather
+		// than a nuance.
 		//
 		// # THE RECEIVE END CARRIES AN ERROR, AND IT IS NOT A FAILURE OF THIS CODE
 		//
@@ -819,7 +897,7 @@ var UploadWedgedStops = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 127606 * time.Microsecond, Runs: 140, Date: "2026-09-10",
+			WorstGap: 226326875 * time.Nanosecond, Runs: 240, Date: "2026-09-11",
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -958,16 +1036,24 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// 525 ms: five times darwin's 104.351792 ms is 521.76 ms. It was
 	// 300 ms, chosen from nothing.
 	//
-	// IT IS NOW WITHIN 75 ms OF WHAT ITS OWN ROW CAN AFFORD, and that is
-	// stated here rather than discovered later. The row buys its quiet
-	// with forty beats at fifteen milliseconds — six hundred
-	// milliseconds — and asserts that the quiet outlasts this window. A
-	// leg measuring past about 120 ms would push the window past what
-	// the fixture covers, and the row reds asking a person to lengthen
-	// the fixture deliberately. That is the stated-constant rule working
-	// rather than a trap: the fixture does not grow to meet the window
-	// on its own, because a fixture that follows the window is what
-	// stopped the read side converging in the first place.
+	// ITS OWN ROW AFFORDS TWO OF IT, which is the ruled ratio and not a
+	// coincidence of the numbers. The row buys its quiet with
+	// seventy-five beats at fifteen milliseconds — 1.125 s — and asserts
+	// that the quiet covers this window twice: once for what the row
+	// proves, once so the proof is not sitting on its own boundary.
+	//
+	// IT AFFORDED 600 ms AGAINST THIS 525 ms WINDOW FOR ONE ROUND, and
+	// that is recorded because the row was green throughout. Seventy-five
+	// milliseconds of headroom is a flake with a schedule: a leg
+	// reporting past about 120 ms would have carried the window past
+	// what its own fixture covers, and the symptom would have been a red
+	// row on a runner rather than a number somebody had to rule on.
+	//
+	// The fixture still does not grow to meet the window on its own. A
+	// window that outgrows it stops the row and asks a person to
+	// lengthen it deliberately, because a fixture that follows the
+	// window is what stopped the read side converging in the first
+	// place.
 	Window: 525 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two flushes ARRIVING at this client at the " +
@@ -975,13 +1061,24 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		"the pace on its own; the first such interval runs from the watchdog " +
 		"being armed, which is before the connection is opened",
 	Instrument: "streamProgress, internal/flow/stream.go",
-	// Forty comment frames and a terminating one, fifteen milliseconds
-	// apart — six hundred milliseconds of nothing but keep-alives, which
-	// is what makes the row able to see a client that stopped counting
-	// them as proof of life. Both numbers were already constants; what
-	// is new is that the row and the probe beside it now read the SAME
-	// two, so the thing being measured is the thing that ships.
-	Pace: &FixturePace{Interval: 15 * time.Millisecond, Flushes: 41},
+	// Seventy-five comment frames and a terminating one, fifteen
+	// milliseconds apart — 1.125 s of nothing but keep-alives, which is
+	// what makes the row able to see a client that stopped counting them
+	// as proof of life. Both numbers were already constants; what is new
+	// is that the row and the probe beside it now read the SAME two, so
+	// the thing being measured is the thing that ships.
+	//
+	// IT WAS FORTY, AND FORTY WAS 600 ms AGAINST A 525 ms WINDOW. The
+	// row passed, its assertion held, and seventy-five milliseconds
+	// separated the fixture from the window it is a margin over — which
+	// is a flake with a schedule rather than a margin, because the
+	// window is a measurement and the next leg to report past about
+	// 120 ms would have carried it past what its own fixture affords.
+	// The fixture now affords the window TWICE, the ratio is asserted in
+	// the row rather than assumed, and a window that outgrows it stops
+	// the row and asks a person rather than resizing itself. See
+	// keepAliveBeats and keepAliveHeadroom in internal/flow.
+	Pace: &FixturePace{Interval: 15 * time.Millisecond, Flushes: 76},
 	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes of twenty
 	// on each leg, one under the race detector and one without. The
 	// probe now runs the row's own forty beats rather than twenty of its
@@ -1057,45 +1154,84 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 var StreamPartialLineIsNotAStall = Entry{
 	Name: "StreamPartialLineIsNotAStall",
 	Row:  "TestBytesArrivingWithoutANewlineAreNotAStall",
-	// 230 ms: five times darwin's 45.707917 ms is 228.54 ms. It was 400,
-	// and before that 350, 250, 150 and 60 — the four moves before this
-	// one were a window chasing a fixture that was chasing it back.
-	Window: 230 * time.Millisecond,
+	// 650 ms: five times darwin's 128.757833 ms is 643.79 ms. It was
+	// 230, and before that 400, 350, 250, 150 and 60 — the four moves
+	// before 230 were a window chasing a fixture that was chasing it
+	// back, which was cut by stating the fixture. This move is not one
+	// of those: the fixture did not change under it, the same stated
+	// 1.5 s of delivery produced a reading nearly three times the
+	// record, and the window followed the reading.
+	Window: 650 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two partial writes of one frame ARRIVING at this " +
 		"client at the fixture's own pace — the pace plus delivery plus scheduling; " +
 		"the first such interval runs from the watchdog being armed, which is " +
 		"before the connection is opened",
 	Instrument: "streamProgress, internal/flow/stream.go",
-	// Seventy-five one-byte pieces of a single log frame and a
-	// terminating frame, twenty milliseconds apart: a second and a half
-	// of delivery, STATED, so that it no longer follows the window it is
-	// a margin over. See partialLineDelivery in internal/flow for why
-	// the constant is generously above what the row's own assertion
-	// needs — a fixture sitting at the boundary is one that reds the
-	// first time a leg is slower.
-	Pace: &FixturePace{Interval: 20 * time.Millisecond, Flushes: 76},
+	// A hundred and fifteen one-byte pieces of a single log frame and a
+	// terminating frame, twenty milliseconds apart: 2.3 s of delivery,
+	// STATED, so that it no longer follows the window it is a margin
+	// over. See partialLineDelivery in internal/flow for why the
+	// constant is generously above what the row's own assertion needs —
+	// a fixture sitting at the boundary is one that reds the first time
+	// a leg is slower — and for the one deliberate raise it has had,
+	// what moved it, and what that raise does and does not close.
+	Pace: &FixturePace{Interval: 20 * time.Millisecond, Flushes: 116},
 	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes of twenty
 	// on each leg, one under the race detector and one without. Every
 	// figure that stood here before was taken through a fixture whose
 	// length was computed from the window it was being measured against,
 	// so each one described a delivery that no longer exists.
 	//
-	// AND THE MARGIN CONVERGED IN ONE PASS UNDER THE STATED FIXTURE,
-	// which is the point of the change rather than a pleasant surprise.
-	// The window had gone 150 to 250 to 350 to 400 inside a single round
-	// while the fixture followed it; with the fixture stated, three legs
-	// measured once produced one number and it has not moved since.
+	// THE MARGIN CONVERGED IN ONE PASS UNDER THE STATED FIXTURE, AND
+	// THEN MOVED ONCE MORE — and the difference between that move and
+	// the four before it is the whole test of whether stating the
+	// fixture worked. The window had gone 150 to 250 to 350 to 400
+	// inside a single round while the fixture followed it. With the
+	// fixture stated it settled, three legs measured once produced one
+	// number, and it stood until a twelfth pass under the SAME stated
+	// 1.5 s reported 128.757833 ms.
+	//
+	// That is not the loop restarting. The old moves were the fixture
+	// growing and handing back a larger maximum it had manufactured;
+	// this one is a fixture that did not change reporting something it
+	// had always been able to report and had not yet seen. The window
+	// followed the reading, and the fixture then followed the window
+	// once, by hand, with the row refusing until a person did it.
 	Measurements: map[Leg]Measurement{
 		// 20.831652ms under the detector, 20.591115ms without it.
 		Linux: {WorstGap: 20831652 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
-		// 45.707917ms under the detector, 43.846625ms without it. In the
-		// detector's pass the fixture's own widest gap between flushes
-		// was 59.916792ms — LARGER than the client's worst arrival gap,
-		// which is what it looks like when the runner starves the server
-		// goroutine between two writes the client then receives
-		// together.
-		Darwin: {WorstGap: 45707917 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+		// # DARWIN'S MAXIMUM CAME OFF A DEVELOPER MAC, NOT OFF THE RUNNER
+		//
+		// 128.757833 ms, one pass of twenty on 2026-09-11, out of eleven
+		// such passes whose other ten ran 24.283 to 34.717 ms. The
+		// gate's own macOS runner gave 45.707917 ms under the detector
+		// and 43.846625 ms without, over two passes of twenty on
+		// 2026-09-10, and that figure held this record until the larger
+		// one turned up.
+		//
+		// PER LEG MEANS PER OS. A darwin reading is a darwin reading
+		// whichever darwin took it, and a record that kept the runner's
+		// number because the runner is the machine the gate watches
+		// would be recording where it looked rather than what is there.
+		// The other two read-side entries were checked the same way and
+		// both keep the runner's figure: StreamGoesQuiet 10.284 ms
+		// against this machine's 6.785, StreamKeepAlives 104.352 ms
+		// against this machine's 45.453.
+		//
+		// WHAT THE OUTLIER IS. In that pass the FIXTURE's own widest gap
+		// between flushes was 139.277875 ms, at a stated 20 ms pace —
+		// larger than the client's worst arrival gap, which is what it
+		// looks like when the machine starves the server goroutine and
+		// the client then receives two writes together. So the quantity
+		// is not delivery and it is not this client: it is how long this
+		// kind of machine can stop the far end from writing. That is the
+		// same quantity StreamKeepAlives measures with a different pace,
+		// and its darwin record — 104.352 ms, also a starvation event,
+		// also one pass — is the same phenomenon at a comparable size.
+		// Two entries sampling one distribution and carrying windows a
+		// factor of two apart is an open item rather than a finding.
+		Darwin: {WorstGap: 128757833 * time.Nanosecond, Runs: 220, Date: "2026-09-11"},
 		// 21.4369ms under the detector, 26.8971ms without it.
 		Windows: {WorstGap: 26897100 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
 	},

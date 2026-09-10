@@ -756,6 +756,27 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // keepAlivePace and keepAliveBeats are the keep-alive fixture, STATED,
 // and shared by the row and the probe beside it.
 //
+// THE FIXTURE AFFORDS THE WINDOW PLUS ONE WHOLE WINDOW, and that ratio
+// is the constant rather than the duration. Ruled 2026-09-10 after the
+// measured window landed at 525 ms against a fixture affording 600: the
+// row still passed, the assertion below still held, and the margin
+// between them was seventy-five milliseconds. That is not a margin, it
+// is a flake with a schedule — one leg measuring past about 120 ms
+// would have pushed the window past what its own fixture covers, and
+// the first thing anybody would have seen is the row reddening on a
+// runner rather than a number needing a ruling.
+//
+// So the fixture is sized the way the write side's already is. pacingFor
+// in internal/flow builds an upload body to span three and a half
+// windows because a fixture sized at exactly the assertion is one
+// scheduling hiccup from failing it; this is the same rule on the read
+// side, with the ratio written down instead of assumed. Seventy-five
+// beats at fifteen milliseconds is 1.125 s of nothing but comment
+// frames, against a 525 ms window: the row's own assertion needs one
+// window, the headroom is the second, and what is left over is the
+// margin over the assertion rather than over the gap. The two are
+// different questions and both are asked below.
+//
 // THEY WERE ALREADY CONSTANTS AND THE PROBE HAD ITS OWN COPY OF ONE OF
 // THEM, which is the defect worth naming here rather than the values.
 // The row ran forty beats at fifteen milliseconds and the probe ran
@@ -765,17 +786,14 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // the row's own shape or it answers a different question; that rule has
 // already been paid for once on the write side, where a connection kept
 // warm across runs reported 594 ms against a fresh one's 434.
-//
-// Six hundred milliseconds of nothing but comment frames is what makes
-// the row able to see a client that stopped counting them as proof of
-// life: it is twice the window at the time of writing, and the row
-// asserts that relation rather than assuming it, because the window
-// comes from the registry and can be raised there by a leg this machine
-// is not.
 const (
 	keepAlivePace  = 15 * time.Millisecond
-	keepAliveBeats = 40
+	keepAliveBeats = 75
 )
+
+// keepAliveHeadroom is how many windows the fixture must afford: one for
+// the row's assertion, one for the margin over it. See above.
+const keepAliveHeadroom = 2
 
 // keepAliveFrames is that fixture: nothing but keep-alives, then an
 // ending. One builder, so the row and the probe cannot drift.
@@ -817,7 +835,7 @@ func keepAliveFrames() []string {
 // did not have to have. A row is only as good as the bytes it sends.
 func TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered(t *testing.T) {
 	// THE STREAM MUST STAY QUIET FOR LONGER THAN THE WINDOW, or this row
-	// cannot see anything: the fixture above is twice the window in
+	// cannot see anything: the fixture above is more than two windows of
 	// nothing but comment frames, so a client that did not count them as
 	// proof of life would have given up twice over. The row asserts that
 	// relation below rather than assuming it, because the window now
@@ -833,12 +851,27 @@ func TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered(t *testing.T) {
 	// when that gap has eaten the margin.
 	stall := timing.StreamKeepAlivesAreProofOfLife.Window
 
-	// The quiet the row buys must outlast the window, whatever the
-	// registry currently says the window is.
-	if quiet := keepAliveBeats * keepAlivePace; quiet <= stall {
-		t.Fatalf("the fixture is quiet for %v against a %v window — this row cannot "+
-			"see a client that stopped counting keep-alives as proof of life",
-			quiet, stall)
+	// THE QUIET MUST OUTLAST THE WINDOW TWICE OVER, whatever the
+	// registry currently says the window is: once for what this row
+	// asserts, and once more so the two are not the same number. A
+	// fixture sitting at its own assertion reds the first time a leg is
+	// slower, and the fix somebody reaches for at that point is the
+	// window rather than the fixture — which is the read side following
+	// its own reading all over again.
+	//
+	// IT IS A FATAL RATHER THAN A SILENT RESIZE, and that is the whole
+	// mechanism. The fixture does not grow to meet the window on its
+	// own; a leg that pushes the window past what this fixture affords
+	// stops the row and asks a person to lengthen it deliberately.
+	if quiet := keepAliveBeats * keepAlivePace; quiet < keepAliveHeadroom*stall {
+		t.Fatalf("the fixture is quiet for %v against a %v window, and this row asks "+
+			"for %d windows of quiet — one to assert over and one so the assertion "+
+			"is not sitting on its own boundary.\nRaise keepAliveBeats: %v of quiet "+
+			"needs %d beats at the %v pace. Do not lower the window to fit; it is a "+
+			"measurement.",
+			quiet, stall, keepAliveHeadroom,
+			keepAliveHeadroom*stall,
+			int((keepAliveHeadroom*stall+keepAlivePace-1)/keepAlivePace), keepAlivePace)
 	}
 
 	frames := keepAliveFrames()
@@ -1235,7 +1268,38 @@ const partialLinePace = 20 * time.Millisecond
 // RAISING IT IS A DELIBERATE ACT AND THE ROW SAYS SO. When a window
 // grows past what this covers, the row refuses with both numbers rather
 // than a fixture quietly growing to meet it.
-const partialLineDelivery = 1500 * time.Millisecond
+//
+// # IT WAS RAISED ONCE, 2026-09-11, AND HERE IS THE BILL
+//
+// 1.5 s to 2.3 s, because darwin's window went 230 ms to 650 ms and
+// three and a half of 650 is 2.275 s. The row refused first, with both
+// numbers, which is the paragraph above working rather than a
+// formality.
+//
+// WHAT MOVED THE WINDOW WAS NOT THIS FIXTURE. That is the distinction
+// between this raise and the four before it. The 150-to-400 sequence
+// was the loop: a wider window derived a longer delivery, a longer
+// delivery found a larger maximum, and five times that maximum asked
+// for a wider window. Here the fixture sat at a stated 1.5 s for every
+// one of eleven passes, and one of them reported 128.757833 ms against
+// a 45.707917 ms record — a reading the constant did not produce and
+// could not have grown into. The window followed the reading. The
+// fixture then followed the window, once, by hand.
+//
+// AND THE LOOP IS NOT CLOSED BY THAT BEING TRUE. A 2.3 s delivery
+// samples half as long again as a 1.5 s one, and the maximum of a
+// heavy-tailed sample grows with how long you look — so the next
+// measurement under this constant may be larger for no reason but the
+// constant. What stops that being a chase is that the raise is manual
+// and refused-by-default: nothing here moves without a person reading
+// two numbers and deciding. The alternative — a window that does not
+// cover the worst thing anybody has measured — is the flake this whole
+// task exists to remove.
+//
+// THE RUNTIME IT COSTS, measured rather than estimated: the row itself
+// pays the 800 ms difference once, and the probe beside it pays it
+// twenty times a pass in each of the two conditions the gate runs.
+const partialLineDelivery = 2300 * time.Millisecond
 
 // partialLineMarker is the text the row looks for on stdout. It is
 // repeated as the line grows, because what the row asserts is that the
@@ -1340,18 +1404,21 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 	// are a different margin from the five-times rule beside the
 	// registry, which is a margin over the GAP.
 	//
-	// REQUIRED MUTATIONS, RE-RUN ON THE TIP 2026-09-10, from both
+	// REQUIRED MUTATIONS, RE-RUN ON THE TIP 2026-09-11, from both
 	// directions — because this check is a RELATION and breaking only
 	// one side of it proves half of a rule.
 	//
-	//  1. Drop partialLineDelivery to 700 ms against the 230 ms window.
+	//  1. Drop partialLineDelivery to 700 ms against the 650 ms window.
 	//     Reds here: "the fixture is stated at 700ms of delivery and a
-	//     230ms window asks for 805ms".
-	//  2. Leave the fixture alone and raise the window to 500 ms. Reds
-	//     here too: "stated at 1.5s … and a 500ms window asks for 1.75s".
+	//     650ms window asks for 2.275s".
+	//  2. Leave the fixture alone and raise the window to 800 ms. Reds
+	//     here too: "stated at 2.3s … and a 800ms window asks for 2.8s".
 	//     That is the direction this check actually exists for — a leg
 	//     measuring slower is how the window grows, and nobody editing
-	//     the registry is looking at this file.
+	//     the registry is looking at this file. It is also the direction
+	//     that fired for real this round rather than under a mutation:
+	//     the window went to 650 ms off one reading, and this line is
+	//     what stopped the fixture following it silently.
 	//
 	// The probe beside the row stays green under both, which is correct:
 	// it measures gaps and asserts nothing about spending three windows.
