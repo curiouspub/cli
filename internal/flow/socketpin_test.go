@@ -100,9 +100,30 @@ import (
 // measured — the gap is about three times what 16 KiB gives, and the
 // window with it — and the reason to pay it is that a leg which cannot
 // finish reports nothing at all, which is worse than a leg that reports
-// a wider margin. Revisiting it means measuring 64 KiB on that runner
-// deliberately, which is a run somebody has to spend rather than a
-// number to pick.
+// a wider margin.
+//
+// # THIS IS RECORDED AS AN OPEN OBSERVATION AND IS DELIBERATELY NOT CHASED
+//
+// Ruled rather than forgotten, which is the difference between an open
+// question and a loose end. Everything known about the collapse is in
+// the paragraph above, both hypotheses that were killed included, and
+// the honest state is that nobody can name the mechanism. What that
+// buys, and the only thing it buys, is the right size: an unexplained
+// collapse is not a thing to ship a leg on, so the leg is shipped on the
+// size that finishes.
+//
+// The reason not to chase it further is a budget rather than a lack of
+// interest. Each attempt is a run on a hosted runner in both of the
+// conditions the gate uses, spent on a question that changes no number
+// this repository records — 64 KiB on that runner is untested, and
+// testing it would at best move a gap the window already clears by more
+// than the rule asks. A round has one question it exists to answer, and
+// a run spent here is a run not spent there.
+//
+// WHOEVER PICKS THIS UP: the measurement that would settle it is 64 KiB
+// on that same hosted runner, plain and under the detector, with the
+// probe timed rather than merely observed to finish. That is a run
+// somebody has to spend rather than a number to pick.
 //
 // A REQUEST UNDER A KERNEL'S CLAMP READS BACK AS A NUMBER NOBODY ASKED
 // FOR, and that danger is handled by a guard rather than by guessing
