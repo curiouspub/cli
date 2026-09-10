@@ -66,24 +66,36 @@ import (
 // of the conditions the gate runs, each arm bounded so that one that
 // will not finish is a ROW rather than a dead test binary.
 //
-// LINUX, 2026-09-10, send read back 262,144 and held:
+// WINDOWS, 2026-09-10, send asked 131,072 and read back 131,072, held
+// across every sample in every arm. All three arms complete:
 //
-//	receive pinned 256 KiB   178.092 ms (-race)   178.277 ms (plain)
-//	receive unpinned          77.047 ms (-race)    76.541 ms (plain)
-//	receive pinned 16 KiB    DID NOT COMPLETE: 2 of 20 runs in 4m0s,
-//	                         worst so far 880.727 ms (-race),
-//	                         880.185 ms (plain)
+//	receive 256 KiB (read back 262144)   102.704 ms (-race)  102.531 ms
+//	receive unpinned                     102.271 ms (-race)  102.571 ms
+//	receive 16 KiB  (read back 16384)     51.594 ms (-race)   51.649 ms
 //
-// That is one leg's table and it is written as one leg's. What it says
-// about THIS leg is that the receive end is not a detail here: two arms
-// whose receive buffers were both larger than the send buffer differ by
-// 101.0 ms under the detector and 101.7 ms without it, and the arm at
-// the small end does not finish at all. So linux is recorded with the
-// PAIR pinned, and its window comes from the gap measured under that
-// pair.
+// LINUX, 2026-09-10, send asked 131,072 and read back 262,144 — the
+// doubled figure this kernel reports for an honoured request — held
+// across every sample:
 //
-// WINDOWS is the leg where all three arms complete, and its table is
-// below at windowsReceiveControl.
+//	receive 256 KiB (read back 524288)   178.377 ms (-race)  178.553 ms
+//	receive unpinned                      76.523 ms (-race)  101.988 ms
+//	receive 16 KiB   did not complete on linux within 240s: 2 of 20 runs,
+//	                 worst so far 879.954 ms (-race), 880.024 ms (plain)
+//
+// TWO LEGS, TWO ANSWERS, AND THEY POINT OPPOSITE WAYS. On windows the
+// two large arms agree to within half a millisecond and the small one is
+// HALF of them; on linux the two large arms differ by a hundred
+// milliseconds and the small one does not finish at all. There is no
+// sentence that covers both, which is the whole reason this is recorded
+// per leg: a claim about three legs made from one leg's arithmetic is
+// the defect this exercise exists to stop, and the arithmetic here would
+// have produced two contradictory claims depending on which runner
+// somebody had happened to use.
+//
+// What each leg's table DOES settle is its own condition. Both of these
+// legs hold a pin at both ends, so both are recorded with the PAIR
+// pinned, and each one's window comes from the gap measured under that
+// pair. Neither table says anything about a third leg.
 //
 // DARWIN is recorded differently and the difference is the honest one:
 // its send end is pinned and its receive end is UNPINNABLE, with the
@@ -135,16 +147,23 @@ import (
 // package in 130s). The MECHANISM on that runner is not identified, and
 // an unexplained collapse is not a thing to ship a leg on.
 //
-// # AND IT IS THE RECEIVE END, WHICH IS THE ONE NEW FACT ABOUT IT
+// # AND IT IS THE RECEIVE END AT THE SMALL END, WHICH IS THE NEW FACT
 //
 // The control above pinned only the RECEIVE end at 16 KiB and left the
 // send end at the shipped size, and it reproduced: two runs in four
 // minutes against twenty in fifty-seven seconds at a quarter megabyte,
-// with a worst gap past 880 ms where the sibling arms sit at 77 and
-// 178. Whatever this is, it is not a property of the pair or of the send
-// end — it is the far end's receive buffer at the small end of the
-// range, on this one runner. That narrows the search for whoever picks
-// it up; it does not identify the mechanism, and it is not chased here.
+// with a worst gap past 880 ms where the sibling arms sit at 77 and 178.
+// So it is not a property of the pair and not of the send end. The
+// hypothesis it leaves is narrower than the one it replaces: it follows
+// the receive end being SMALL on this hosted runner, whatever the send
+// end is pinned to.
+//
+// AND "SMALL OR ABSENT" IS THE HALF THAT WAS MEASURED AND IS WRONG. An
+// absent receive pin was the obvious sibling case and it does not
+// collapse — the unpinned arm finished twenty runs in fifty-seven
+// seconds and was the FASTEST of the three at 77 ms. Whatever this is,
+// it wants a small buffer rather than an unmanaged one, which is worth
+// having written down before somebody spends a run on the wrong half.
 //
 // So the size is the one with evidence on all three legs rather than the
 // one the curve prefers on one of them. What it costs is real and
@@ -175,6 +194,23 @@ import (
 // on that same hosted runner, plain and under the detector, with the
 // probe timed rather than merely observed to finish. That is a run
 // somebody has to spend rather than a number to pick.
+//
+// # WHAT WOULD PROMOTE IT FROM A CARD TO A CHASE
+//
+// Two signals, and neither has fired. If it appears on ANY NON-HOSTED
+// linux — a container, a machine somebody owns, anything that is not
+// this runner — then it is a property of the kernel or of the code
+// rather than of one hosted environment, and it has to be understood. If
+// it appears AT 128 KiB, the size this repository actually ships, then
+// it is no longer a fact about an experiment nobody runs.
+//
+// AND THE BOUND HAS ALREADY EARNED ITS PLACE AGAINST IT. With every arm
+// budgeted, the run that reproduces this collapse COMPLETED on all three
+// legs: the arm reported "did not complete on linux within 240s: 2 of 20
+// runs" and the package went on to produce every other number in it. The
+// difference between that and the run before it — twenty-four minutes, a
+// panic, and one leg's whole evidence gone — is the difference this
+// paragraph is really about.
 //
 // A REQUEST UNDER A KERNEL'S CLAMP READS BACK AS A NUMBER NOBODY ASKED
 // FOR, and that danger is handled by a guard rather than by guessing

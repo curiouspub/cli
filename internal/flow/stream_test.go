@@ -1340,21 +1340,30 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 	// are a different margin from the five-times rule beside the
 	// registry, which is a margin over the GAP.
 	//
-	// REQUIRED MUTATION, RUN 2026-09-10, AND IT REDDENED IN A PLACE THE
-	// PREDICTION DID NOT NAME. Dropping partialLineDelivery to 700 ms
-	// was meant to trip this check; it never got here. The helper's own
-	// floor fired first — "the shortest frame this helper can build is
-	// 56 pieces and partialLineDelivery asks for 35" — because a stated
-	// delivery shorter than one frame of the marker describes a fixture
-	// that cannot be built at all, and that red comes out of the probe
-	// as well as the row.
+	// REQUIRED MUTATIONS, RE-RUN ON THE TIP 2026-09-10, from both
+	// directions — because this check is a RELATION and breaking only
+	// one side of it proves half of a rule.
 	//
-	// Re-run at 1200 ms, which is buildable and still under three and a
-	// half of a 400 ms window, this check reds exactly as intended and
-	// names both numbers, rather than the row reaching its three-window
-	// assertion at the bottom and reporting an elapsed time nobody can
-	// act on. The probe stays green there, which is correct — it
-	// measures gaps and asserts nothing about spending three windows.
+	//  1. Drop partialLineDelivery to 700 ms against the 230 ms window.
+	//     Reds here: "the fixture is stated at 700ms of delivery and a
+	//     230ms window asks for 805ms".
+	//  2. Leave the fixture alone and raise the window to 500 ms. Reds
+	//     here too: "stated at 1.5s … and a 500ms window asks for 1.75s".
+	//     That is the direction this check actually exists for — a leg
+	//     measuring slower is how the window grows, and nobody editing
+	//     the registry is looking at this file.
+	//
+	// The probe beside the row stays green under both, which is correct:
+	// it measures gaps and asserts nothing about spending three windows.
+	//
+	// AND AN EARLIER ATTEMPT AT THE FIRST ONE REDDENED SOMEWHERE ELSE,
+	// which is worth keeping. At a 400 ms window, 700 ms of delivery was
+	// short enough that the helper's own floor fired first — "the
+	// shortest frame this helper can build is 56 pieces and
+	// partialLineDelivery asks for 35" — because a stated delivery
+	// shorter than one frame of the marker describes a fixture that
+	// cannot be built at all. That red comes out of the probe as well as
+	// the row, and it is a second falsifier rather than a hole.
 	if 2*partialLineDelivery < 7*stall {
 		t.Fatalf("the fixture is stated at %v of delivery and a %v window asks for %v "+
 			"— three and a half of itself — so this row cannot spend three windows on "+
