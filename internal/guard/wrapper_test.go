@@ -72,15 +72,32 @@ func declaredNodeFloor(t *testing.T, root string) int {
 // repository's stated invariant is that the gate is one target and
 // every check that can fail a change is inside it, so the wrapper's
 // suite has to be reachable from that target — not merely present.
+//
+// # REACHABLE, WHICH IS NOT THE SAME AS "IN THE PREREQUISITE LINE"
+//
+// This row read the prerequisite line and nothing else until T-223's
+// third round, when `test` became a recipe that invokes each half and
+// collects the status — so that the first red half no longer stops the
+// others from running at all. The gate still ran the wrapper's suite;
+// the row went red anyway, because its KEY was narrower than its claim.
+// That is the same failure as a guard whose allowlist is still accurate
+// under a coarsened key: it reads as coverage of "reachable" and covers
+// one spelling of it.
+//
+// So both spellings count, and the row says which one it found — a
+// message naming only one form would send the next person to add a
+// prerequisite that the recipe form does not need.
 func TestTheGateRunsTheWrapperSuite(t *testing.T) {
 	root := moduleRoot(t)
 	makefile := readRepoFile(t, root, "Makefile")
 
 	prerequisites := recipeLine(t, makefile, "test:")
-	if !strings.Contains(prerequisites, "test-npm") {
-		t.Errorf("make test does not depend on the wrapper's suite (%q)\n"+
+	gateBody := recipeBody(makefile, "test:")
+	if !strings.Contains(prerequisites, "test-npm") && !strings.Contains(gateBody, "test-npm") {
+		t.Errorf("make test neither depends on the wrapper's suite nor invokes it "+
+			"(prerequisites %q, recipe:\n%s)\n"+
 			"A postinstall script that downloads and executes a binary on other people's "+
-			"machines is not a thing to test on request.", prerequisites)
+			"machines is not a thing to test on request.", prerequisites, gateBody)
 	}
 	if !strings.Contains(makefile, "\ntest-npm:") {
 		t.Fatal("the Makefile names test-npm as a prerequisite and does not define it")

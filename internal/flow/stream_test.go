@@ -1163,6 +1163,60 @@ func TestOriginDecidesTheStream(t *testing.T) {
 	})
 }
 
+// partialLinePace is how fast the partial-line fixture flushes one
+// piece of its single line, and it is shared by the row and the probe
+// beside it so the two cannot pace differently while claiming to measure
+// the same thing.
+const partialLinePace = 20 * time.Millisecond
+
+// partialLineMarker is the text the row looks for on stdout. It is
+// repeated as the line grows, because what the row asserts is that the
+// line arrived, not that it arrived once.
+const partialLineMarker = "A-LINE-DELIVERED-IN-PIECES"
+
+// partialLineFrames is one log frame cut into enough pieces that
+// delivering it outlasts three stall windows at partialLinePace.
+//
+// THE FIXTURE FOLLOWS THE WINDOW rather than sitting beside it, which is
+// the same rule pacingFor keeps on the write side and for the same
+// reason: the row asserts it spent at least three windows on ONE line,
+// and a piece count that satisfies that at one window silently stops
+// satisfying it at the next. This one has been written down twice
+// already — ten pieces at a 60 ms window, twenty-eight at 150 ms — and
+// each time a person had to notice.
+//
+// THREE AND A HALF WINDOWS, not three. The halves are a margin over the
+// ASSERTION, so that a scheduling hiccup cannot fail a row about
+// something else; the five-times rule beside the registry is a margin
+// over the GAP. Different margins, different questions.
+//
+// IT GROWS THE LINE AND THEN CHECKS, rather than computing a count and
+// trusting it. splitEvenly cuts by SIZE: ask it for forty-three pieces
+// of a sixty-byte string and it returns thirty, because it rounds the
+// piece size up and then runs out of string. A count computed from the
+// window and handed straight to it is a fixture that is quietly smaller
+// than the arithmetic says — which is exactly the failure this
+// derivation exists to prevent, arriving through the helper meant to
+// implement it. So the loop asks for what it got.
+func partialLineFrames(t *testing.T, window time.Duration) []string {
+	t.Helper()
+	need := 7 * window / 2
+	line := partialLineMarker
+	// A bound, so a helper that can never satisfy its own condition
+	// fails as a test rather than as a hung run.
+	for grow := 0; grow < 1000; grow++ {
+		frames := splitEvenly(logFrame(line), len(logFrame(line)))
+		if time.Duration(len(frames))*partialLinePace > need {
+			return frames
+		}
+		line += " " + partialLineMarker
+	}
+	t.Fatalf("no line this helper is willing to build delivers for longer than %v "+
+		"at a %v pace, so the row it feeds cannot assert what it is named for",
+		need, partialLinePace)
+	return nil
+}
+
 // splitEvenly cuts s into n pieces, so a fixture can deliver one frame
 // as a sequence of partial writes rather than in a single flush.
 func splitEvenly(s string, n int) []string {
@@ -1194,22 +1248,21 @@ func splitEvenly(s string, n int) []string {
 func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 	stall := timing.StreamPartialLineIsNotAStall.Window
 
-	// TWENTY-EIGHT PIECES, and the number follows the window rather than
-	// the other way round. This row asserts it spent at least three
-	// windows on ONE line, so the line has to be delivered over longer
-	// than three of them: at the fixture's pace, 29 flushes is well past
-	// that. It was ten pieces while the window was 60 ms; the window is
-	// now sized against a measurement instead of against the pace.
-	frame := logFrame("A-LINE-DELIVERED-IN-PIECES")
-	frames := splitEvenly(frame, 28)
-	frames = append(frames, doneFrame(wire.StatusBuilt))
+	// THE PIECE COUNT IS DERIVED FROM THE WINDOW, not written down
+	// beside it. This row asserts it spent at least three windows on ONE
+	// line, so the line has to be delivered over longer than three of
+	// them — and a constant that satisfies that at one window silently
+	// stops satisfying it at the next. It was ten pieces at a 60 ms
+	// window and twenty-eight at 150 ms, and each time somebody had to
+	// notice. See partialLinePieces.
+	frames := append(partialLineFrames(t, stall), doneFrame(wire.StatusBuilt))
 
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.StreamStallTimeout = stall
 	run.script.eventScripts = []eventScript{{
 		frames: frames,
-		pace:   20 * time.Millisecond,
+		pace:   partialLinePace,
 		hold:   true,
 	}}
 
@@ -1230,7 +1283,7 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 		t.Fatalf("the run took %v, under %v, so it never spent long enough on one "+
 			"line for a line-counting watchdog to fire", elapsed, 3*stall)
 	}
-	if printed := run.prompt.results.String(); !strings.Contains(printed, "A-LINE-DELIVERED-IN-PIECES") {
+	if printed := run.prompt.results.String(); !strings.Contains(printed, partialLineMarker) {
 		t.Errorf("the line delivered in pieces never reached stdout:\n%s", printed)
 	}
 }

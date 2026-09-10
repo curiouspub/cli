@@ -770,9 +770,9 @@ func TestADeployThatIsNotReadyYetIsAskedAgain(t *testing.T) {
 	}
 	defer handoff.Release()
 
-	if run.script.publishes != 3 {
+	if run.script.publishCount() != 3 {
 		t.Errorf("the run asked %d times, want 3 — two refusals and the answer",
-			run.script.publishes)
+			run.script.publishCount())
 	}
 	narrated := run.prompt.out.String()
 	if got := strings.Count(narrated, buildStillBeingChecked); got != 1 {
@@ -820,13 +820,13 @@ func TestADeployThatIsNeverReadyStopsAndSaysWhatItSaw(t *testing.T) {
 			t.Errorf("the failure never said %q:\n%s", want, text)
 		}
 	}
-	if run.script.publishes < 2 {
+	if run.script.publishCount() < 2 {
 		t.Errorf("the run asked %d times, want more than one — a bound that stops "+
-			"on the first answer is not a retry", run.script.publishes)
+			"on the first answer is not a retry", run.script.publishCount())
 	}
-	if run.script.publishes > 10 {
+	if run.script.publishCount() > 10 {
 		t.Errorf("the run asked %d times, which is not a bounded wait",
-			run.script.publishes)
+			run.script.publishCount())
 	}
 }
 
@@ -865,10 +865,10 @@ func TestAPublishWithNoAnswerClaimsNeitherOutcome(t *testing.T) {
 		t.Errorf("the failure claims nothing was deployed, which is the one thing "+
 			"this client cannot know here:\n%s", text)
 	}
-	if run.script.publishes != 1 {
+	if run.script.publishCount() != 1 {
 		t.Errorf("the publish was sent %d times, want exactly 1 — asking again is "+
 			"not a way of finding out whether the first one landed",
-			run.script.publishes)
+			run.script.publishCount())
 	}
 }
 

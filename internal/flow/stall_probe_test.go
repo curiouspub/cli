@@ -100,8 +100,9 @@ func report(t *testing.T, entry *timing.Entry, measured time.Duration, pin *timi
 	recorded, known := entry.Measurements[leg], false
 	known = recorded.Measured()
 
-	t.Logf("%s on %s: worst gap %v over %d runs, against a %v window%s%s",
-		entry.Name, leg, measured, probeRuns, entry.Window, pinNote(pin), extra)
+	t.Logf("%s on %s%s: worst gap %v over %d runs, against a %v window%s%s",
+		entry.Name, leg, detectorNote(), measured, probeRuns, entry.Window,
+		pinNote(pin), extra)
 
 	if measured >= entry.Window {
 		t.Errorf("%s measured a worst gap of %v on %s, at or past its own %v "+
@@ -113,16 +114,21 @@ func report(t *testing.T, entry *timing.Entry, measured time.Duration, pin *timi
 
 	if !known {
 		t.Errorf("%s has no recorded measurement on %s, and this run measured a "+
-			"worst gap of %v over %d runs on %s.\nRecord it in internal/timing: "+
+			"worst gap of %v over %d runs on %s%s.\nRecord it in internal/timing: "+
 			"{WorstGap: %v, Runs: %d, Date: \"%s\"%s%s} — or run this again and "+
 			"record the worst across the passes, with the run count to match, "+
-			"which is how the darwin entry was taken. Nothing here may be seeded "+
-			"from another leg's number: the buffers and the scheduler belong to "+
-			"the kernel and the runner.",
+			"which is how the darwin entry was taken.\nTWO THINGS THIS LINE ALONE "+
+			"WILL NOT TELL YOU. make ci runs this package twice, plainly and under "+
+			"the race detector, and the detector widens the gap — threefold on "+
+			"darwin — so the number to keep is the WORSE of the two conditions and "+
+			"this run was %s. And nothing here may be seeded from another leg's "+
+			"number: the buffers and the scheduler belong to the kernel and the "+
+			"runner.",
 			entry.Name, leg, measured, probeRuns, time.Now().Format("2006-01-02"),
+			detectorNote(),
 			measured.Round(time.Microsecond), probeRuns,
 			time.Now().Format("2006-01-02"),
-			blockPointHint(entry), pinLiteral(pin))
+			blockPointHint(entry), pinLiteral(pin), detectorPhrase())
 		return
 	}
 
@@ -143,6 +149,23 @@ func report(t *testing.T, entry *timing.Entry, measured time.Duration, pin *timi
 			"run: retake it before trusting the margin.",
 			entry.Name, measured, recorded.WorstGap, leg, recorded.Runs, recorded.Date)
 	}
+}
+
+// detectorNote and detectorPhrase name the condition a run happened
+// under, because the record's numbers depend on it and two runs of the
+// same probe otherwise print lines that look identical and are not.
+func detectorNote() string {
+	if raceDetector {
+		return " (-race)"
+	}
+	return ""
+}
+
+func detectorPhrase() string {
+	if raceDetector {
+		return "under it"
+	}
+	return "without it"
 }
 
 // blockPointHint reminds a write-side entry that its record is
@@ -170,9 +193,30 @@ func pinNote(pin *timing.PinnedPair) string {
 		if p.Err != "" {
 			return fmt.Sprintf("%s NOT PINNED (%s)", name, p.Err)
 		}
-		return fmt.Sprintf("%s asked %d read back %d", name, p.Requested, p.ReadBack)
+		return fmt.Sprintf("%s asked %d read back %d%s", name, p.Requested, p.ReadBack,
+			sustainedNote(p.Sustained))
 	}
 	return fmt.Sprintf(" [%s; %s]", end("send", pin.Send), end("receive", pin.Receive))
+}
+
+// sustainedNote says what the buffer actually was while bodies moved,
+// and says it in the words that distinguish the three outcomes: nobody
+// looked, it held, it did not hold.
+//
+// A READ-BACK AND A RANGE ARE TWO FACTS AND THE LINE PRINTS BOTH,
+// because on darwin they disagree by a factor of thirty and a reader
+// seeing only the first would take the record at its word. This is the
+// one place a run says so out loud.
+func sustainedNote(s *timing.Sustained) string {
+	if s == nil {
+		return " (never sampled while a body moved)"
+	}
+	if s.Steady() {
+		return fmt.Sprintf(" and HELD there across %d samples", s.Samples)
+	}
+	return fmt.Sprintf(" but the kernel ran it from %d to %d across %d samples "+
+		"while the body moved, so the read-back is not the condition the gap was "+
+		"measured under", s.Low, s.High, s.Samples)
 }
 
 // pinLiteral is the same fact as Go source, so an operator on a leg with
@@ -190,7 +234,12 @@ func pinLiteral(pin *timing.PinnedPair) string {
 		if p.Err != "" {
 			return fmt.Sprintf("{Requested: %d, Err: %q}", p.Requested, p.Err)
 		}
-		return fmt.Sprintf("{Requested: %d, ReadBack: %d}", p.Requested, p.ReadBack)
+		sustained := ""
+		if s := p.Sustained; s != nil {
+			sustained = fmt.Sprintf(", Sustained: &timing.Sustained{Samples: %d, Low: %d, High: %d}",
+				s.Samples, s.Low, s.High)
+		}
+		return fmt.Sprintf("{Requested: %d, ReadBack: %d%s}", p.Requested, p.ReadBack, sustained)
 	}
 	return fmt.Sprintf(", Pin: &timing.PinnedPair{Send: timing.Pin%s, Receive: timing.Pin%s}",
 		end(pin.Send), end(pin.Receive))
@@ -242,11 +291,10 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	pacing := pacingFor(t, entry.Window)
 
 	path := probeBody(t, pacing.bodySize)
-	store := newObjectStore(t, &deployJournal{})
+	store := newObjectStore(t, &deployJournal{}, pinnedBuffer)
 	store.readChunk = pacing.chunk
 	store.readPause = pacing.pause
 	store.pauseUntil = pacing.pacedBytes
-	store.pinReceiveBuffer = pinnedBuffer
 
 	// ONE TRANSPORT ACROSS THE RUNS, AND A CONNECTION PER RUN. The row
 	// gets one connection, and the gap being measured is set by how much
@@ -256,6 +304,8 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	// dials afresh each time.
 	transport, client := pinnedTransport(pinnedBuffer)
 	t.Cleanup(transport.CloseIdleConnections)
+	client.watch(t, pacedPause)
+	store.pin.watch(t, pacedPause)
 
 	var worst time.Duration
 	var samples int
@@ -352,14 +402,15 @@ func TestProbeTheUploadBlockPoint(t *testing.T) {
 	bodySize := pacingFor(t, timing.UploadSlowIsNotStalled.Window).bodySize
 
 	path := probeBody(t, bodySize)
-	store := newObjectStore(t, &deployJournal{})
+	store := newObjectStore(t, &deployJournal{}, pinnedBuffer)
 	// The store reads a little and then stops, holding the request open.
 	// That is what makes the client fill the buffer and stay there.
 	store.stopReadingAfter = 64 << 10
-	store.pinReceiveBuffer = pinnedBuffer
 
 	transport, client := pinnedTransport(pinnedBuffer)
 	t.Cleanup(transport.CloseIdleConnections)
+	client.watch(t, pacedPause)
+	store.pin.watch(t, pacedPause)
 
 	var worst int64
 	for run := 0; run < probeRuns; run++ {
@@ -480,8 +531,11 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 	}
 	keepAlive = append(keepAlive, done)
 
-	partial := splitEvenly(logFrame("A-LINE-DELIVERED-IN-PIECES"), 28)
-	partial = append(partial, done)
+	// THE ROW'S OWN FIXTURE, down to the derivation, for the reason the
+	// write-side probe takes its body from pacingFor: a probe measuring
+	// a cheaper shape answers a different question, and the two cannot
+	// drift apart if they call the same function.
+	partial := append(partialLineFrames(t, timing.StreamPartialLineIsNotAStall.Window), done)
 
 	cases := []struct {
 		entry  *timing.Entry
@@ -501,7 +555,7 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 		},
 		{
 			entry:  &timing.StreamPartialLineIsNotAStall,
-			script: eventScript{frames: partial, pace: 20 * time.Millisecond},
+			script: eventScript{frames: partial, pace: partialLinePace},
 		},
 	}
 

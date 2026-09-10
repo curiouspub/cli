@@ -7,16 +7,16 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-go test-npm e2e-npm vet fmt lint snapshot surface-check hooks ci
+.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check hooks ci
 
 build:
 	go build -trimpath ./...
 	go build -trimpath -o bin/curious ./cmd/curious
 
 # test grows as suites arrive that go test cannot see on its own (a
-# release-build check, a wrapper package's own test runner) — each lands
-# here as an additional prerequisite so one command still sees the whole
-# repository.
+# release-build check, a wrapper package's own test runner, a pass under
+# the race detector) — each lands here as an additional half, so one
+# command still sees the whole repository.
 #
 # -count=1 disables the test cache, and it is LOAD BEARING rather than a
 # habit. The guards in internal/guard read state Go does not track as an
@@ -45,10 +45,65 @@ build:
 # Making the whole suite verbose would surface the same three lines
 # inside ten thousand, which is a way of hiding them that also annoys
 # everybody.
-test: test-go test-npm
+# EVERY HALF RUNS, AND THE RESULT IS THE AGGREGATE. This was a
+# prerequisite list until R3-3, and a prerequisite list stops at the
+# first failure — which defeats the sentence above it. The moment the
+# stall-window registry reds on a leg nobody has measured yet, which is
+# its designed state, make would stop and the race pass beside it would
+# never run at all. On the leg that is pending, that is exactly the run
+# whose output somebody needs.
+#
+# So the halves are invoked in sequence and the status is collected.
+# THE RACE PASS GOES FIRST for a reason worth stating: the stall windows
+# are margins over a gap the detector widens — threefold on darwin — so
+# the number a pending leg has to report is the one taken under it, and a
+# run that stopped before the race pass would hand an operator the
+# friendlier of two figures with nothing on the line to say which it was.
+test:
+	@status=0; \
+	$(MAKE) test-race || status=1; \
+	$(MAKE) test-go || status=1; \
+	$(MAKE) test-npm || status=1; \
+	exit $$status
 
 test-go:
 	go run ./tools/skipcheck -- -count=1 ./...
+
+# THE RACE PASS OVER THE STALL-WINDOW MACHINERY, and it is reached from
+# test so that CI gets it without a second entry point: the workflow runs
+# `make ci` and nothing else, so a check that is not reachable from here
+# is a check CI does not run.
+#
+# WHY IT NAMES internal/flow AND NOT ONLY internal/timing. The ruling
+# that produced this target says "the timing package's CI invocation",
+# and internal/timing on its own would catch NOTHING: it is a registry
+# and two AST guards, and it starts no goroutine. The data race that
+# invalidated a whole round of measurements lived one package over — a
+# receive-buffer size written onto the object-store fixture AFTER its
+# listener had started accepting, read by the accept path — so the
+# package that has to be under the detector is the one with the fixture
+# in it. Naming only the registry would be a gate in the shape of the
+# rule with none of its subject.
+#
+# WHAT IT COSTS AND WHAT THAT BUYS. internal/flow is the slowest package
+# here, because five of its rows are timing probes that pace real bytes
+# over loopback; under the detector it is about the same wall time, since
+# the cost is sleeps rather than instructions. The gate therefore runs
+# that package twice. It is worth it: the defect this catches is one that
+# leaves every row GREEN and every number wrong, which is the only kind
+# of defect a test suite cannot report on its own.
+#
+# THE STALL WINDOWS ARE SIZED UNDER THIS CONDITION. A margin has to hold
+# in every condition the gate runs the row in, and the detector is one of
+# them — see internal/timing, where each leg's number names the detector
+# it was taken under.
+#
+# CGO_ENABLED=1 because the race detector needs a C toolchain on most
+# platforms. The file-level export sets it to 0 for every other target,
+# which is deliberate; this is the one place that has to differ, and it
+# differs in the recipe rather than by moving the default.
+test-race:
+	CGO_ENABLED=1 go test -race -count=1 ./internal/timing/ ./internal/flow/
 
 # The wrapper package's own suite. It is a PREREQUISITE OF test rather
 # than a separate command somebody has to know about, because a check

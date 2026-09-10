@@ -208,7 +208,7 @@ func sourceTotal(t *testing.T, root string) int64 {
 // Content-Length. The accepted half reds; the create's declared size,
 // asserted above, does not move.
 func TestAMatchingUploadIsAcceptedAndAWrongLengthIsRefused(t *testing.T) {
-	store := newObjectStore(t, nil)
+	store := newObjectStore(t, nil, 0)
 
 	first := newDeployRun(t, fixtureProject(t, "valid")).uploadingTo(store).scriptedLogin()
 	first.prompt.confirms = []answer{no()}
@@ -950,7 +950,7 @@ func endpointCalls(events []string) []string {
 // so the dial failure it produces is the same on every machine.
 func deadAddress(t *testing.T) string {
 	t.Helper()
-	store := newObjectStore(t, nil)
+	store := newObjectStore(t, nil, 0)
 	store.closeNow()
 	return store.url
 }
@@ -1019,12 +1019,18 @@ func readFileString(t *testing.T, path string) string {
 // pace three windows' worth of bytes past a store that drains at a fixed
 // rate.
 //
-// So the fixture cannot be a constant. A leg that can PIN its socket
-// buffers has a small window and pays almost nothing; a leg that cannot
-// has a window that is a margin over an autotuned buffer — large — and
-// its fixture has to grow to match, or the row silently stops proving
-// the second half. Written as constants, the two numbers agree with the
-// window on the leg they were typed on and nowhere else.
+// So the fixture cannot be a constant: it follows whatever window the
+// leg's own measurement produced, and written as constants the two
+// numbers would agree with the window on the leg they were typed on and
+// nowhere else.
+//
+// WHAT IT CANNOT DO IS FOLLOW A WINDOW ALL THE WAY UP. An earlier
+// version of this comment said a leg that cannot pin its socket buffers
+// simply pays — a wider window and a fixture grown to match. pacingFor
+// below refuses at about a 2.47 second window, because past that the
+// body exceeds this client's own input limit, and that limit is the
+// product's rather than the suite's. A leg that cannot pin therefore
+// stops; see the Pin field in internal/timing.
 
 const (
 	// pacedChunk and pacedPause are the store's drain rate: it swallows
@@ -1051,12 +1057,12 @@ const (
 	// client spent writing into a buffer, and a row that never blocked
 	// measured nothing at all.
 	//
-	// Six MiB is roughly eight times the largest block point recorded in
-	// internal/timing — 819,200 bytes on darwin, with the buffers pinned
-	// — and it is deliberately not derived from that record. A floor
-	// exists to be right when the record is empty, which is the state of
-	// two of the three legs, and a floor computed from a leg's own
-	// measurement would be widest exactly where least is known.
+	// Six MiB is roughly ten times the largest block point recorded in
+	// internal/timing — 622,592 bytes on darwin, with a 16 KiB pin — and
+	// it is deliberately not derived from that record. A floor exists to
+	// be right when the record is empty, which is the state of two of the
+	// three legs, and a floor computed from a leg's own measurement would
+	// be widest exactly where least is known.
 	pacedFloor = 6 << 20
 
 	// drainTail is how much body is left after the pacing stops, to be
@@ -1174,17 +1180,24 @@ func bulkyProject(t *testing.T, size int64) string {
 // report, so a paced drain of a bufferful would look like a stall the
 // client did not cause.
 //
-// THE SOCKETS ARE PINNED AT BOTH ENDS, and that is what makes the window
-// a margin over something. The gap this row must not reach is the time
-// for the kernel's send buffer to free space — a quantity neither end of
-// this connection holds still, because both kernels grow a connection's
-// buffers as it carries traffic. Measured rather than argued: the same
-// probe over a warm connection reported 594 ms where a fresh one
-// reported 434 ms. Pinned, the gap collapses to the store fixture's own
-// pacing quantum, which is a number this repository chose. The pin is a
-// PAIR because a socket option has an end and an upload has two of them;
-// it is read back because setsockopt may clamp, round, double or ignore
-// a request and says so nowhere. See socketpin_test.go.
+// THE SOCKETS ARE PINNED AT BOTH ENDS, BEFORE EITHER END EXISTS, and
+// that is what makes the window a margin over something. The gap this
+// row must not reach is the time for the kernel's send buffer to free
+// space — a quantity neither end of this connection holds still, because
+// both kernels grow a connection's buffers as it carries traffic.
+// Measured rather than argued: the same probe over a warm connection
+// reported 594 ms where a fresh one reported 434 ms. Pinned, the gap
+// collapses towards the store fixture's own pacing quantum, which is a
+// number this repository chose.
+//
+// The pin is a PAIR because a socket option has an end and an upload has
+// two of them; it is read back because setsockopt may clamp, round,
+// double or ignore a request and says so nowhere; and it arrives through
+// pinnedUploadRun rather than a setter because a size set after the
+// store's listener is already accepting is a size some connection can
+// beat. It is also SAMPLED while the body moves, because a read-back is
+// an instant and a condition is a duration — on darwin the receive end
+// does not stay where it is put. See socketpin_test.go.
 //
 // THE FIXTURE IS DERIVED FROM THE WINDOW rather than written here, so
 // the three-window assertion below keeps meaning what it says on a leg
@@ -1215,10 +1228,10 @@ func TestASlowUploadIsNotAStalledOne(t *testing.T) {
 	stall := timing.UploadSlowIsNotStalled.Window
 	pacing := pacingFor(t, stall)
 
-	run := newDeployRun(t, bulkyProject(t, pacing.bodySize)).scriptedLogin()
+	run, client, fixture := pinnedUploadRun(t, bulkyProject(t, pacing.bodySize), pinnedBuffer)
+	run.scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.UploadStallTimeout = stall
-	client, fixture := run.pinnedUpload(pinnedBuffer)
 	run.store.readChunk = pacing.chunk
 	run.store.readPause = pacing.pause
 	run.store.pauseUntil = pacing.pacedBytes
@@ -1272,10 +1285,10 @@ func TestAWedgedUploadStopsAndSaysSo(t *testing.T) {
 	// Written out for the reason its sibling's is, one row up.
 	stall := timing.UploadWedgedStops.Window
 
-	run := newDeployRun(t, bulkyProject(t, pacingFor(t, stall).bodySize)).scriptedLogin()
+	run, client, fixture := pinnedUploadRun(t, bulkyProject(t, pacingFor(t, stall).bodySize), pinnedBuffer)
+	run.scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.UploadStallTimeout = stall
-	client, fixture := run.pinnedUpload(pinnedBuffer)
 	run.store.stopReadingAfter = 64 << 10
 
 	started := time.Now()
