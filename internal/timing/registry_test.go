@@ -137,6 +137,22 @@ func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
 					entry.Name, leg, p.Starved, p.Valid+p.Starved,
 					p.WorstFixtureGap, p.StatedPace)
 			}
+			// THE FIXTURE THIS LEG RAN THROUGH, against the one the
+			// entry now states. An entry-level pace checked at the
+			// measurement can only see the leg being measured; the other
+			// two carry numbers from whatever the fixture was when they
+			// were taken, and nothing else in this package looks.
+			if entry.Pace != nil {
+				if p.StatedPace != entry.Pace.Interval || p.Flushes != entry.Pace.Flushes {
+					t.Errorf("timing.%s's %s measurement was taken through a fixture "+
+						"of %d flushes at %v and this entry now states %d at %v.\n"+
+						"A read-side gap IS the fixture's own pause between "+
+						"flushes, so that number is about a fixture which no "+
+						"longer exists. Retake this leg, or put the fixture back.",
+						entry.Name, leg, p.Flushes, p.StatedPace,
+						entry.Pace.Flushes, entry.Pace.Interval)
+				}
+			}
 			if p.ThresholdNum <= 0 || p.ThresholdDen <= 0 {
 				t.Errorf("timing.%s's %s integrity record has no threshold (%d/%d), "+
 					"so it says passes were excluded without saying by what rule",

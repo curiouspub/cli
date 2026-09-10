@@ -72,8 +72,14 @@ test:
 # measurement produced no measurement — which is the one outcome a
 # pending leg must not have. A run that is too slow should say so with
 # its numbers in hand.
+# THE MEASURING PACKAGES ARE NOT IN THIS LIST, and that is not them
+# escaping the gate — test-race below runs them TWICE, in both of the
+# conditions this repository sizes its windows under, and it does so
+# with -v so each pass publishes its numbers. Left in here as well they
+# would run three times, and the third run would be the one whose
+# figures nobody can read.
 test-go:
-	go run ./tools/skipcheck -- -count=1 -timeout 25m ./...
+	go run ./tools/skipcheck -- -count=1 -timeout 25m $$(go list ./... | grep -vE '/internal/(flow|timing)$$')
 
 # THE RACE PASS OVER THE STALL-WINDOW MACHINERY, and it is reached from
 # test so that CI gets it without a second entry point: the workflow runs
@@ -128,8 +134,15 @@ test-go:
 # It is on this target alone, not on test-go, because it is these two
 # packages that report measurements and the rest of the suite would
 # only add noise to the same log.
+# BOTH CONDITIONS ARE RUN HERE, and both print. The rule these packages
+# keep is that a leg's number is the WORSE of the two conditions the
+# gate runs it in — and for as long as only the raced pass carried -v,
+# half of that comparison was unreadable: a green run published one
+# figure and the other existed nowhere. A rule about two numbers needs
+# both of them on the log.
 test-race:
 	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
+	go test -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 
 # The wrapper package's own suite. It is a PREREQUISITE OF test rather
 # than a separate command somebody has to know about, because a check

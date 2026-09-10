@@ -392,6 +392,15 @@ type Measurement struct {
 	WorstGap time.Duration
 
 	// Runs is how many runs stand behind WorstGap.
+	//
+	// TWENTY MEANS ONE PASS AND FORTY MEANS TWO, and which conditions
+	// those passes were is a live question rather than a convention.
+	// The gate runs these packages twice, plainly and under the race
+	// detector, and the rule is that a leg keeps the WORSE of the two —
+	// but for one round only the raced pass printed its figures, so the
+	// hosted legs here carry a single condition's number. Both passes
+	// publish now; the next retake of a hosted leg records the worse of
+	// two rather than the one that happened to be readable.
 	Runs int
 
 	// Date is when they were taken, as YYYY-MM-DD. A measurement with no
@@ -489,11 +498,31 @@ type PaceIntegrity struct {
 	ThresholdNum int
 	ThresholdDen int
 
-	// StatedPace is what the fixture was asked to keep. Zero means the
-	// fixture has no pace to miss — it writes and goes silent — and
-	// there is no integrity test to apply, which is a different thing
-	// from passing one.
+	// StatedPace and Flushes are the FIXTURE THIS LEG'S NUMBER WAS TAKEN
+	// THROUGH, recorded per leg rather than only per entry.
+	//
+	// # AN ENTRY-LEVEL PACE CANNOT SAY WHICH LEGS PREDATE IT
+	//
+	// The entry carries one Pace and the probe checks it against the
+	// fixture it is about to run, so a constant moved in one place and
+	// not the other reds at the measurement. What that cannot see is a
+	// fixture change made on ONE machine: the leg being remeasured
+	// agrees with the new constant, the other two legs' numbers were
+	// taken through the old one, and nothing anywhere says so. It
+	// happened on 2026-09-11 — the keep-alive fixture went 76 flushes to
+	// 36 and the partial line's 116 to 61 while linux and windows still
+	// carried figures from the longer ones, all of it green.
+	//
+	// So each leg's record says what it ran through, and the guard reds
+	// when that has drifted from the entry's own. A number and the
+	// fixture it was measured through are one fact, and the fact is per
+	// leg because the measurement is.
+	//
+	// Zero pace means the fixture has no pace to miss — it writes and
+	// goes silent — and there is no integrity test to apply, which is a
+	// different thing from passing one.
 	StatedPace time.Duration
+	Flushes    int
 
 	// WorstFixtureGap is the widest gap the fixture left, across ALL
 	// passes including the starved ones. It is the number that says how
@@ -900,10 +929,10 @@ var UploadSlowIsNotStalled = Entry{
 		// which is the kernel honouring the request rather than refusing
 		// it. It is the leg where the pair rule is least in doubt.
 		Linux: {
-			WorstGap: 110055183 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+			WorstGap: 101876390 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 37228065},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 26261484},
 			BlockPoint: 589824,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 262144,
@@ -923,10 +952,10 @@ var UploadSlowIsNotStalled = Entry{
 		// it is put — which is what makes that a fact about one kernel
 		// rather than about this fixture.
 		Windows: {
-			WorstGap: 140222100 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+			WorstGap: 52522900 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 70489400},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 27096500},
 			BlockPoint: 229376,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1035,10 +1064,10 @@ var UploadWedgedStops = Entry{
 		// which is the kernel honouring the request rather than refusing
 		// it. It is the leg where the pair rule is least in doubt.
 		Linux: {
-			WorstGap: 110055183 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+			WorstGap: 101876390 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 37228065},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 26261484},
 			BlockPoint: 589824,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 262144,
@@ -1058,10 +1087,10 @@ var UploadWedgedStops = Entry{
 		// it is put — which is what makes that a fact about one kernel
 		// rather than about this fixture.
 		Windows: {
-			WorstGap: 140222100 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+			WorstGap: 52522900 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 70489400},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 27096500},
 			BlockPoint: 229376,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1134,10 +1163,10 @@ var StreamGoesQuiet = Entry{
 	// twenty runs could not see it.
 	Measurements: map[Leg]Measurement{
 		// 746.761µs under the detector, 468.614µs without it.
-		Linux: {WorstGap: 803291 * time.Nanosecond, Runs: 2000, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 2000, Starved: 0,
+		Linux: {WorstGap: 807557 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, WorstFixtureGap: 82507}},
+				StatedPace: 0, Flushes: 2, WorstFixtureGap: 53951}},
 		// 10.2835ms under the detector, 1.033458ms without it — a factor
 		// of ten between the two conditions, and the detector is the one
 		// this window is sized against because it is the worse of two
@@ -1145,12 +1174,12 @@ var StreamGoesQuiet = Entry{
 		Darwin: {WorstGap: 4121458 * time.Nanosecond, Runs: 7000, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 7000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, WorstFixtureGap: 157916}},
+				StatedPace: 0, Flushes: 2, WorstFixtureGap: 157916}},
 		// 2.2355ms under the detector, 2.0315ms without it.
-		Windows: {WorstGap: 2111000 * time.Nanosecond, Runs: 2000, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 2000, Starved: 0,
+		Windows: {WorstGap: 4012500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, WorstFixtureGap: 2019300}},
+				StatedPace: 0, Flushes: 2, WorstFixtureGap: 1645200}},
 	},
 	SetBy: Darwin,
 }
@@ -1225,10 +1254,11 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// for.
 	Measurements: map[Leg]Measurement{
 		// 15.692101ms under the detector, 15.475903ms without it.
-		Linux: {WorstGap: 15838547 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+		Linux: {WorstGap: 15828202 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, WorstFixtureGap: 15622514}},
+				StatedPace: 15 * time.Millisecond, Flushes: 36,
+				WorstFixtureGap: 15775491}},
 		// 24.413541ms under the detector and 104.351792ms WITHOUT it, on
 		// the gate's macOS runner — and the fixture's own widest pause
 		// between two flushes in that pass was 104.142542ms, which says
@@ -1241,12 +1271,14 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		Darwin: {WorstGap: 28934458 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, WorstFixtureGap: 19725667}},
+				StatedPace: 15 * time.Millisecond, Flushes: 36,
+				WorstFixtureGap: 19725667}},
 		// 16.6084ms under the detector, 28.8472ms without it.
-		Windows: {WorstGap: 17787200 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+		Windows: {WorstGap: 16372100 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, WorstFixtureGap: 17787200}},
+				StatedPace: 15 * time.Millisecond, Flushes: 36,
+				WorstFixtureGap: 16060400}},
 	},
 	SetBy: Darwin,
 }
@@ -1343,10 +1375,11 @@ var StreamPartialLineIsNotAStall = Entry{
 	// once, by hand, with the row refusing until a person did it.
 	Measurements: map[Leg]Measurement{
 		// 20.831652ms under the detector, 20.591115ms without it.
-		Linux: {WorstGap: 21160892 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+		Linux: {WorstGap: 20855344 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, WorstFixtureGap: 20444934}},
+				StatedPace: 20 * time.Millisecond, Flushes: 61,
+				WorstFixtureGap: 20436308}},
 		// # DARWIN'S MAXIMUM CAME OFF A DEVELOPER MAC, NOT OFF THE RUNNER
 		//
 		// 128.757833 ms, one pass of twenty on 2026-09-11, out of eleven
@@ -1380,12 +1413,14 @@ var StreamPartialLineIsNotAStall = Entry{
 		Darwin: {WorstGap: 47297583 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, WorstFixtureGap: 47146750}},
+				StatedPace: 20 * time.Millisecond, Flushes: 61,
+				WorstFixtureGap: 47146750}},
 		// 21.4369ms under the detector, 26.8971ms without it.
-		Windows: {WorstGap: 21810000 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
-			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
+		Windows: {WorstGap: 21605500 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, WorstFixtureGap: 21180000}},
+				StatedPace: 20 * time.Millisecond, Flushes: 61,
+				WorstFixtureGap: 21040200}},
 	},
 	SetBy: Darwin,
 }

@@ -372,7 +372,7 @@ const (
 // every run counts — recorded as StatedPace zero, so a reader can tell
 // "held its pace" from "had none".
 func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration,
-	pace time.Duration) (time.Duration, *timing.PaceIntegrity, error) {
+	pace time.Duration, flushes int) (time.Duration, *timing.PaceIntegrity, error) {
 
 	// PAIRING BY POSITION IS AN ASSUMPTION, SO IT IS CHECKED. Runs are
 	// sequential and each opens one connection, so run i is connection
@@ -389,6 +389,7 @@ func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration
 		ThresholdNum: paceThresholdNum,
 		ThresholdDen: paceThresholdDen,
 		StatedPace:   pace,
+		Flushes:      flushes,
 	}
 	var worst time.Duration
 	for i, gap := range perRun {
@@ -456,9 +457,10 @@ func integrityLiteral(p *timing.PaceIntegrity) string {
 		return ""
 	}
 	return fmt.Sprintf(", Integrity: &timing.PaceIntegrity{Valid: %d, Starved: %d, "+
-		"ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, WorstFixtureGap: %d}",
+		"ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, Flushes: %d, "+
+		"WorstFixtureGap: %d}",
 		p.Valid, p.Starved, p.ThresholdNum, p.ThresholdDen,
-		p.StatedPace, p.WorstFixtureGap)
+		p.StatedPace, p.Flushes, p.WorstFixtureGap)
 }
 
 // integrityNote renders what a pass says about its own instrument.
@@ -690,7 +692,7 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	// not the client, for the same reason a starved stream fixture
 	// measures the runner.
 	worst, integrity, err := classifyPasses(entry.Name, probeLeg(),
-		perRun, store.widestDrainPerRequest(), pacing.pause)
+		perRun, store.widestDrainPerRequest(), pacing.pause, 0)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -1058,7 +1060,7 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			// the client; this is the same test, applied by the
 			// instrument to itself.
 			worst, integrity, err := classifyPasses(tc.entry.Name, probeLeg(),
-				perRun, script.widestPerConnection(), tc.script.pace)
+				perRun, script.widestPerConnection(), tc.script.pace, len(tc.script.frames))
 			if err != nil {
 				t.Fatalf("%v", err)
 			}
@@ -1196,7 +1198,7 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 
 	t.Run("a fixture that held its pace excludes nothing", func(t *testing.T) {
 		worst, p, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 25), ms(22, 25, 21), pace)
+			ms(30, 40, 25), ms(22, 25, 21), pace, 0)
 		if err != nil {
 			t.Fatalf("three ordinary passes were refused: %v", err)
 		}
@@ -1217,7 +1219,7 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 		// were not the maximum, dropping it would change nothing and
 		// the row would pass with the rule removed.
 		worst, p, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace)
+			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace, 0)
 		if err != nil {
 			t.Fatalf("one starved pass in five was refused: %v", err)
 		}
@@ -1240,12 +1242,12 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 	t.Run("one pass in five is allowed and one in four is not", func(t *testing.T) {
 		// Five passes, one starved: exactly the bound, and it passes.
 		if _, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace); err != nil {
+			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace, 0); err != nil {
 			t.Errorf("one starved pass in five is the bound and must be allowed: %v", err)
 		}
 		// Four passes, one starved: past it.
 		_, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 900, 25, 35), ms(22, 890, 21, 24), pace)
+			ms(30, 900, 25, 35), ms(22, 890, 21, 24), pace, 0)
 		if err == nil {
 			t.Fatal("one starved pass in four is past the bound and was accepted")
 		}
@@ -1256,7 +1258,7 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 
 	t.Run("every pass starved is not a thinner sample", func(t *testing.T) {
 		_, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(900, 800), ms(890, 790), pace)
+			ms(900, 800), ms(890, 790), pace, 0)
 		if err == nil {
 			t.Fatal("a pass set in which the fixture never held its pace produced a " +
 				"measurement")
@@ -1268,7 +1270,7 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 
 	t.Run("a fixture with no pace has nothing to miss", func(t *testing.T) {
 		worst, p, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 900, 25), ms(22, 890, 21), 0)
+			ms(30, 900, 25), ms(22, 890, 21), 0, 0)
 		if err != nil {
 			t.Fatalf("an unpaced fixture was refused: %v", err)
 		}
@@ -1283,7 +1285,7 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 
 	t.Run("the pairing is checked rather than assumed", func(t *testing.T) {
 		_, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 25), ms(22, 25), pace)
+			ms(30, 40, 25), ms(22, 25), pace, 0)
 		if err == nil {
 			t.Fatal("three runs were classified against two fixture records")
 		}
