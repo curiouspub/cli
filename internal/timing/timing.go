@@ -750,12 +750,21 @@ const MinimumMargin = 5
 var UploadSlowIsNotStalled = Entry{
 	Name: "UploadSlowIsNotStalled",
 	Row:  "TestASlowUploadIsNotAStalledOne",
-	// 1150 ms: five times darwin's 226.326875 ms is 1131.63 ms. It was
-	// 800, and 800 was five times a 127.606 ms record taken over seven
-	// passes that all happened to land in the low half of this leg's
-	// range. See the darwin measurement below for what twelve passes
-	// found and for what is still not settled about it.
-	Window: 1150 * time.Millisecond,
+	// 850 ms: five times darwin's 166.233959 ms is 831.17 ms.
+	//
+	// IT WENT 800 TO 1150 AND BACK DOWN, and the round trip is the
+	// record of what the integrity test was worth. 1150 came from a
+	// 226.326875 ms maximum over twelve unclassified passes; 850 comes
+	// from 166.233959 ms over 140 passes in which the store fixture was
+	// confirmed to have held its own 25 ms drain pace. The difference is
+	// not a better sample, it is passes in which the thing being
+	// measured was not what moved.
+	//
+	// A WINDOW IS THE SHIPPED CLIENT'S STALL THRESHOLD, which is why
+	// coming back down matters rather than being tidy. An inflated
+	// window is a client that waits longer than it needs to before
+	// telling a person their upload has stopped.
+	Window: 850 * time.Millisecond,
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads and by how much window it advertises at a time — not " +
@@ -863,10 +872,10 @@ var UploadSlowIsNotStalled = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 166233959 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
+			WorstGap: 161876041 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 57503917},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 55760875},
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -944,7 +953,7 @@ var UploadSlowIsNotStalled = Entry{
 var UploadWedgedStops = Entry{
 	Name:   "UploadWedgedStops",
 	Row:    "TestAWedgedUploadStopsAndSaysSo",
-	Window: 1150 * time.Millisecond,
+	Window: 850 * time.Millisecond,
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads — the same quantity its sibling row measures, under " +
@@ -998,10 +1007,10 @@ var UploadWedgedStops = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 166233959 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
+			WorstGap: 161876041 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 57503917},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 55760875},
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1133,10 +1142,10 @@ var StreamGoesQuiet = Entry{
 		// of ten between the two conditions, and the detector is the one
 		// this window is sized against because it is the worse of two
 		// the gate actually runs.
-		Darwin: {WorstGap: 5137000 * time.Nanosecond, Runs: 7000, Date: "2026-09-11",
+		Darwin: {WorstGap: 4121458 * time.Nanosecond, Runs: 7000, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 7000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, WorstFixtureGap: 44084}},
+				StatedPace: 0, WorstFixtureGap: 157916}},
 		// 2.2355ms under the detector, 2.0315ms without it.
 		Windows: {WorstGap: 2111000 * time.Nanosecond, Runs: 2000, Date: "2026-09-10",
 			Integrity: &PaceIntegrity{Valid: 2000, Starved: 0,
@@ -1152,7 +1161,10 @@ var StreamGoesQuiet = Entry{
 var StreamKeepAlivesAreProofOfLife = Entry{
 	Name: "StreamKeepAlivesAreProofOfLife",
 	Row:  "TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered",
-	// 525 ms: five times darwin's 104.351792 ms is 521.76 ms. It was
+	// 230 ms: five times darwin's 44.825959 ms is 224.13 ms. It was 525,
+	// and 525 was five times a 104.351792 ms reading that the integrity
+	// test now names for what it was — the runner starving the server
+	// goroutine, recorded as the client's margin. Before that it was
 	// 300 ms, chosen from nothing.
 	//
 	// ITS OWN ROW AFFORDS TWO OF IT, which is the ruled ratio and not a
@@ -1173,7 +1185,7 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// lengthen it deliberately, because a fixture that follows the
 	// window is what stopped the read side converging in the first
 	// place.
-	Window: 525 * time.Millisecond,
+	Window: 230 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two flushes ARRIVING at this client at the " +
 		"fixture's keep-alive pace — the pace plus delivery plus scheduling, not " +
@@ -1197,7 +1209,7 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// the row rather than assumed, and a window that outgrows it stops
 	// the row and asks a person rather than resizing itself. See
 	// keepAliveBeats and keepAliveHeadroom in internal/flow.
-	Pace: &FixturePace{Interval: 15 * time.Millisecond, Flushes: 76},
+	Pace: &FixturePace{Interval: 15 * time.Millisecond, Flushes: 36},
 	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes of twenty
 	// on each leg, one under the race detector and one without. The
 	// probe now runs the row's own forty beats rather than twenty of its
@@ -1226,10 +1238,10 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		// read-side window is a margin over how long the machine can
 		// stop the far end from writing, and this is the largest such
 		// pause anybody has measured here.
-		Darwin: {WorstGap: 44825959 * time.Nanosecond, Runs: 136, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Valid: 136, Starved: 4,
+		Darwin: {WorstGap: 28934458 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, WorstFixtureGap: 59324875}},
+				StatedPace: 15 * time.Millisecond, WorstFixtureGap: 19725667}},
 		// 16.6084ms under the detector, 28.8472ms without it.
 		Windows: {WorstGap: 17787200 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
 			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,
@@ -1282,14 +1294,17 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 var StreamPartialLineIsNotAStall = Entry{
 	Name: "StreamPartialLineIsNotAStall",
 	Row:  "TestBytesArrivingWithoutANewlineAreNotAStall",
-	// 650 ms: five times darwin's 128.757833 ms is 643.79 ms. It was
-	// 230, and before that 400, 350, 250, 150 and 60 — the four moves
-	// before 230 were a window chasing a fixture that was chasing it
-	// back, which was cut by stating the fixture. This move is not one
-	// of those: the fixture did not change under it, the same stated
-	// 1.5 s of delivery produced a reading nearly three times the
-	// record, and the window followed the reading.
-	Window: 650 * time.Millisecond,
+	// 255 ms: five times darwin's 50.792875 ms is 253.96 ms.
+	//
+	// THE SEQUENCE IS 60, 150, 250, 350, 400, 230, 650, 255, and every
+	// one of those moves was the sizing rule applied correctly to a
+	// number. The first four were a window chasing a fixture that was
+	// chasing it back, cut by stating the fixture. 650 was not that —
+	// the fixture did not move under it — it was a single starved pass
+	// reading 128.757833 ms while the fixture itself had stopped for
+	// 139.277875 ms at a stated 20 ms pace. 255 is what is left when
+	// passes like that are classified instead of recorded.
+	Window: 255 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two partial writes of one frame ARRIVING at this " +
 		"client at the fixture's own pace — the pace plus delivery plus scheduling; " +
@@ -1304,7 +1319,7 @@ var StreamPartialLineIsNotAStall = Entry{
 	// a fixture sitting at the boundary is one that reds the first time
 	// a leg is slower — and for the one deliberate raise it has had,
 	// what moved it, and what that raise does and does not close.
-	Pace: &FixturePace{Interval: 20 * time.Millisecond, Flushes: 116},
+	Pace: &FixturePace{Interval: 20 * time.Millisecond, Flushes: 61},
 	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes of twenty
 	// on each leg, one under the race detector and one without. Every
 	// figure that stood here before was taken through a fixture whose
@@ -1362,10 +1377,10 @@ var StreamPartialLineIsNotAStall = Entry{
 		// also one pass — is the same phenomenon at a comparable size.
 		// Two entries sampling one distribution and carrying windows a
 		// factor of two apart is an open item rather than a finding.
-		Darwin: {WorstGap: 50792875 * time.Nanosecond, Runs: 136, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Valid: 136, Starved: 4,
+		Darwin: {WorstGap: 47297583 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, WorstFixtureGap: 223768625}},
+				StatedPace: 20 * time.Millisecond, WorstFixtureGap: 47146750}},
 		// 21.4369ms under the detector, 26.8971ms without it.
 		Windows: {WorstGap: 21810000 * time.Nanosecond, Runs: 40, Date: "2026-09-10",
 			Integrity: &PaceIntegrity{Valid: 40, Starved: 0,

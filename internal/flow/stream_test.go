@@ -770,12 +770,17 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // in internal/flow builds an upload body to span three and a half
 // windows because a fixture sized at exactly the assertion is one
 // scheduling hiccup from failing it; this is the same rule on the read
-// side, with the ratio written down instead of assumed. Seventy-five
-// beats at fifteen milliseconds is 1.125 s of nothing but comment
-// frames, against a 525 ms window: the row's own assertion needs one
-// window, the headroom is the second, and what is left over is the
-// margin over the assertion rather than over the gap. The two are
-// different questions and both are asked below.
+// side, with the ratio written down instead of assumed. Thirty-five
+// beats at fifteen milliseconds is 525 ms of nothing but comment frames,
+// against a 230 ms window: the row's own assertion needs one window, the
+// headroom is the second, and what is left over is the margin over the
+// assertion rather than over the gap. The two are different questions
+// and both are asked below.
+//
+// IT WAS SEVENTY-FIVE, AGAINST A 525 ms WINDOW, and it came back down
+// with the window when the probe learned to classify its own passes.
+// Both numbers were honest at the time and both were sized from a
+// reading in which the runner, not the client, was what stopped.
 //
 // THEY WERE ALREADY CONSTANTS AND THE PROBE HAD ITS OWN COPY OF ONE OF
 // THEM, which is the defect worth naming here rather than the values.
@@ -788,7 +793,7 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // warm across runs reported 594 ms against a fresh one's 434.
 const (
 	keepAlivePace  = 15 * time.Millisecond
-	keepAliveBeats = 75
+	keepAliveBeats = 35
 )
 
 // keepAliveHeadroom is how many windows the fixture must afford: one for
@@ -1269,12 +1274,25 @@ const partialLinePace = 20 * time.Millisecond
 // grows past what this covers, the row refuses with both numbers rather
 // than a fixture quietly growing to meet it.
 //
-// # IT WAS RAISED ONCE, 2026-09-11, AND HERE IS THE BILL
+// # IT WAS RAISED ONCE AND THEN LOWERED, 2026-09-11, AND BOTH MOVES WERE THE RULE WORKING
 //
 // 1.5 s to 2.3 s, because darwin's window went 230 ms to 650 ms and
 // three and a half of 650 is 2.275 s. The row refused first, with both
 // numbers, which is the paragraph above working rather than a
-// formality.
+// formality. Then 2.3 s to 1.0 s, because the reading that had moved
+// the window turned out to be a pass in which this fixture itself had
+// stopped for 139.277875 ms at its stated 20 ms pace — and once the
+// probe classified passes like that instead of recording them, the
+// window came back to 255 ms and three and a half of it is 892.5 ms.
+//
+// IT DID NOT GO ALL THE WAY BACK, AND THE FLOOR IS THE MARKER RATHER
+// THAN THE WINDOW. 892.5 ms is 44 pieces at this pace and the shortest
+// frame this fixture can build out of its own marker is 56, so a
+// constant sized from the window alone describes a fixture that cannot
+// exist — partialLineFrames refuses with both counts rather than
+// quietly returning a shorter one. 1.2 s is 60 pieces: above the
+// marker's floor, above three and a half windows, and the reason the
+// number is not 900 ms is written here rather than left as an oddity.
 //
 // WHAT MOVED THE WINDOW WAS NOT THIS FIXTURE. That is the distinction
 // between this raise and the four before it. The 150-to-400 sequence
@@ -1299,7 +1317,7 @@ const partialLinePace = 20 * time.Millisecond
 // THE RUNTIME IT COSTS, measured rather than estimated: the row itself
 // pays the 800 ms difference once, and the probe beside it pays it
 // twenty times a pass in each of the two conditions the gate runs.
-const partialLineDelivery = 2300 * time.Millisecond
+const partialLineDelivery = 1200 * time.Millisecond
 
 // partialLineMarker is the text the row looks for on stdout. It is
 // repeated as the line grows, because what the row asserts is that the
