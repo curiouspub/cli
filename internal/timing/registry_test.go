@@ -6,7 +6,9 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +60,16 @@ func sortedEntries() []*timing.Entry {
 // The absence row and every other row here stayed green, because the
 // entry is still registered and every site still resolves. Both the fill
 // and the blanking were reverted by preserved copy and checksum.
+//
+// REQUIRED MUTATIONS FOR R3-3'S FLOOR AND DATE, RUN 2026-09-10, each
+// reverted. Both of these counted as evidence before this round:
+//
+//  1. Set StreamGoesQuiet's darwin run count to 19, one short of
+//     MinimumRuns. This row reds, naming darwin alongside the two legs
+//     that are genuinely pending.
+//  2. Set StreamKeepAlivesAreProofOfLife's darwin date to "recently".
+//     Same red, same entry — a string that is merely not empty passes an
+//     emptiness test and cannot be compared with anything.
 func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 	if len(timing.Registry) == 0 {
 		t.Fatal("the registry is empty, so this row's silence is about nothing " +
@@ -107,6 +119,16 @@ func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 		{"no run count", timing.Measurement{WorstGap: time.Millisecond, Date: "2026-09-09"}},
 		{"no date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20}},
 		{"nothing at all", timing.Measurement{}},
+		// R3-3's floor and its date. One run under the floor is not a
+		// distribution, and a date that does not parse cannot be
+		// compared with anything — which is the only thing a date is
+		// for. Both of these were evidence before this round.
+		{"one run short of the floor",
+			timing.Measurement{WorstGap: time.Millisecond, Runs: timing.MinimumRuns - 1, Date: "2026-09-09"}},
+		{"a single run", timing.Measurement{WorstGap: time.Millisecond, Runs: 1, Date: "2026-09-09"}},
+		{"a date that is a word", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "recently"}},
+		{"a date that is not a date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-13-45"}},
+		{"a date in another format", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "09/09/2026"}},
 	} {
 		if tc.m.Measured() {
 			t.Errorf("a measurement with %s counted as evidence", tc.name)
@@ -153,7 +175,54 @@ func carryProblem(entry *timing.Entry, in map[string]*timing.Entry) string {
 		return "carries from " + source.Name + " through a different reader (" +
 			entry.Instrument + " against " + source.Instrument + ")"
 	}
+	// CARRY MEANS EQUAL, and until R3-3 nothing here checked that it
+	// did. A carried entry named a source, gave a reason, matched its
+	// side and its reader, and was then free to hold any window and any
+	// measurement it liked: a source at 2s beside a carrier at 1s passed
+	// every guard in this package, measured. That is not a carry, it is
+	// two windows with a note attached — and the note is the part a
+	// reader trusts.
+	//
+	// The WINDOW first, because it is the thing rows actually use.
+	if source.Window != entry.Window {
+		return "carries from " + source.Name + " and does not share its window (" +
+			entry.Window.String() + " against " + source.Window.String() + "). A carried " +
+			"measurement is the same measurement, so the margin over it is the same " +
+			"margin: two windows citing one gap are two claims, and only one of them " +
+			"can be five times it"
+	}
+	// Then the EVIDENCE, leg by leg. A carrier holding a number its
+	// source does not hold has measured something, somewhere, and
+	// labelled it a carry — which is the defect this package exists
+	// against wearing the one name that is allowed through.
+	for _, leg := range timing.Legs {
+		from, mine := source.Measurements[leg], entry.Measurements[leg]
+		if reflect.DeepEqual(from, mine) {
+			continue
+		}
+		return "carries from " + source.Name + " and records a different measurement on " +
+			string(leg) + " (" + measurementText(mine) + " against " + source.Name + "'s " +
+			measurementText(from) + "). Carrying is sharing one run's evidence, not " +
+			"agreeing to have some of one's own"
+	}
 	return ""
+}
+
+// measurementText renders a leg's evidence for a refusal a reader can
+// act on without opening the registry.
+func measurementText(m timing.Measurement) string {
+	if !m.Measured() {
+		return "nothing measured"
+	}
+	text := m.WorstGap.String() + " over " + strconv.Itoa(m.Runs) + " runs on " + m.Date
+	if m.BlockPoint > 0 {
+		text += ", block point " + strconv.FormatInt(m.BlockPoint, 10)
+	}
+	if m.Pin != nil {
+		text += ", pinned " + strconv.Itoa(m.Pin.Send.ReadBack) + "/" +
+			strconv.Itoa(m.Pin.Receive.ReadBack)
+	}
+	return text
 }
 
 // TestACarriedMeasurementRecordsItsReason.
@@ -173,6 +242,26 @@ func carryProblem(entry *timing.Entry, in map[string]*timing.Entry) string {
 //	chosen …
 //
 // The entry it carries FROM stays green, because it carries nothing.
+//
+// REQUIRED MUTATIONS FOR R3-3'S TWO NEW CLAUSES, RUN 2026-09-10, each
+// reverted. Before them, a carrier could name a source, give a reason,
+// match its side and its reader, and then hold any window and any
+// evidence it liked — which is two rows agreeing to look like one.
+//
+//  1. Halve UploadWedgedStops's window. Reds here:
+//     "carries from UploadSlowIsNotStalled and does not share its window
+//     (400ms against 800ms)". It ALSO reds
+//     TestEveryWindowClearsTheMinimumMarginOverItsSlowestLeg, which the
+//     prediction did not say and which is correct: 400 ms is under five
+//     times the gap it cites. Two guards seeing one edit from two sides.
+//  2. Give UploadWedgedStops a worst gap of its own. Reds here alone,
+//     printing both measurements so a reader can see which half moved.
+//
+// And a third, from the pin row next door, arrived here unpredicted:
+// blanking a read-back on ONE of the two entries makes their
+// measurements differ, so this row reds too. That is the carry rule
+// doing exactly what it says — a carried measurement includes the
+// condition it was taken under.
 func TestACarriedMeasurementRecordsItsReason(t *testing.T) {
 	for _, entry := range sortedEntries() {
 		if problem := carryProblem(entry, timing.Registry); problem != "" {
@@ -184,11 +273,22 @@ func TestACarriedMeasurementRecordsItsReason(t *testing.T) {
 	// without the accepted case below, a check that refused every carry
 	// would pass the loop above by making the registry red, and a check
 	// that accepted everything would pass it by saying nothing.
+	evidence := map[timing.Leg]timing.Measurement{
+		timing.Linux: {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10", BlockPoint: 4096,
+			Pin: &timing.PinnedPair{
+				Send:    timing.Pin{Requested: 16384, ReadBack: 32768},
+				Receive: timing.Pin{Requested: 16384, ReadBack: 32768},
+			}},
+	}
 	sound := &timing.Entry{
 		Name: "Carrier", Side: timing.Write, Instrument: "the same reader",
+		Window: time.Second, Measurements: evidence,
 		Carried: &timing.Carried{From: "Source", Reason: "same side, same reader, one mechanism"},
 	}
-	source := &timing.Entry{Name: "Source", Side: timing.Write, Instrument: "the same reader"}
+	source := &timing.Entry{
+		Name: "Source", Side: timing.Write, Instrument: "the same reader",
+		Window: time.Second, Measurements: evidence,
+	}
 	bench := map[string]*timing.Entry{"Source": source, "Carrier": sound}
 
 	if problem := carryProblem(sound, bench); problem != "" {
@@ -218,6 +318,20 @@ func TestACarriedMeasurementRecordsItsReason(t *testing.T) {
 			Carried: &timing.Carried{From: "Source", Reason: "because"}}},
 		{"through a different reader", &timing.Entry{
 			Name: "C", Side: timing.Write, Instrument: "another reader",
+			Window: time.Second, Measurements: evidence,
+			Carried: &timing.Carried{From: "Source", Reason: "because"}}},
+		// THE TWO R3-3 ADDED, and both passed everything before it.
+		{"half the source's window", &timing.Entry{
+			Name: "C", Side: timing.Write, Instrument: "the same reader",
+			Window: 500 * time.Millisecond, Measurements: evidence,
+			Carried: &timing.Carried{From: "Source", Reason: "because"}}},
+		{"a measurement of its own", &timing.Entry{
+			Name: "C", Side: timing.Write, Instrument: "the same reader",
+			Window: time.Second,
+			Measurements: map[timing.Leg]timing.Measurement{
+				timing.Linux: {WorstGap: 2 * time.Millisecond, Runs: 40, Date: "2026-09-10",
+					BlockPoint: 4096, Pin: evidence[timing.Linux].Pin},
+			},
 			Carried: &timing.Carried{From: "Source", Reason: "because"}}},
 	} {
 		if problem := carryProblem(tc.entry, bench); problem == "" {
@@ -423,10 +537,12 @@ func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
 	}
 	// A WRITE-SIDE MEASUREMENT WITH NO PIN AT ALL IS "NOBODY SAID",
 	// which is a different thing from "this leg could not pin" and has
-	// to be refused rather than read as either. What the row costs on
-	// this leg follows from the answer: a pinned leg gets a narrow window
-	// and a cheap fixture, and a leg that cannot pin gets a margin over
-	// an autotuned buffer and pays for it in paced bytes.
+	// to be refused rather than read as either. What HAPPENS on this leg
+	// follows from the answer: a pinned leg gets a narrow window and a
+	// cheap fixture, and a leg that cannot pin STOPS — its row reds
+	// naming the end that failed, because the fixture it would need to
+	// carry a margin over an autotuned buffer does not fit inside this
+	// client's own input limit. See the Pin field in internal/timing.
 	if m.Pin == nil {
 		return "is a write-side window measured on " + string(leg) + " with no record " +
 			"of the socket buffers it was measured under. That is not 'unpinned', it " +
@@ -452,6 +568,24 @@ func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
 				"report none of that — so a pin nobody read back is a claim rather than " +
 				"a condition"
 		}
+		// THE COHERENCE BAND (R3-3). A read-back is evidence only if it
+		// stands in a known relation to the request. Linux stores twice
+		// what was asked for and hands the doubled number back, so
+		// [Requested, 2*Requested] is the honest band and nothing
+		// outside it is: a kernel reporting half the request clamped it,
+		// and one reporting thirty times it was answering about a buffer
+		// nobody chose. Before this existed, ReadBack: 1 against
+		// Requested: 131072 passed every guard here — measured, not
+		// imagined, and one byte is not a socket buffer anywhere.
+		if !end.pin.Held() {
+			return "records a " + end.name + " pin on " + string(leg) + " that asked for " +
+				strconv.Itoa(end.pin.Requested) + " bytes and read back " +
+				strconv.Itoa(end.pin.ReadBack) + ", which is outside [" +
+				strconv.Itoa(end.pin.Requested) + ", " + strconv.Itoa(2*end.pin.Requested) +
+				"]. A kernel that doubles a request is honouring it and a kernel that " +
+				"answers with anything else is describing a buffer this record did not " +
+				"ask for, so the pin is not claimed"
+		}
 	}
 	return ""
 }
@@ -466,12 +600,13 @@ func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
 // would be a fact about something else sitting where a reader will take
 // it for evidence.
 //
-// THE ERR CASE IS DATA AND NOT A DEFECT. A leg that tried to pin and
-// could not is a leg running in the other mode — a margin over an
-// autotuned buffer, which is wide, and a fixture large enough to spend
-// three of them — and the record is where that is said. What is refused
-// is silence: a write-side measurement with no pin at all cannot be told
-// apart from one nobody thought about.
+// THE ERR CASE IS DATA AND NOT A DEFECT — but it is data about a leg
+// that has STOPPED, not one running more expensively. A record carrying
+// an Err says this leg tried to pin and could not; its row reds there,
+// naming the end, because the fixture a margin over an autotuned buffer
+// would need does not fit inside this client's own input limit. What is
+// refused HERE is silence: a write-side measurement with no pin at all
+// cannot be told apart from one nobody thought about.
 //
 // REQUIRED MUTATION, RUN 2026-09-10, three of them, each reverted:
 //
@@ -488,6 +623,15 @@ func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
 //     describe. That second red is the more valuable one, because it is
 //     the row saying it is running a margin over a number that was
 //     measured somewhere else.
+//
+// REQUIRED MUTATION FOR R3-3'S COHERENCE BAND, RUN 2026-09-10: set the
+// send end's ReadBack to 1 against a Requested of 16384. Reds here —
+// "asked for 16384 bytes and read back 1, which is outside
+// [16384, 32768]" — and, unpredicted, in the carry row above, because
+// the two upload entries hold one measurement by construction and this
+// moved one of them. Before the band existed this mutation was green
+// everywhere: one byte is not a socket buffer on any operating system,
+// and the check it passed was asking whether a number was positive.
 func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 	for _, entry := range sortedEntries() {
 		for _, leg := range timing.Legs {
@@ -520,6 +664,14 @@ func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 		// the one leg where the pin is most certainly applied.
 		{"a held pin whose read-back is doubled", timing.Write,
 			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10", Pin: held}},
+		// The other end of the band: a kernel that hands back exactly
+		// what it was asked for, which is what darwin and Windows do.
+		{"a held pin whose read-back is the request", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{
+					Send:    timing.Pin{Requested: 16384, ReadBack: 16384},
+					Receive: timing.Pin{Requested: 16384, ReadBack: 16384},
+				}}},
 		{"a write-side leg that could not pin", timing.Write,
 			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
 				Pin: &timing.PinnedPair{
@@ -553,6 +705,26 @@ func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 					Send:    timing.Pin{Requested: 131072},
 					Receive: timing.Pin{Requested: 131072, ReadBack: 131072},
 				}}},
+		// R3-3'S BAND, from both sides. The first is the literal case
+		// that passed before it existed.
+		{"a read-back of one byte against a 128 KiB request", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{
+					Send:    timing.Pin{Requested: 131072, ReadBack: 1},
+					Receive: timing.Pin{Requested: 131072, ReadBack: 131072},
+				}}},
+		{"a read-back a kernel clamped to half the request", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{
+					Send:    timing.Pin{Requested: 131072, ReadBack: 131072},
+					Receive: timing.Pin{Requested: 131072, ReadBack: 65536},
+				}}},
+		{"a read-back past the doubling Linux does", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{
+					Send:    timing.Pin{Requested: 16384, ReadBack: 16384},
+					Receive: timing.Pin{Requested: 16384, ReadBack: 539008},
+				}}},
 	} {
 		if pinProblem(tc.side, timing.Linux, tc.m) == "" {
 			t.Errorf("%s was accepted", tc.name)
@@ -577,6 +749,12 @@ func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 			Send: held.Send, Receive: timing.Pin{Requested: 1, Err: "no"}}}, false},
 		{"a pin with only one end at all", timing.Measurement{Pin: &timing.PinnedPair{
 			Send: held.Send}}, false},
+		{"a pin whose send end read back one byte", timing.Measurement{Pin: &timing.PinnedPair{
+			Send: timing.Pin{Requested: 131072, ReadBack: 1}, Receive: held.Receive}}, false},
+		{"a pin whose receive end read back thirty times the request",
+			timing.Measurement{Pin: &timing.PinnedPair{
+				Send:    held.Send,
+				Receive: timing.Pin{Requested: 16384, ReadBack: 539008}}}, false},
 	} {
 		if got := tc.m.Pinned(); got != tc.pinned {
 			t.Errorf("%s reported Pinned() as %v, want %v", tc.name, got, tc.pinned)

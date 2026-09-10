@@ -33,11 +33,24 @@ import (
 //     would be this guard demanding evidence for a thing it does not
 //     describe.
 //   - Assignments and composite-literal fields whose field name is one
-//     of stallFields. A window reaching the same field through a helper
-//     function's parameter is outside the resolver's view; it is said
-//     here rather than left to be found, because a guard with an
-//     undocumented blind spot reads as total coverage and ends the
-//     search.
+//     of stallFields, wherever they appear in a file: inside a function
+//     body, and — since R3-3 — in a PACKAGE-LEVEL DECLARATION as well. A
+//     window reaching the same field through a helper function's
+//     parameter is still outside the resolver's view; it is said here
+//     rather than left to be found, because a guard with an undocumented
+//     blind spot reads as total coverage and ends the search.
+//
+//     The declaration half was a blind spot until R3-3 closed it, and it
+//     was a cheap one: the walk visited file.Decls, kept the FuncDecls
+//     and dropped everything else, so
+//
+//     var slowDeps = DeployDeps{StallTimeout: 600 * time.Millisecond}
+//
+//     at the top of any test file was invisible to a guard whose whole
+//     purpose is that no stall window escapes the registry. Nothing in
+//     the tree used that shape, which is exactly why it was worth
+//     closing while it was still cheap and latent rather than after
+//     somebody wrote one.
 //   - Directories named .git, vendor and .claude are skipped. The last
 //     is not housekeeping: a worktree lane is a second checkout of this
 //     repository INSIDE it, and walking one counts another branch's
@@ -199,10 +212,86 @@ func resolve(alias string, locals map[string][]ast.Expr, expr ast.Expr) (string,
 	return entryOf(alias, assigned[0])
 }
 
+// fileGlobals is every package-level identifier in a file and the
+// expressions it is declared with, in the shape resolve consumes.
+//
+// A PACKAGE-LEVEL NAME IS A LOCAL WITH A WIDER SCOPE, as far as this
+// resolver is concerned: one level of indirection, assigned exactly
+// once, from a registry selector. The "exactly once" rule does the same
+// work here that it does inside a function — a name declared twice, or
+// declared at package level and shadowed in the body that uses it,
+// resolves to nothing and reds, which is the conservative direction.
+func fileGlobals(file *ast.File) map[string][]ast.Expr {
+	globals := map[string][]ast.Expr{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.VAR && gen.Tok != token.CONST) {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if i < len(value.Values) {
+					globals[name.Name] = append(globals[name.Name], value.Values[i])
+				}
+			}
+		}
+	}
+	return globals
+}
+
+// scanDecl collects every place a package-level declaration gives a
+// stall field a value.
+//
+// THERE IS NO ASSIGNMENT FORM HERE, only composite-literal fields: a
+// statement cannot appear at package level, so `x.StallTimeout = …` is
+// not a shape this has to look for. What it does have to look for is the
+// literal, which is the shape somebody would actually write.
+func scanDecl(fset *token.FileSet, root, path, alias string, globals map[string][]ast.Expr, decl *ast.GenDecl) []stallSite {
+	var sites []stallSite
+	ast.Inspect(decl, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || !stallFields[key.Name] {
+			return true
+		}
+		sites = append(sites, siteAt(fset, root, path, alias, globals, key.Name, kv.Value))
+		return true
+	})
+	return sites
+}
+
+// siteAt renders one place a stall field was given a value.
+func siteAt(fset *token.FileSet, root, path, alias string, locals map[string][]ast.Expr, field string, value ast.Expr) stallSite {
+	name, _ := resolve(alias, locals, value)
+	pos := fset.Position(value.Pos())
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		rel = path
+	}
+	return stallSite{
+		file:  filepath.ToSlash(rel),
+		line:  pos.Line,
+		field: field,
+		entry: name,
+		text:  exprText(fset, value),
+	}
+}
+
 // scanFunc collects, for one function body, every identifier assignment
-// and every place a stall field is given a value.
-func scanFunc(fset *token.FileSet, root, path, alias string, body *ast.BlockStmt) []stallSite {
+// and every place a stall field is given a value. Package-level names
+// are visible to it, so a body may reach a window through one.
+func scanFunc(fset *token.FileSet, root, path, alias string, globals map[string][]ast.Expr, body *ast.BlockStmt) []stallSite {
 	locals := map[string][]ast.Expr{}
+	for name, values := range globals {
+		locals[name] = append([]ast.Expr(nil), values...)
+	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch s := n.(type) {
 		case *ast.AssignStmt:
@@ -223,19 +312,7 @@ func scanFunc(fset *token.FileSet, root, path, alias string, body *ast.BlockStmt
 
 	var sites []stallSite
 	record := func(field string, value ast.Expr) {
-		name, _ := resolve(alias, locals, value)
-		pos := fset.Position(value.Pos())
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
-		}
-		sites = append(sites, stallSite{
-			file:  filepath.ToSlash(rel),
-			line:  pos.Line,
-			field: field,
-			entry: name,
-			text:  exprText(fset, value),
-		})
+		sites = append(sites, siteAt(fset, root, path, alias, locals, field, value))
 	}
 
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -275,6 +352,30 @@ func exprText(fset *token.FileSet, expr ast.Expr) string {
 	return string(data[start.Offset:end.Offset])
 }
 
+// scanFile is every stall-window site in one parsed file — the
+// declarations and the function bodies both.
+//
+// IT IS ONE FUNCTION SO THE BENCH AND THE REAL WALK CANNOT DIVERGE. The
+// bench below is the only thing that ever sees this resolver say NO, so
+// a bench running a different traversal from the module walk would be
+// proving something about a shape the guard does not use.
+func scanFile(fset *token.FileSet, root, path string, file *ast.File) []stallSite {
+	alias := timingAlias(file)
+	globals := fileGlobals(file)
+	var sites []stallSite
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Body != nil {
+				sites = append(sites, scanFunc(fset, root, path, alias, globals, d.Body)...)
+			}
+		case *ast.GenDecl:
+			sites = append(sites, scanDecl(fset, root, path, alias, globals, d)...)
+		}
+	}
+	return sites
+}
+
 // scanModule is every stall-window site in the module's test files.
 func scanModule(t *testing.T) []stallSite {
 	t.Helper()
@@ -287,14 +388,7 @@ func scanModule(t *testing.T) []stallSite {
 		if err != nil {
 			t.Fatalf("parsing %s: %v", path, err)
 		}
-		alias := timingAlias(file)
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			sites = append(sites, scanFunc(fset, root, path, alias, fn.Body)...)
-		}
+		sites = append(sites, scanFile(fset, root, path, file)...)
 	}
 	return sites
 }
@@ -314,6 +408,18 @@ func scanModule(t *testing.T) []stallSite {
 //
 // The positive control at the foot stays green, because the other four
 // sites still resolve.
+//
+// REQUIRED MUTATION FOR R3-3'S DECLARATION SCAN, RUN 2026-09-10: add
+//
+//	var mutantDeps = DeployDeps{StallTimeout: 60 * time.Millisecond}
+//
+// at package level in internal/flow/stall_probe_test.go. Reds, naming
+// the file and the line — "sets StallTimeout to 60 * time.Millisecond,
+// which is not a window from the registry". Before the walk looked at
+// GenDecls it was invisible: file.Decls was iterated, the FuncDecls kept
+// and everything else dropped, so the one shape a person would reach for
+// to share a fixture across rows was the one shape this guard could not
+// see.
 //
 // IT ALSO RED A SECOND ROW, which the prediction did not say and the
 // note records rather than tidies away: TestEveryDeclaredEntryIsInTheRegistry
@@ -380,6 +486,8 @@ func TestTheResolverAcceptsARegistryWindowAndRefusesEverythingElse(t *testing.T)
 
 	cases := []struct {
 		name string
+		// decls is package-level source placed above the function.
+		decls string
 		// src is a function body the resolver is run over.
 		src  string
 		want string
@@ -421,18 +529,44 @@ func TestTheResolverAcceptsARegistryWindowAndRefusesEverythingElse(t *testing.T)
 			src:  "d.StallTimeout = elsewhere." + known + ".Window",
 			want: "",
 		},
+		// R3-3's blind spot, from both sides. Before it closed, every
+		// one of these three resolved to nothing — not because the
+		// resolver said no, but because the walk never reached them.
+		{
+			name:  "a package-level declaration taking a registry window",
+			decls: "var d = deps{StallTimeout: timing." + known + ".Window}",
+			want:  known,
+		},
+		{
+			name:  "a package-level declaration with a duration written inline",
+			decls: "var d = deps{StreamStallTimeout: 60 * time.Millisecond}",
+			want:  "",
+		},
+		{
+			name:  "a function reaching a package-level name",
+			decls: "var stall = timing." + known + ".Window",
+			src:   "d.UploadStallTimeout = stall",
+			want:  known,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fset := token.NewFileSet()
-			src := "package p\nfunc f() {\n" + tc.src + "\n}\n"
+			// THE IMPORT IS PART OF THE BENCH, because the alias the
+			// scan resolves against is read off it. Passing "timing" in
+			// by hand — which is what this bench did before scanFile
+			// existed — tested the selector matcher and left
+			// timingAlias, the thing that decides whether a file is
+			// even looked at, unexercised.
+			src := "package p\n\nimport (\n\t\"time\"\n\n\ttiming " +
+				strconv.Quote(timingImportPath) + "\n)\n\n" +
+				tc.decls + "\nfunc f() {\n" + tc.src + "\n}\n"
 			file, err := parser.ParseFile(fset, "bench.go", src, parser.SkipObjectResolution)
 			if err != nil {
 				t.Fatalf("parsing the bench source: %v", err)
 			}
-			fn := file.Decls[0].(*ast.FuncDecl)
-			sites := scanFunc(fset, ".", "bench.go", "timing", fn.Body)
+			sites := scanFile(fset, ".", "bench.go", file)
 			if len(sites) != 1 {
 				t.Fatalf("the scan found %d stall sites in this bench, want 1", len(sites))
 			}
