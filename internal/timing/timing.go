@@ -626,10 +626,12 @@ const MinimumMargin = 5
 // It was fifteen, and fifteen was chosen while the gate ran these rows
 // once. The gate now runs them TWICE — plainly and under the race
 // detector — and the detector is not a rounding error here: measured on
-// darwin, 2026-09-10, on an idle machine, the two rows cost 7.74 s and
-// 6.01 s under it against 3.10 s and 1.52 s without. Thirteen point
-// seven five seconds combined under the detector, four point six two
-// without.
+// darwin, 2026-09-10, on an idle machine, the two rows cost 7.46 s and
+// 5.78 s under it against 3.16 s and 1.51 s without. Thirteen point two
+// four seconds combined under the detector, four point six seven
+// without. A second measurement of the same pair earlier the same day
+// gave 13.75 s and 4.62 s, which is the spread to expect rather than a
+// disagreement.
 //
 // So the ceiling restates rather than moves: it is the same intent —
 // the live suite's timeout has to exceed its row budgets, and that is a
