@@ -115,8 +115,21 @@ test-go:
 # measurement at all, which is the worst of both — the money spent and no
 # number back. The package takes about two minutes there without the
 # detector and something over five times that with it.
+# -v BECAUSE THESE TWO PACKAGES MEASURE THINGS. Five of these rows are
+# probes whose whole product is a number, and t.Logf output is invisible
+# without it — so a green run published nothing and the only way to read
+# a leg's measurement was to make its test FAIL. That is backwards: the
+# numbers a live run brings back are the whole reason for spending the
+# run, and a gate that hides them until something breaks is a gate that
+# has to be broken to be read. Measured 2026-09-11, when the macOS
+# runner's own classified figures could not be recovered from a passing
+# job at all.
+#
+# It is on this target alone, not on test-go, because it is these two
+# packages that report measurements and the rest of the suite would
+# only add noise to the same log.
 test-race:
-	CGO_ENABLED=1 go test -race -count=1 -timeout 25m ./internal/timing/ ./internal/flow/
+	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 
 # The wrapper package's own suite. It is a PREREQUISITE OF test rather
 # than a separate command somebody has to know about, because a check

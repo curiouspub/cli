@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1159,4 +1160,135 @@ func oneStreamRun(ctx context.Context, base string) (time.Duration, int, error) 
 		}
 	}
 	return worst, arrivals, ctx.Err()
+}
+
+// TestAStarvedPassIsNotAMeasurement drives classifyPasses directly,
+// because the thing it decides — which passes are allowed to set a
+// window — cannot be exercised by waiting for a runner to starve.
+//
+// THE PROBE'S OWN BEHAVIOUR IS STOCHASTIC AND THIS IS NOT. A starved
+// pass happens when a machine happens to pause, so a row that ran the
+// real probe and hoped would be green on the days it proved nothing.
+// The classifier is a function of two slices and a pace; driven
+// directly, every branch it has is reachable on purpose.
+//
+// REQUIRED MUTATIONS, RUN ON THE TIP 2026-09-11:
+//
+//  1. Remove the threshold comparison so no pass is ever excluded. The
+//     "starved pass does not set the maximum" row reds, reporting the
+//     starved run's 900ms where it wants the valid runs' 40ms — which
+//     is the registry's darwin window inflating, in miniature and
+//     without waiting for a runner.
+//  2. Drop the length check. The "pairing" row reds; without it a
+//     shorter fixture slice silently classifies the wrong runs.
+//  3. Make Starves compare against the wrong total. The "one in five"
+//     row reds and the "one in six is allowed" row reds with it, which
+//     is the boundary being asserted from both sides.
+func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
+	const pace = 20 * time.Millisecond
+	ms := func(n ...int) []time.Duration {
+		out := make([]time.Duration, 0, len(n))
+		for _, v := range n {
+			out = append(out, time.Duration(v)*time.Millisecond)
+		}
+		return out
+	}
+
+	t.Run("a fixture that held its pace excludes nothing", func(t *testing.T) {
+		worst, p, err := classifyPasses("Entry", timing.Darwin,
+			ms(30, 40, 25), ms(22, 25, 21), pace)
+		if err != nil {
+			t.Fatalf("three ordinary passes were refused: %v", err)
+		}
+		if worst != 40*time.Millisecond {
+			t.Errorf("worst = %v, want 40ms — the maximum over every pass", worst)
+		}
+		if p.Valid != 3 || p.Starved != 0 {
+			t.Errorf("valid/starved = %d/%d, want 3/0", p.Valid, p.Starved)
+		}
+		if p.WorstFixtureGap != 25*time.Millisecond {
+			t.Errorf("worst fixture gap = %v, want 25ms", p.WorstFixtureGap)
+		}
+	})
+
+	t.Run("a starved pass does not set the maximum", func(t *testing.T) {
+		// The starved run carries the LARGEST client gap, which is the
+		// only arrangement that proves anything: if the excluded pass
+		// were not the maximum, dropping it would change nothing and
+		// the row would pass with the rule removed.
+		worst, p, err := classifyPasses("Entry", timing.Darwin,
+			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace)
+		if err != nil {
+			t.Fatalf("one starved pass in five was refused: %v", err)
+		}
+		if worst != 40*time.Millisecond {
+			t.Errorf("worst = %v, want 40ms — the 900ms pass measured a fixture "+
+				"that had stopped, and a window five times it would be a margin "+
+				"over this machine rather than over the client", worst)
+		}
+		if p.Valid != 4 || p.Starved != 1 {
+			t.Errorf("valid/starved = %d/%d, want 4/1", p.Valid, p.Starved)
+		}
+		// The excluded pass is still VISIBLE. Dropping it quietly would
+		// hide how far this runner was from being an instrument.
+		if p.WorstFixtureGap != 890*time.Millisecond {
+			t.Errorf("worst fixture gap = %v, want 890ms — the starved pass is "+
+				"excluded from the maximum and recorded anyway", p.WorstFixtureGap)
+		}
+	})
+
+	t.Run("one pass in five is allowed and one in four is not", func(t *testing.T) {
+		// Five passes, one starved: exactly the bound, and it passes.
+		if _, _, err := classifyPasses("Entry", timing.Darwin,
+			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace); err != nil {
+			t.Errorf("one starved pass in five is the bound and must be allowed: %v", err)
+		}
+		// Four passes, one starved: past it.
+		_, _, err := classifyPasses("Entry", timing.Darwin,
+			ms(30, 900, 25, 35), ms(22, 890, 21, 24), pace)
+		if err == nil {
+			t.Fatal("one starved pass in four is past the bound and was accepted")
+		}
+		if !strings.Contains(err.Error(), "cannot hold the fixture's pace") {
+			t.Errorf("the refusal does not say what is wrong with the runner:\n%v", err)
+		}
+	})
+
+	t.Run("every pass starved is not a thinner sample", func(t *testing.T) {
+		_, _, err := classifyPasses("Entry", timing.Darwin,
+			ms(900, 800), ms(890, 790), pace)
+		if err == nil {
+			t.Fatal("a pass set in which the fixture never held its pace produced a " +
+				"measurement")
+		}
+		if !strings.Contains(err.Error(), "no measurement here to report") {
+			t.Errorf("the refusal reads like a bound rather than an absence:\n%v", err)
+		}
+	})
+
+	t.Run("a fixture with no pace has nothing to miss", func(t *testing.T) {
+		worst, p, err := classifyPasses("Entry", timing.Darwin,
+			ms(30, 900, 25), ms(22, 890, 21), 0)
+		if err != nil {
+			t.Fatalf("an unpaced fixture was refused: %v", err)
+		}
+		if worst != 900*time.Millisecond {
+			t.Errorf("worst = %v, want 900ms — with no pace there is no test to "+
+				"apply and no pass to exclude", worst)
+		}
+		if p.Starved != 0 || p.StatedPace != 0 {
+			t.Errorf("starved/pace = %d/%v, want 0/0", p.Starved, p.StatedPace)
+		}
+	})
+
+	t.Run("the pairing is checked rather than assumed", func(t *testing.T) {
+		_, _, err := classifyPasses("Entry", timing.Darwin,
+			ms(30, 40, 25), ms(22, 25), pace)
+		if err == nil {
+			t.Fatal("three runs were classified against two fixture records")
+		}
+		if !strings.Contains(err.Error(), "BY POSITION") {
+			t.Errorf("the refusal does not name the assumption that failed:\n%v", err)
+		}
+	})
 }

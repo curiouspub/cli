@@ -101,7 +101,12 @@ func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
 	for _, entry := range sortedEntries() {
 		for _, leg := range timing.Legs {
 			m := entry.Measurements[leg]
-			if !m.Measured() {
+			// A LEG WITH NOTHING RECORDED IS THE OTHER ROW'S BUSINESS.
+			// This one is about a number that EXISTS and does not say
+			// what admitted it — which is not the same absence, and
+			// naming it here is what tells a reader why an entry they
+			// can see a figure for is reported as unmeasured.
+			if m.WorstGap <= 0 || m.Runs < timing.MinimumRuns {
 				continue
 			}
 			p := m.Integrity
@@ -167,12 +172,13 @@ func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 	// THE POSITIVE CONTROL, and this row needs one badly: while two legs
 	// are pending it fails, and a check that has never been seen to pass
 	// is a check nobody can tell apart from one that always fails.
+	held := &timing.PaceIntegrity{Valid: 20, ThresholdNum: 3, ThresholdDen: 1}
 	fully := &timing.Entry{
 		Name: "PositiveControl",
 		Measurements: map[timing.Leg]timing.Measurement{
-			timing.Linux:   {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09"},
-			timing.Darwin:  {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09"},
-			timing.Windows: {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09"},
+			timing.Linux:   {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09", Integrity: held},
+			timing.Darwin:  {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09", Integrity: held},
+			timing.Windows: {WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09", Integrity: held},
 		},
 	}
 	if missing := fully.UnmeasuredLegs(); len(missing) != 0 {
@@ -182,24 +188,37 @@ func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 
 	// AND IT MUST STILL SAY NO. A "measured" test satisfied by any value
 	// at all would pass the control above and never red on a real gap.
+	//
+	// EVERY CASE BELOW CARRIES A SOUND INTEGRITY RECORD EXCEPT THE ONE
+	// ABOUT INTEGRITY, and that is not decoration. When the pace record
+	// became part of what a measurement IS, every case here started
+	// failing for the new reason instead of the one it names — nine rows
+	// still green, none of them testing what its name says any more.
+	// Handing each one a held integrity puts the defect it names back to
+	// being the only defect it has.
 	for _, tc := range []struct {
 		name string
 		m    timing.Measurement
 	}{
-		{"no gap", timing.Measurement{Runs: 20, Date: "2026-09-09"}},
-		{"no run count", timing.Measurement{WorstGap: time.Millisecond, Date: "2026-09-09"}},
-		{"no date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20}},
+		{"no gap", timing.Measurement{Runs: 20, Date: "2026-09-09", Integrity: held}},
+		{"no run count", timing.Measurement{WorstGap: time.Millisecond, Date: "2026-09-09", Integrity: held}},
+		{"no date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Integrity: held}},
 		{"nothing at all", timing.Measurement{}},
 		// The floor and the date. One run under the floor is not a
 		// distribution, and a date that does not parse cannot be
 		// compared with anything — which is the only thing a date is
 		// for. Both of these were evidence before this round.
 		{"one run short of the floor",
-			timing.Measurement{WorstGap: time.Millisecond, Runs: timing.MinimumRuns - 1, Date: "2026-09-09"}},
-		{"a single run", timing.Measurement{WorstGap: time.Millisecond, Runs: 1, Date: "2026-09-09"}},
-		{"a date that is a word", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "recently"}},
-		{"a date that is not a date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-13-45"}},
-		{"a date in another format", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "09/09/2026"}},
+			timing.Measurement{WorstGap: time.Millisecond, Runs: timing.MinimumRuns - 1, Date: "2026-09-09", Integrity: held}},
+		{"a single run", timing.Measurement{WorstGap: time.Millisecond, Runs: 1, Date: "2026-09-09", Integrity: held}},
+		{"a date that is a word", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "recently", Integrity: held}},
+		{"a date that is not a date", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-13-45", Integrity: held}},
+		{"a date in another format", timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "09/09/2026", Integrity: held}},
+		// The new one. A number with everything else right and no record
+		// of which passes were allowed to set it is a maximum over an
+		// unknown population.
+		{"no record of whether its fixture held its pace",
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-09"}},
 	} {
 		if tc.m.Measured() {
 			t.Errorf("a measurement with %s counted as evidence", tc.name)
