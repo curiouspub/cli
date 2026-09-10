@@ -615,6 +615,7 @@ var UploadSlowIsNotStalled = Entry{
 		// it. It is the leg where the pair rule is least in doubt.
 		Linux: {
 			WorstGap: 104524 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			BlockPoint: 589824,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 262144,
 					Sustained: &Sustained{Samples: 2299, Low: 262144, High: 262144}},
@@ -634,6 +635,7 @@ var UploadSlowIsNotStalled = Entry{
 		// rather than about this fixture.
 		Windows: {
 			WorstGap: 114216 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			BlockPoint: 229376,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
 					Sustained: &Sustained{Samples: 2327, Low: 131072, High: 131072}},
@@ -730,6 +732,7 @@ var UploadWedgedStops = Entry{
 		// it. It is the leg where the pair rule is least in doubt.
 		Linux: {
 			WorstGap: 104524 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			BlockPoint: 589824,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 262144,
 					Sustained: &Sustained{Samples: 2299, Low: 262144, High: 262144}},
@@ -749,6 +752,7 @@ var UploadWedgedStops = Entry{
 		// rather than about this fixture.
 		Windows: {
 			WorstGap: 114216 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			BlockPoint: 229376,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
 					Sustained: &Sustained{Samples: 2327, Low: 131072, High: 131072}},

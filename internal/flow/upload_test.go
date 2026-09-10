@@ -1057,9 +1057,10 @@ const (
 	// client spent writing into a buffer, and a row that never blocked
 	// measured nothing at all.
 	//
-	// Six MiB is roughly ten times the largest block point recorded in
-	// internal/timing — 622,592 bytes on darwin, with a 16 KiB pin — and
-	// it is deliberately not derived from that record. A floor exists to
+	// Six MiB is roughly eight times the largest block point recorded in
+	// internal/timing — 819,200 bytes on darwin, against 589,824 on
+	// linux and 229,376 on windows — and it is deliberately not derived
+	// from that record. A floor exists to
 	// be right when the record is empty, which is the state of two of the
 	// three legs, and a floor computed from a leg's own measurement would
 	// be widest exactly where least is known.
