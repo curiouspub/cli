@@ -440,7 +440,28 @@ func TestProbeTheUploadBlockPoint(t *testing.T) {
 		recorded := entry.Measurements[probeLeg()]
 		t.Logf("%s on %s: block point %d bytes (%.1f MiB), worst of %d runs",
 			entry.Name, probeLeg(), worst, float64(worst)/(1<<20), probeRuns)
-		if recorded.Measured() && recorded.BlockPoint != worst {
+		// A MISSING BLOCK POINT REFUSES, exactly as a missing gap does
+		// next door, and it did not until this round. It only LOGGED —
+		// and a t.Logf on a passing row prints nowhere unless somebody
+		// runs the suite verbose, so the paste hint one function over
+		// said "BlockPoint: <see the block-point probe>" while pointing
+		// an operator at output their gate does not show them. A leg
+		// whose gap was recorded from a CI run therefore could not have
+		// its block point recorded from the same run, and the registry
+		// row that requires one would red with nowhere to get it.
+		//
+		// A reference in OUTPUT is read mid-procedure by whoever is least
+		// able to verify it. This one now resolves.
+		if !recorded.Measured() || recorded.BlockPoint <= 0 {
+			t.Errorf("%s has no recorded block point on %s, and this run measured "+
+				"%d bytes over %d runs.\nRecord it in internal/timing beside that "+
+				"leg's gap: BlockPoint: %d.\nWithout it nobody can tell whether the "+
+				"fixture was ever large enough to make the client block, and a row "+
+				"that never blocked measured nothing at all.",
+				entry.Name, probeLeg(), worst, probeRuns, worst)
+			continue
+		}
+		if recorded.BlockPoint != worst {
 			t.Logf("%s records a block point of %d and this run measured %d; a "+
 				"block point moves with the kernel's buffer autotuning, so the "+
 				"record is the worst seen rather than a constant",

@@ -602,6 +602,45 @@ var UploadSlowIsNotStalled = Entry{
 					Sustained: &Sustained{Samples: 16649, Low: 131072, High: 646336}},
 			},
 		},
+		// Two passes of twenty on the gate's own linux runner,
+		// 2026-09-10 — one under the race detector at 102.239ms and one
+		// without at 104.523ms, which is the pair of conditions make ci
+		// runs this row in and a leg where the detector costs almost
+		// nothing.
+		//
+		// LINUX HOLDS ITS PIN AT BOTH ENDS. It reports the DOUBLED value
+		// — 262,144 for a 131,072 request, its own bookkeeping counted in
+		// — and holds there for every sample taken while a body moved,
+		// which is the kernel honouring the request rather than refusing
+		// it. It is the leg where the pair rule is least in doubt.
+		Linux: {
+			WorstGap: 104524 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			Pin: &PinnedPair{
+				Send: Pin{Requested: 131072, ReadBack: 262144,
+					Sustained: &Sustained{Samples: 2299, Low: 262144, High: 262144}},
+				Receive: Pin{Requested: 131072, ReadBack: 262144,
+					Sustained: &Sustained{Samples: 2299, Low: 262144, High: 262144}},
+			},
+		},
+		// Two passes of twenty on the gate's own windows runner,
+		// 2026-09-10: 51.780ms under the race detector and 114.215ms
+		// without it. The detector is FASTER here, which is the opposite
+		// of darwin and is left as an observation rather than explained.
+		//
+		// WINDOWS HOLDS ITS PIN AT BOTH ENDS TOO, and reads back exactly
+		// what it asked for. Between this leg and linux, darwin is the
+		// only one of the three whose receive buffer will not stay where
+		// it is put — which is what makes that a fact about one kernel
+		// rather than about this fixture.
+		Windows: {
+			WorstGap: 114216 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			Pin: &PinnedPair{
+				Send: Pin{Requested: 131072, ReadBack: 131072,
+					Sustained: &Sustained{Samples: 2327, Low: 131072, High: 131072}},
+				Receive: Pin{Requested: 131072, ReadBack: 131072,
+					Sustained: &Sustained{Samples: 2327, Low: 131072, High: 131072}},
+			},
+		},
 	},
 	SetBy: Darwin,
 }
@@ -678,6 +717,45 @@ var UploadWedgedStops = Entry{
 					Sustained: &Sustained{Samples: 16649, Low: 131072, High: 646336}},
 			},
 		},
+		// Two passes of twenty on the gate's own linux runner,
+		// 2026-09-10 — one under the race detector at 102.239ms and one
+		// without at 104.523ms, which is the pair of conditions make ci
+		// runs this row in and a leg where the detector costs almost
+		// nothing.
+		//
+		// LINUX HOLDS ITS PIN AT BOTH ENDS. It reports the DOUBLED value
+		// — 262,144 for a 131,072 request, its own bookkeeping counted in
+		// — and holds there for every sample taken while a body moved,
+		// which is the kernel honouring the request rather than refusing
+		// it. It is the leg where the pair rule is least in doubt.
+		Linux: {
+			WorstGap: 104524 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			Pin: &PinnedPair{
+				Send: Pin{Requested: 131072, ReadBack: 262144,
+					Sustained: &Sustained{Samples: 2299, Low: 262144, High: 262144}},
+				Receive: Pin{Requested: 131072, ReadBack: 262144,
+					Sustained: &Sustained{Samples: 2299, Low: 262144, High: 262144}},
+			},
+		},
+		// Two passes of twenty on the gate's own windows runner,
+		// 2026-09-10: 51.780ms under the race detector and 114.215ms
+		// without it. The detector is FASTER here, which is the opposite
+		// of darwin and is left as an observation rather than explained.
+		//
+		// WINDOWS HOLDS ITS PIN AT BOTH ENDS TOO, and reads back exactly
+		// what it asked for. Between this leg and linux, darwin is the
+		// only one of the three whose receive buffer will not stay where
+		// it is put — which is what makes that a fact about one kernel
+		// rather than about this fixture.
+		Windows: {
+			WorstGap: 114216 * time.Microsecond, Runs: 40, Date: "2026-09-10",
+			Pin: &PinnedPair{
+				Send: Pin{Requested: 131072, ReadBack: 131072,
+					Sustained: &Sustained{Samples: 2327, Low: 131072, High: 131072}},
+				Receive: Pin{Requested: 131072, ReadBack: 131072,
+					Sustained: &Sustained{Samples: 2327, Low: 131072, High: 131072}},
+			},
+		},
 	},
 	SetBy: Darwin,
 	Carried: &Carried{
@@ -722,6 +800,10 @@ var StreamGoesQuiet = Entry{
 		// establishment plus delivery plus the scheduler, and the
 		// numbers sit where a loopback connection sits.
 		Darwin: {WorstGap: 2362 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
+		// Two passes of twenty on each hosted runner, 2026-09-10, one
+		// under the race detector and one without — nothing paces this fixture, so what is measured is establishment plus delivery plus the scheduler.
+		Linux:   {WorstGap: 1003 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
+		Windows: {WorstGap: 1122 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
 	},
 	SetBy: Darwin,
 }
@@ -754,6 +836,10 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		// anything this client does. The row carries its own refusal for
 		// that case, and so does its sibling.
 		Darwin: {WorstGap: 36545 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
+		// Two passes of twenty on each hosted runner, 2026-09-10, one
+		// under the race detector and one without — the fixture's own keep-alive pace is 15 ms and every leg sees between 15 and 37.
+		Linux:   {WorstGap: 15783 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
+		Windows: {WorstGap: 17043 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
 	},
 	SetBy: Darwin,
 }
@@ -825,6 +911,10 @@ var StreamPartialLineIsNotAStall = Entry{
 		// rather than a maximum, or the fixture should stop following
 		// the window, is a ruling this round is not entitled to make.
 		Darwin: {WorstGap: 50324 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
+		// Two passes of twenty on each hosted runner, 2026-09-10, one
+		// under the race detector and one without — the two hosted runners sit at half what this machine does, and the read-side gap is the fixture pausing rather than the client waiting.
+		Linux:   {WorstGap: 20917 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
+		Windows: {WorstGap: 21524 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
 	},
 	SetBy: Darwin,
 }
