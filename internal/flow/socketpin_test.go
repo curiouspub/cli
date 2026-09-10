@@ -282,39 +282,83 @@ func (p *socketPin) watching(conn *net.TCPConn, option int) {
 // closed answers with an error and is skipped rather than counted, since
 // a shut connection's buffer is not a condition anything was measured
 // under.
+// A SOCKET THAT STOPS ANSWERING IS DROPPED, and that is a cost bound
+// rather than tidiness. A probe opens a connection per run and this
+// record covers every one of them, so a list that only ever grows makes
+// each tick cost more than the last: twenty runs leave twenty sockets,
+// nineteen of them closed, and the sampler pays a descriptor lock and a
+// failed syscall for each, forty times a second, for the whole probe.
+//
+// MEASURED, on the machine least able to absorb it. internal/flow
+// completed on a two-core hosted linux runner in about ninety seconds
+// before this sampler existed and TIMED OUT at six hundred there with
+// it, having produced no measurement at all — the run spent, and nothing
+// brought back. Dropping the dead sockets keeps the list at the one or
+// two that are live and the tick at constant cost.
 func (p *socketPin) sample() {
 	p.mu.Lock()
 	conns := append([]*net.TCPConn(nil), p.conns...)
 	option := p.option
 	p.mu.Unlock()
+
+	var sizes []int
+	var dead []*net.TCPConn
 	for _, conn := range conns {
-		raw, err := conn.SyscallConn()
-		if err != nil {
+		size, ok := currentBuffer(conn, option)
+		if !ok {
+			dead = append(dead, conn)
 			continue
 		}
-		var size int
-		var readErr error
-		if err := raw.Control(func(fd uintptr) { size, readErr = socketBuffer(fd, option) }); err != nil {
-			continue
-		}
-		if readErr != nil || size <= 0 {
-			continue
-		}
-		p.observed(size)
+		sizes = append(sizes, size)
 	}
+
+	p.mu.Lock()
+	for _, size := range sizes {
+		if p.samples == 0 || size < p.low {
+			p.low = size
+		}
+		if size > p.high {
+			p.high = size
+		}
+		p.samples++
+	}
+	if len(dead) > 0 {
+		gone := make(map[*net.TCPConn]bool, len(dead))
+		for _, conn := range dead {
+			gone[conn] = true
+		}
+		// Rebuilt rather than truncated, because watching may have
+		// appended a fresh socket while this tick was reading the old
+		// ones and a live connection dropped here would be a hole in
+		// exactly the record this exists to keep.
+		kept := p.conns[:0]
+		for _, conn := range p.conns {
+			if !gone[conn] {
+				kept = append(kept, conn)
+			}
+		}
+		p.conns = kept
+	}
+	p.mu.Unlock()
 }
 
-// observed folds one sample into the range.
-func (p *socketPin) observed(size int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.samples == 0 || size < p.low {
-		p.low = size
+// currentBuffer reads one socket's buffer now, and reports false when
+// the socket can no longer answer — which is what a closed connection
+// does, and which is not a measurement.
+func currentBuffer(conn *net.TCPConn, option int) (int, bool) {
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		return 0, false
 	}
-	if size > p.high {
-		p.high = size
+	var size int
+	var readErr error
+	if err := raw.Control(func(fd uintptr) { size, readErr = socketBuffer(fd, option) }); err != nil {
+		return 0, false
 	}
-	p.samples++
+	if readErr != nil || size <= 0 {
+		return 0, false
+	}
+	return size, true
 }
 
 // watch samples both this end's sockets every step until the row ends.

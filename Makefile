@@ -66,8 +66,14 @@ test:
 	$(MAKE) test-npm || status=1; \
 	exit $$status
 
+# -timeout FOR THE SAME REASON THE RACE PASS CARRIES ONE, and it was
+# learned the same way: the hosted linux runner killed this pass at Go's
+# ten-minute default inside internal/flow, so a leg that has no recorded
+# measurement produced no measurement — which is the one outcome a
+# pending leg must not have. A run that is too slow should say so with
+# its numbers in hand.
 test-go:
-	go run ./tools/skipcheck -- -count=1 ./...
+	go run ./tools/skipcheck -- -count=1 -timeout 25m ./...
 
 # THE RACE PASS OVER THE STALL-WINDOW MACHINERY, and it is reached from
 # test so that CI gets it without a second entry point: the workflow runs
