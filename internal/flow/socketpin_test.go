@@ -237,14 +237,42 @@ import (
 // body moved. A window sized from a gap taken under that is a window
 // sized under a condition that is disclosed rather than claimed.
 //
-// The record's own per-leg numbers behave like a quantity measured under
-// a buffer that moves: this same probe reported 108, 113, 128, 135, 195,
-// 208 and 421 ms across seven passes on one machine in one day. What
-// follows from that is a ruling rather than a number — see the Pin field
-// in internal/timing — and the honest state is that this leg's
-// write-side figures are taken under a condition it does not hold still.
-// The record says so per leg through Pin.Sustained rather than leaving
-// the read-back to be read as a duration; see socketPin.sample.
+// THE SPREAD THIS PARAGRAPH USED TO CITE WAS NOT ONE CONDITION'S, and
+// the correction is the paragraph's whole point. It read that this same
+// probe had reported 108, 113, 128, 135, 195, 208 and 421 ms across
+// seven passes on one machine in one day, offered as evidence that a
+// leg whose receive end will not hold still produces a gap that will not
+// either. Every number in it is real and the set is not a spread: those
+// passes were taken under DIFFERENT pin configurations and a different
+// fixture, and at least one of them is a run this file's own stop rule
+// throws away.
+//
+//	417.9 ms  send NOT PINNED — setsockopt refused — and receive not
+//	          pinned either. This is the curve's "none" arm above, and a
+//	          run whose SEND pin failed is a STOP rather than a
+//	          measurement.
+//	267.2 ms  send pinned and read back; receive read back 392,384 on
+//	          one connection and 131,072 on the next in the same run.
+//	121.9 ms  both ends asked 131,072 and both read back 131,072.
+//
+// All three ran against a 1 s window, whose fixture is a 15,466,496-byte
+// body with 9,175,040 of it paced — larger than what the window in this
+// registry builds today. So they do not compare with each other and they
+// do not compare with the record.
+//
+// A SET OF READINGS IS A SPREAD ONLY IF ONE CONDITION PRODUCED IT.
+// Otherwise it is a curve with its x-axis thrown away, and quoting its
+// range as a variance is how a number that measures the experiment gets
+// read as a number that measures the machine. Taken on the tip, under
+// the one condition this leg records — send pinned and confirmed held,
+// receive unpinnable — the spread is the seven passes recorded beside
+// the darwin measurement in internal/timing, and it is narrow.
+//
+// What remains true, and is the reason Pin.Sustained exists, is that the
+// CONDITION moves while the body goes out: the receive buffer ranges
+// over a factor of five inside a single run. The record says so per leg
+// through Pin.Sustained rather than leaving the read-back to be read as
+// a duration; see socketPin.sample.
 const pinnedBuffer = 128 << 10
 
 // socketPin is one END's record across a run: what was asked for, what

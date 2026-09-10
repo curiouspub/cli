@@ -217,9 +217,12 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 			"record the worst across the passes, with the run count to match, "+
 			"which is how the darwin entry was taken.\nTWO THINGS THIS LINE ALONE "+
 			"WILL NOT TELL YOU. make ci runs this package twice, plainly and under "+
-			"the race detector, and the detector widens the gap — threefold on "+
-			"darwin — so the number to keep is the WORSE of the two conditions and "+
-			"this run was %s. And nothing here may be seeded from another leg's "+
+			"the race detector, and WHICH OF THE TWO IS WORSE IS NOT THE SAME "+
+			"ANSWER ON EVERY LEG OR EVERY ROW — measured, the detector is the "+
+			"FRIENDLIER condition on two of the three legs of one read-side entry "+
+			"(darwin 24.4 ms under it against 104.4 ms without) and the harsher one "+
+			"elsewhere. So run BOTH and keep the worse of what you get; this run "+
+			"was %s. And nothing here may be seeded from another leg's "+
 			"number: the buffers and the scheduler belong to the kernel and the "+
 			"runner.",
 			entry.Name, leg, measured, runs, time.Now().Format("2006-01-02"),
@@ -236,11 +239,85 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 	// ignoring that would be the whole defect this round removed.
 	confirmPin(t, entry, leg, pin)
 
+	// # A RUN MAY NOT QUIETLY SPEND THE MARGIN THE RULE PROMISES
+	//
+	// There used to be one band here and it was a note. A run past a
+	// tenth of the record logged a line asking for the record to be
+	// retaken, and anything short of the window itself was green — so
+	// the whole range between "the record drifted" and "the row is about
+	// to flake" printed a sentence into a -v log nobody reads and the
+	// gate went on agreeing.
+	//
+	// It is not hypothetical. Measured 2026-09-11, on a developer Mac
+	// running the ordinary package under the detector:
+	// StreamPartialLineIsNotAStall reported 128.757833ms against a 230ms
+	// window and a 45.707917ms record. The row's margin was 1.79× where
+	// this task's whole rule is five, the record it was measured against
+	// was wrong by a factor of nearly three, and the run PASSED with a
+	// log line. A timing row whose margin is smaller than the thing it
+	// did not measure is a flake with a schedule — which is the rule
+	// this whole package exists to keep, happening inside the instrument
+	// built to keep it.
+	//
+	// So the bands are graded by what the reading COSTS rather than by
+	// how far it is from a number somebody wrote down:
+	//
+	//	measured >= window          the row could not have passed. Errors
+	//	                            above; the environment and the window
+	//	                            disagree.
+	//	measured * marginFloor      the record is not stale, it is wrong
+	//	    > window                by a factor, and the row is inside the
+	//	                            band where it flakes. ERRORS.
+	//	measured > record + 10%     the record drifted. A note.
+	//
+	// WHERE THE MIDDLE LINE GOES IS A CHOICE and it is named rather than
+	// buried: half the ruled five. A floor at the full five would red on
+	// any pass at all above the record, because the windows in this
+	// registry are rounded to within a per cent of five times their
+	// measurement — every leg would sit one noisy pass from a red, which
+	// is a gate somebody switches off. Half is far enough above the
+	// rounding to be about the record rather than about the noise, and
+	// far enough below five to fire while the row still passes. Moving
+	// it is a one-constant ruling.
+	if measured*marginFloorNum > entry.Window*marginFloorDen {
+		// WHICH OF THE TWO IS WRONG IS ANSWERABLE, SO IT IS ANSWERED.
+		// The band fires on the relation between a window and a gap, and
+		// there are two ways to reach it: a record this run has left
+		// behind, or a window that never cleared the rule against the
+		// record it was set from. Naming the record in both cases sends
+		// half the readers to retake a measurement that is fine. The
+		// second case is the registry's own guard's business — it says
+		// so and points there.
+		culprit := fmt.Sprintf("The recorded worst is %v (taken over %d runs on "+
+			"%s), so this run is %.1f× the record: the RECORD is what is stale, "+
+			"not the row, and the row is passing on a margin it does not have.\n"+
+			"Retake the measurement on this leg and re-rule the window from it. "+
+			"Do not raise the window to quiet this line without the measurement "+
+			"behind it.",
+			recorded.WorstGap, recorded.Runs, recorded.Date,
+			float64(measured)/float64(recorded.WorstGap))
+		if recorded.WorstGap*marginRule > entry.Window {
+			culprit = fmt.Sprintf("The record is not what is wrong here: %v over "+
+				"%d runs on %s does not clear five times over against this "+
+				"window either. The WINDOW is under the rule, this run merely "+
+				"walked into it, and the registry's own guard says the same "+
+				"thing from the other side. Fix it there.",
+				recorded.WorstGap, recorded.Runs, recorded.Date)
+		}
+		t.Errorf("%s measured %v on %s, and a %v window is %.2f× that — the rule "+
+			"this registry keeps is five, and anything under %.1f× is reported "+
+			"here rather than left to a log line.\n%s",
+			entry.Name, measured, leg, entry.Window,
+			float64(entry.Window)/float64(measured),
+			float64(marginFloorNum)/float64(marginFloorDen), culprit)
+		return
+	}
+
 	// A TENTH PAST THE RECORD, not a nanosecond past it. The record is a
 	// maximum over many runs, so an ordinary run beats it by a hair
 	// fairly often; a note that fires on a microsecond is a note nobody
-	// reads by the second week. A tenth is past the noise and far inside
-	// the five-times margin the rule keeps.
+	// reads by the second week. A tenth is past the noise and inside the
+	// band the error above owns.
 	if measured > recorded.WorstGap+recorded.WorstGap/10 {
 		t.Logf("%s: this run's %v is past the recorded worst of %v on %s (taken "+
 			"over %d runs on %s). The record is the one that is stale, not this "+
@@ -248,6 +325,21 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 			entry.Name, measured, recorded.WorstGap, leg, recorded.Runs, recorded.Date)
 	}
 }
+
+// marginFloorNum and marginFloorDen are the least multiple of a measured
+// gap a window may be before this probe refuses rather than notes: five
+// halves, which is half the ruled five. See report above for why the
+// floor is not the rule itself.
+//
+// A FRACTION IN TWO CONSTANTS RATHER THAN ONE, for the reason pacingFor
+// spells the same shape out: 5/2 written as one untyped constant is
+// integer division, and the compiler would have taken it as two without
+// a word. The halves here are real.
+const (
+	marginRule     = 5
+	marginFloorNum = 5
+	marginFloorDen = 2
+)
 
 // detectorNote and detectorPhrase name the condition a run happened
 // under, because the record's numbers depend on it and two runs of the
