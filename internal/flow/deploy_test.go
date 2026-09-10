@@ -258,6 +258,9 @@ type deployScript struct {
 	// whether it measured the client or the machine: a fixture that
 	// itself paused past the window under test has measured the runner.
 	eventGaps []time.Duration
+	// eventWidests is the widest gap within EACH connection, one entry
+	// per connection served. See widestPerConnection.
+	eventWidests []time.Duration
 
 	// publishOutcome scripts the publish's answer, publishSubdomain and
 	// publishExpiresAt the success body, and publishBody replaces that
@@ -391,8 +394,21 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 		last = now
 	}
 
+	// PER CONNECTION AS WELL AS POOLED. eventGaps is every gap this
+	// fixture has ever left, which answers "did this machine pause";
+	// eventWidests is one number per connection, which answers the
+	// different question a probe asks — "did the fixture hold its pace
+	// on THIS run" — and a pooled maximum cannot answer it, because one
+	// starved connection would condemn every other run in the pass.
+	var widest time.Duration
+	for _, g := range gaps {
+		if g > widest {
+			widest = g
+		}
+	}
 	s.mu.Lock()
 	s.eventGaps = append(s.eventGaps, gaps...)
+	s.eventWidests = append(s.eventWidests, widest)
 	s.mu.Unlock()
 
 	if script.hold {
@@ -666,6 +682,10 @@ type objectStore struct {
 	// upload while never letting the gap between two bytes reach one.
 	readChunk int
 	readPause time.Duration
+	// drainWidests is the widest interval between two drain steps within
+	// EACH paced request, one entry per request. See
+	// widestDrainPerRequest.
+	drainWidests []time.Duration
 
 	// pauseUntil is how many bytes are consumed at the paced rate before
 	// the rest is drained at full speed. The tail matters: once the
@@ -772,6 +792,17 @@ func (s *objectStore) sign(length int64) {
 	s.signedSet = true
 }
 
+// widestDrainPerRequest is one widest-interval-between-drain-steps per
+// paced request this store has served, in the order it served them. It
+// is the write side's answer to widestPerConnection, and a probe uses it
+// for the same thing: to tell a run that measured the client from a run
+// in which this fixture was the thing that stopped.
+func (s *objectStore) widestDrainPerRequest() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration(nil), s.drainWidests...)
+}
+
 func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The reading policy is snapshotted under the lock and the body is
 	// then read WITHOUT it: a wedged handler holds this goroutine for the
@@ -809,6 +840,14 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case pause > 0 && chunk > 0:
 		buf := make([]byte, chunk)
 		var paced int64
+		// THE STORE'S OWN CYCLE, TIMED. The write-side gap this fixture
+		// governs is the time for the client's send buffer to free
+		// space, and space frees at exactly the rate this loop drains.
+		// So a loop that missed its own pace did not measure the client
+		// — the same distinction the read-side fixture records between
+		// flushes, on the side where it was missing.
+		var drainWidest time.Duration
+		last := time.Now()
 		for paced < pauseUntil {
 			n, err := io.ReadFull(r.Body, buf)
 			paced += int64(n)
@@ -820,9 +859,17 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-release:
 				return
 			}
+			now := time.Now()
+			if gap := now.Sub(last); gap > drainWidest {
+				drainWidest = gap
+			}
+			last = now
 		}
 		rest, _ := io.Copy(io.Discard, r.Body)
 		bodyLength = paced + rest
+		s.mu.Lock()
+		s.drainWidests = append(s.drainWidests, drainWidest)
+		s.mu.Unlock()
 	default:
 		bodyLength, _ = io.Copy(io.Discard, r.Body)
 	}
@@ -964,6 +1011,16 @@ func (s *deployScript) widestGap() time.Duration {
 		}
 	}
 	return widest
+}
+
+// widestPerConnection is one widest-gap-between-flushes per connection
+// this fixture has served, in the order it served them. A probe pairs it
+// with its own per-run client gaps to tell a run that measured the
+// client from a run that measured the machine.
+func (s *deployScript) widestPerConnection() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration(nil), s.eventWidests...)
 }
 
 func (s *deployScript) sent() int {

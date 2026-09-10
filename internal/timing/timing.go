@@ -398,6 +398,13 @@ type Measurement struct {
 	// date cannot be judged stale.
 	Date string
 
+	// Integrity is what the passes behind WorstGap say about
+	// THEMSELVES: whether the fixture held the pace this measurement
+	// assumes it held. A nil Integrity on a measured leg is not "the
+	// fixture was fine", it is nobody having looked, and the guard reds
+	// on it.
+	Integrity *PaceIntegrity
+
 	// BlockPoint is the bytes the client handed over before it stopped
 	// making progress at all. WRITE SIDE ONLY: on the read side nothing
 	// is buffering on this client's behalf, so there is no such number
@@ -444,6 +451,76 @@ type Measurement struct {
 	Pin *PinnedPair
 }
 
+// PaceIntegrity is a measurement's report on its own instrument.
+//
+// # AN INSTRUMENT THAT RECORDS ITS OWN STARVATION AS THE SUBJECT'S MARGIN
+//
+// Both timing ROWS already tell these apart. Each one reads the
+// fixture's widest gap between its own flushes and refuses when the
+// fixture itself paused past the window, saying in terms that the row
+// "measured the machine rather than the client". The PROBE beside them
+// did not. It recorded the starved gap as the leg's worst, the registry
+// sized a window at five times it, and the row's fixture then grew to
+// span three and a half of that — which is raising the number until the
+// failures stop, performed by the instrument instead of by a person.
+//
+// The instance, on the gate's own macOS runner, 2026-09-10: the client's
+// worst gap was 315.903625 ms and the fixture's own widest gap between
+// two flushes was 315.881875 ms, twenty-two MICROSECONDS apart, at a
+// stated 20 ms pace. The client did not wait. The runner stopped the
+// server goroutine for a third of a second and the client reported it
+// faithfully.
+//
+// So a pass now declares whether it measured anything. A fixture that
+// missed its own stated pace by more than the threshold below did not,
+// and its number is excluded from the maximum rather than becoming it.
+type PaceIntegrity struct {
+	// Valid and Starved are passes: ones whose fixture held its stated
+	// pace within the threshold, and ones whose did not. WorstGap is a
+	// maximum over the Valid ones only.
+	Valid   int
+	Starved int
+
+	// ThresholdNum over ThresholdDen is the multiple of the stated pace
+	// a fixture may miss by and still be counted. It is recorded here
+	// rather than only in the probe because a number and the rule that
+	// admitted it are one fact, and the probe checks this field against
+	// the rule it is about to apply.
+	ThresholdNum int
+	ThresholdDen int
+
+	// StatedPace is what the fixture was asked to keep. Zero means the
+	// fixture has no pace to miss — it writes and goes silent — and
+	// there is no integrity test to apply, which is a different thing
+	// from passing one.
+	StatedPace time.Duration
+
+	// WorstFixtureGap is the widest gap the fixture left, across ALL
+	// passes including the starved ones. It is the number that says how
+	// far from a measuring instrument this leg's runner was, and
+	// dropping the starved passes without recording it would hide
+	// exactly that.
+	WorstFixtureGap time.Duration
+}
+
+// Starves reports whether this leg starved more often than the rule
+// allows: more than one pass in five.
+//
+// A RUNNER THAT MOSTLY STARVES THE FIXTURE IS NOT A MEASURING
+// INSTRUMENT, and a maximum taken over the few passes it did not starve
+// is a number about the quiet moments of a busy machine. That is a STOP
+// with a reason, in the same shape as an arm that did not complete.
+func (p *PaceIntegrity) Starves() bool {
+	if p == nil {
+		return false
+	}
+	return p.Starved*starvedLegBound > p.Valid+p.Starved
+}
+
+// starvedLegBound is the "one in five" in Starves: a leg stops when
+// starved passes are more than a fifth of its passes.
+const starvedLegBound = 5
+
 // MinimumRuns is the FLOOR on the run count behind a leg's number, and
 // it is a floor rather than a target.
 //
@@ -477,6 +554,21 @@ const measurementDateLayout = "2006-01-02"
 // week" and "2026-13-45" are all non-empty.
 func (m Measurement) Measured() bool {
 	if m.WorstGap <= 0 || m.Runs < MinimumRuns {
+		return false
+	}
+	// AN UNCLASSIFIED NUMBER IS NOT A MEASUREMENT, and that is the
+	// definition changing rather than a stricter test of the old one.
+	// A worst gap is now the maximum over the passes in which the
+	// fixture held its stated pace — so a number with no record of
+	// which passes those were is a maximum over an unknown population,
+	// and there is no way to reclassify it afterwards because the
+	// passes behind it kept no fixture record.
+	//
+	// The consequence is deliberate and it is large: every figure taken
+	// before this rule stopped being a measurement the day it landed,
+	// and the probe prints the record to paste for each one, because a
+	// leg this returns false for is a leg the probe treats as unmeasured.
+	if m.Integrity == nil {
 		return false
 	}
 	_, err := time.Parse(measurementDateLayout, m.Date)
@@ -771,7 +863,10 @@ var UploadSlowIsNotStalled = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 226326875 * time.Nanosecond, Runs: 240, Date: "2026-09-11",
+			WorstGap: 166233959 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
+				ThresholdNum: 3, ThresholdDen: 1,
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 57503917},
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -897,7 +992,10 @@ var UploadWedgedStops = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 226326875 * time.Nanosecond, Runs: 240, Date: "2026-09-11",
+			WorstGap: 166233959 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
+				ThresholdNum: 3, ThresholdDen: 1,
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 57503917},
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1020,7 +1118,10 @@ var StreamGoesQuiet = Entry{
 		// of ten between the two conditions, and the detector is the one
 		// this window is sized against because it is the worse of two
 		// the gate actually runs.
-		Darwin: {WorstGap: 10283500 * time.Nanosecond, Runs: 2000, Date: "2026-09-10"},
+		Darwin: {WorstGap: 5137000 * time.Nanosecond, Runs: 7000, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 7000, Starved: 0,
+				ThresholdNum: 3, ThresholdDen: 1,
+				StatedPace: 0, WorstFixtureGap: 44084}},
 		// 2.2355ms under the detector, 2.0315ms without it.
 		Windows: {WorstGap: 2235500 * time.Nanosecond, Runs: 2000, Date: "2026-09-10"},
 	},
@@ -1104,7 +1205,10 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		// read-side window is a margin over how long the machine can
 		// stop the far end from writing, and this is the largest such
 		// pause anybody has measured here.
-		Darwin: {WorstGap: 104351792 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+		Darwin: {WorstGap: 44825959 * time.Nanosecond, Runs: 136, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 136, Starved: 4,
+				ThresholdNum: 3, ThresholdDen: 1,
+				StatedPace: 15 * time.Millisecond, WorstFixtureGap: 59324875}},
 		// 16.6084ms under the detector, 28.8472ms without it.
 		Windows: {WorstGap: 28847200 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
 	},
@@ -1231,7 +1335,10 @@ var StreamPartialLineIsNotAStall = Entry{
 		// also one pass — is the same phenomenon at a comparable size.
 		// Two entries sampling one distribution and carrying windows a
 		// factor of two apart is an open item rather than a finding.
-		Darwin: {WorstGap: 128757833 * time.Nanosecond, Runs: 220, Date: "2026-09-11"},
+		Darwin: {WorstGap: 50792875 * time.Nanosecond, Runs: 136, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 136, Starved: 4,
+				ThresholdNum: 3, ThresholdDen: 1,
+				StatedPace: 20 * time.Millisecond, WorstFixtureGap: 223768625}},
 		// 21.4369ms under the detector, 26.8971ms without it.
 		Windows: {WorstGap: 26897100 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
 	},

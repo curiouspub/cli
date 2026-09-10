@@ -192,7 +192,7 @@ func probeLeg() timing.Leg {
 // it was measured under, or nil on the read side, where no buffer this
 // client can set governs the gap; extra is whatever else the probe has
 // to say, printed with it.
-func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration, pin *timing.PinnedPair, extra string) {
+func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration, pin *timing.PinnedPair, integrity *timing.PaceIntegrity, extra string) {
 	t.Helper()
 	leg := probeLeg()
 	recorded, known := entry.Measurements[leg], false
@@ -213,7 +213,7 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 	if !known {
 		t.Errorf("%s has no recorded measurement on %s, and this run measured a "+
 			"worst gap of %v over %d runs on %s%s.\nRecord it in internal/timing: "+
-			"{WorstGap: %v, Runs: %d, Date: \"%s\"%s%s} — or run this again and "+
+			"{WorstGap: %v, Runs: %d, Date: \"%s\"%s%s%s} — or run this again and "+
 			"record the worst across the passes, with the run count to match, "+
 			"which is how the darwin entry was taken.\nTWO THINGS THIS LINE ALONE "+
 			"WILL NOT TELL YOU. make ci runs this package twice, plainly and under "+
@@ -229,7 +229,8 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 			detectorNote(),
 			measured.Round(time.Microsecond), runs,
 			time.Now().Format("2006-01-02"),
-			blockPointHint(entry), pinLiteral(pin), detectorPhrase())
+			blockPointHint(entry), pinLiteral(pin), integrityLiteral(integrity),
+			detectorPhrase())
 		return
 	}
 
@@ -238,6 +239,7 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 	// this machine does not have, and comparing the two numbers while
 	// ignoring that would be the whole defect this round removed.
 	confirmPin(t, entry, leg, pin)
+	confirmIntegrity(t, entry, leg, recorded.Integrity)
 
 	// # A RUN MAY NOT QUIETLY SPEND THE MARGIN THE RULE PROMISES
 	//
@@ -339,6 +341,143 @@ const (
 	marginRule     = 5
 	marginFloorNum = 5
 	marginFloorDen = 2
+)
+
+// classifyPasses separates the runs that measured the CLIENT from the runs in
+// which the fixture was the thing that stopped, and returns the maximum
+// over the first kind.
+//
+// # THE PROBE CARRIES THE SAME INTEGRITY TEST AS THE ROW
+//
+// Both read-side rows already read the fixture's own widest gap and
+// refuse when the fixture paused past the window — "this row measured
+// the machine rather than the client". The probe printed the same number
+// and used none of it, so a starved run's gap became the leg's worst,
+// the window became five times it, and the fixture grew to span three
+// and a half of that. An instrument that records its own starvation as
+// the subject's margin performs the widening it was built to prevent.
+//
+// THE THRESHOLD IS THREE TIMES THE STATED PACE, and both numbers that
+// set it are here rather than in a commit message. Ordinary passes sit
+// at about 1.25× — a 20 ms pace delivering with a widest gap near 25 ms,
+// a 15 ms pace near 17 ms. The pass this rule was written for sat at
+// 15.8×: 315.881875 ms against a stated 20 ms. Three is well above the
+// ordinary spread and far below the event, which is what a threshold
+// between two measured populations should be, and it is one constant to
+// move.
+//
+// A ZERO PACE IS NOT A PASSING GRADE. A fixture that writes its frames
+// and goes silent has no pace to miss, so there is no test to apply and
+// every run counts — recorded as StatedPace zero, so a reader can tell
+// "held its pace" from "had none".
+func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration,
+	pace time.Duration) (time.Duration, *timing.PaceIntegrity, error) {
+
+	// PAIRING BY POSITION IS AN ASSUMPTION, SO IT IS CHECKED. Runs are
+	// sequential and each opens one connection, so run i is connection
+	// i — and if the counts ever disagree that reasoning has stopped
+	// holding and every classification below it is arbitrary.
+	if len(fixture) != len(perRun) {
+		return 0, nil, fmt.Errorf("%s on %s: %d runs against %d fixture records, so "+
+			"there is no run this fixture gap belongs to. The classification below "+
+			"pairs them BY POSITION and that pairing has stopped being true",
+			name, leg, len(perRun), len(fixture))
+	}
+
+	integrity := &timing.PaceIntegrity{
+		ThresholdNum: paceThresholdNum,
+		ThresholdDen: paceThresholdDen,
+		StatedPace:   pace,
+	}
+	var worst time.Duration
+	for i, gap := range perRun {
+		if fixture[i] > integrity.WorstFixtureGap {
+			integrity.WorstFixtureGap = fixture[i]
+		}
+		if pace > 0 && fixture[i]*time.Duration(paceThresholdDen) >
+			pace*time.Duration(paceThresholdNum) {
+			integrity.Starved++
+			continue
+		}
+		integrity.Valid++
+		if gap > worst {
+			worst = gap
+		}
+	}
+	if integrity.Valid == 0 {
+		return 0, nil, fmt.Errorf("%s on %s: every one of %d passes starved — the "+
+			"fixture never held its stated %v pace, worst %v. There is no "+
+			"measurement here to report",
+			name, leg, len(perRun), pace, integrity.WorstFixtureGap)
+	}
+	if integrity.Starves() {
+		return 0, nil, fmt.Errorf("%s on %s: this runner cannot hold the fixture's "+
+			"pace — %d of %d passes starved, more than the one in five this rule "+
+			"allows, worst fixture gap %v against a stated %v.\nA runner that "+
+			"mostly starves the fixture is not a measuring instrument, and a "+
+			"maximum over the few passes it did not starve is a number about the "+
+			"quiet moments of a busy machine",
+			name, leg, integrity.Starved, len(perRun),
+			integrity.WorstFixtureGap, pace)
+	}
+	return worst, integrity, nil
+}
+
+// confirmIntegrity refuses when the record was admitted under a
+// different rule from the one this run is applying.
+//
+// IT IS confirmPin AND confirmPace ONE MORE TIME. A maximum means
+// nothing without the rule that decided which passes could contribute to
+// it, so the threshold travels with the number; a record taken at a
+// looser threshold is a maximum over a wider population and is not
+// comparable with this run.
+func confirmIntegrity(t *testing.T, entry *timing.Entry, leg timing.Leg, p *timing.PaceIntegrity) {
+	t.Helper()
+	if p == nil {
+		// The registry guard reds on this alone and with a better
+		// message. Two reports of one absence read as two problems.
+		return
+	}
+	if p.ThresholdNum != paceThresholdNum || p.ThresholdDen != paceThresholdDen {
+		t.Errorf("timing.%s's %s measurement was admitted at a %d/%d pace threshold "+
+			"and this probe applies %d/%d. A maximum is a maximum over the passes "+
+			"a rule let in, so the record and the rule are one fact: retake the "+
+			"measurement under this threshold, or say why the record's stands.",
+			entry.Name, leg, p.ThresholdNum, p.ThresholdDen,
+			paceThresholdNum, paceThresholdDen)
+	}
+}
+
+// integrityLiteral is the Integrity field of the record a paste hint
+// asks for, so the person pasting it does not have to invent one.
+func integrityLiteral(p *timing.PaceIntegrity) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprintf(", Integrity: &timing.PaceIntegrity{Valid: %d, Starved: %d, "+
+		"ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, WorstFixtureGap: %d}",
+		p.Valid, p.Starved, p.ThresholdNum, p.ThresholdDen,
+		p.StatedPace, p.WorstFixtureGap)
+}
+
+// integrityNote renders what a pass says about its own instrument.
+func integrityNote(p *timing.PaceIntegrity) string {
+	if p.StatedPace == 0 {
+		return fmt.Sprintf(" the fixture has no pace to hold, so no pass is "+
+			"excluded; its own widest gap was %v", p.WorstFixtureGap)
+	}
+	return fmt.Sprintf(" the fixture held its %v pace on %d of %d passes (%d starved "+
+		"past %d/%d of it); its own widest gap was %v",
+		p.StatedPace, p.Valid, p.Valid+p.Starved, p.Starved,
+		paceThresholdNum, paceThresholdDen, p.WorstFixtureGap)
+}
+
+// paceThresholdNum over paceThresholdDen is the multiple of its stated
+// pace a fixture may miss by and still have measured the client. See
+// classify for the two measured populations it sits between.
+const (
+	paceThresholdNum = 3
+	paceThresholdDen = 1
 )
 
 // detectorNote and detectorPhrase name the condition a run happened
@@ -503,7 +642,10 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
 	defer cancel()
 
-	var worst time.Duration
+	// EVERY RUN'S GAP IS KEPT. The maximum is taken over a subset and
+	// which subset is decided after the runs are over; a running maximum
+	// cannot be un-taken. See classifyPasses.
+	perRun := make([]time.Duration, 0, probeRuns)
 	var samples int
 	completed := 0
 	started := time.Now()
@@ -511,9 +653,7 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 		gap, n, err := oneUploadRun(ctx, store.url, path, pacing.bodySize, transport)
 		transport.CloseIdleConnections()
 		samples += n
-		if gap > worst {
-			worst = gap
-		}
+		perRun = append(perRun, gap)
 		if err != nil {
 			// THE BUDGET EXPIRING IS THE RESULT; anything else is a
 			// broken instrument, and the two are told apart rather than
@@ -531,15 +671,34 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	}
 	pinsWereApplied(t, client, store.pin)
 	if completed < probeRuns {
+		worstSoFar := time.Duration(0)
+		for _, g := range perRun {
+			if g > worstSoFar {
+				worstSoFar = g
+			}
+		}
 		reportIncompleteArm(t, entry.Name, completed, probeRuns,
-			fmt.Sprintf("worst gap so far %v", worst), time.Since(started))
+			fmt.Sprintf("worst gap so far %v", worstSoFar), time.Since(started))
 		return
 	}
 
-	report(t, entry, probeRuns, worst, observedPin(client, store.pin),
+	// THE SAME INTEGRITY TEST, ON THE SIDE IT WAS MISSING FROM. The gap
+	// this row governs is the time for the client's send buffer to free
+	// space, and space frees at exactly the rate this store drains — so
+	// a run in which the STORE missed its own pace measured the store,
+	// not the client, for the same reason a starved stream fixture
+	// measures the runner.
+	worst, integrity, err := classifyPasses(entry.Name, probeLeg(),
+		perRun, store.widestDrainPerRequest(), pacing.pause)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	report(t, entry, integrity.Valid, worst, observedPin(client, store.pin), integrity,
 		fmt.Sprintf(" (%d gaps sampled, store pacing %d KiB every %v over a "+
-			"%d-byte body, %d of it paced)",
-			samples, pacing.chunk>>10, pacing.pause, pacing.bodySize, pacing.pacedBytes))
+			"%d-byte body, %d of it paced;%s)",
+			samples, pacing.chunk>>10, pacing.pause, pacing.bodySize, pacing.pacedBytes,
+			integrityNote(integrity)))
 }
 
 // oneUploadRun PUTs the body once and returns the worst interval between
@@ -854,16 +1013,18 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
 			defer cancel()
 
-			var worst time.Duration
+			// EVERY RUN'S GAP IS KEPT, not just the running maximum,
+			// because the maximum is now taken over a SUBSET and which
+			// subset is decided after the runs are over. A running
+			// maximum cannot be un-taken.
+			perRun := make([]time.Duration, 0, tc.runs)
 			var samples int
 			completed := 0
 			started := time.Now()
 			for run := 0; run < tc.runs; run++ {
 				gap, n, err := oneStreamRun(ctx, srv.URL)
 				samples += n
-				if gap > worst {
-					worst = gap
-				}
+				perRun = append(perRun, gap)
 				if err != nil {
 					if ctx.Err() == nil {
 						t.Fatalf("the probe stream failed on run %d of %d: %v",
@@ -878,25 +1039,37 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 					"about an instrument that stopped working")
 			}
 			if completed < tc.runs {
+				worstSoFar := time.Duration(0)
+				for _, g := range perRun {
+					if g > worstSoFar {
+						worstSoFar = g
+					}
+				}
 				reportIncompleteArm(t, tc.entry.Name, completed, tc.runs,
-					fmt.Sprintf("worst gap so far %v", worst), time.Since(started))
+					fmt.Sprintf("worst gap so far %v", worstSoFar), time.Since(started))
 				return
 			}
 
-			// THE FIXTURE'S OWN WIDEST FLUSH GAP, reported beside the
-			// client's. It is the number that says whether a red here is
-			// about the client or about a machine that paused: a fixture
-			// that itself stopped for longer than the window has
-			// measured the runner.
-			extra := fmt.Sprintf(" (%d arrivals sampled; the fixture's own widest "+
-				"gap between flushes was %v)", samples, script.widestGap())
+			// THE FIXTURE'S OWN WIDEST FLUSH GAP, PER RUN, and now acted
+			// on rather than only printed. The two rows this probe
+			// stands behind each refuse when their fixture paused past
+			// the window, saying they measured the machine rather than
+			// the client; this is the same test, applied by the
+			// instrument to itself.
+			worst, integrity, err := classifyPasses(tc.entry.Name, probeLeg(),
+				perRun, script.widestPerConnection(), tc.script.pace)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			extra := fmt.Sprintf(" (%d arrivals sampled;%s)", samples,
+				integrityNote(integrity))
 			// NIL PIN, and that is the two mechanisms held apart rather
 			// than an omission. Nothing buffers on this client's behalf
 			// while it reads: the gap is the far end's pacing plus the
 			// scheduler, and no socket buffer this client can set
 			// governs it. A pin recorded here would be a condition that
 			// had no bearing on the number beside it.
-			report(t, tc.entry, tc.runs, worst, nil, extra)
+			report(t, tc.entry, integrity.Valid, worst, nil, integrity, extra)
 		})
 	}
 }

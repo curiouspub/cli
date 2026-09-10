@@ -70,6 +70,77 @@ func sortedEntries() []*timing.Entry {
 //  2. Set StreamKeepAlivesAreProofOfLife's darwin date to "recently".
 //     Same red, same entry — a string that is merely not empty passes an
 //     emptiness test and cannot be compared with anything.
+//
+// TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace is the registry
+// half of the probe's integrity test.
+//
+// A MAXIMUM IS A MAXIMUM OVER THE PASSES A RULE LET IN, so the rule
+// travels with the number. Three things are asserted and each has a way
+// of being silently wrong:
+//
+//  1. A measured leg carries an Integrity record. A nil one is not "the
+//     fixture was fine", it is nobody having looked — and every number
+//     recorded before this rule existed was taken by an instrument that
+//     could not tell a starved pass from a measurement.
+//  2. Its Valid count is the run count behind WorstGap. A record whose
+//     Runs disagree with the passes that were allowed to contribute is
+//     a maximum over one population labelled with another's size.
+//  3. It did not starve more often than the rule allows. Past one pass
+//     in five the leg is a STOP with a reason, not a number.
+//
+// REQUIRED MUTATIONS, RUN ON THE TIP:
+//
+//  1. Drop the Integrity from one measured leg. Reds here alone, naming
+//     the entry and the leg.
+//  2. Set a leg's Starved past a fifth of its passes. Reds here with the
+//     runner-cannot-hold-the-pace wording, and nothing else moves.
+//  3. Remove the threshold from the probe so a starved pass enters the
+//     maximum. Reds on the margin row instead, because the darwin window
+//     inflates past what its own record supports.
+func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
+	for _, entry := range sortedEntries() {
+		for _, leg := range timing.Legs {
+			m := entry.Measurements[leg]
+			if !m.Measured() {
+				continue
+			}
+			p := m.Integrity
+			if p == nil {
+				t.Errorf("timing.%s's %s measurement does not say whether its "+
+					"fixture held its pace.\nA worst gap is a maximum over the "+
+					"passes some rule admitted, and with no record of that rule "+
+					"this number could be the runner's own starvation wearing the "+
+					"client's name — which is exactly what it was on darwin at "+
+					"315.9ms against a stated 20ms pace. Retake it with the probe "+
+					"on this tip, which reports the record to paste.",
+					entry.Name, leg)
+				continue
+			}
+			if p.Valid != m.Runs {
+				t.Errorf("timing.%s's %s measurement stands on %d runs and its "+
+					"integrity record admitted %d passes. Those are the same "+
+					"number or the record is a maximum over one population "+
+					"labelled with the size of another.",
+					entry.Name, leg, m.Runs, p.Valid)
+			}
+			if p.Starves() {
+				t.Errorf("timing.%s's %s runner cannot hold the fixture's pace: %d "+
+					"of %d passes starved, worst fixture gap %v against a stated "+
+					"%v.\nThat is a STOP with a reason rather than a measurement. "+
+					"A maximum over the few passes a busy machine did not starve "+
+					"is a number about its quiet moments.",
+					entry.Name, leg, p.Starved, p.Valid+p.Starved,
+					p.WorstFixtureGap, p.StatedPace)
+			}
+			if p.ThresholdNum <= 0 || p.ThresholdDen <= 0 {
+				t.Errorf("timing.%s's %s integrity record has no threshold (%d/%d), "+
+					"so it says passes were excluded without saying by what rule",
+					entry.Name, leg, p.ThresholdNum, p.ThresholdDen)
+			}
+		}
+	}
+}
+
 func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 	if len(timing.Registry) == 0 {
 		t.Fatal("the registry is empty, so this row's silence is about nothing " +
