@@ -107,6 +107,77 @@ const probeRuns = 20
 // legs whose tails nobody has seen are the two this machine is not.
 const probeRunsUnpaced = 1000
 
+// probeArmBudget is how long ONE arm of a probe may spend before it
+// stops and reports what it managed.
+//
+// # A COLLAPSE IS A ROW, NEVER A PACKAGE KILL
+//
+// This is the constant behind that rule, and the rule was bought rather
+// than reasoned. A control that varied one socket buffer walked into a
+// configuration under which a hosted runner does not finish: it sat at
+// 24m1s and took the test binary down at the suite's twenty-five-minute
+// timeout. What died with it was not only that control — it was the
+// block point and all three read-side numbers from the probes further
+// down the same binary, measurements that had nothing to do with the
+// question being asked. A leg's entire evidence, lost to one row's
+// environment.
+//
+// So every arm here is bounded well under the package timeout, an arm
+// that runs out reports "did not complete on <leg> within <n>s" with the
+// runs it managed and the worst it saw, and the probe carries on to the
+// next one. An arm that will not finish is a RESULT about that leg — on
+// one of them it is currently the most informative result available —
+// and a result is worth more than a panic.
+//
+// FOUR MINUTES is about four times what the most expensive arm here
+// costs when it behaves: twenty upload runs at roughly three seconds
+// each. It is a budget rather than an expectation, and the several arms
+// this package runs have to fit inside one timeout together, which is
+// what keeps it from being generous.
+//
+// REQUIRED MUTATION, RUN 2026-09-10: set this to one second. All four
+// bounded arms report and none of them takes the binary down —
+//
+//	UploadSlowIsNotStalled did not complete on darwin within 1s: 0 of
+//	20 runs, worst gap so far 108.137167ms
+//	the upload block point did not complete on darwin within 1s: 3 of
+//	20 runs, largest block point so far 786432 bytes
+//	StreamKeepAlivesAreProofOfLife did not complete on darwin within
+//	1s: 1 of 20 runs, worst gap so far 18.155125ms
+//	StreamPartialLineIsNotAStall did not complete on darwin within 1s:
+//	0 of 20 runs, worst gap so far 22.952125ms
+//
+// — and the go-quiet arm, which finishes a thousand runs in eighty
+// milliseconds, stays green beside them. That last part is the control:
+// a budget that cut every arm would prove nothing about cutting the
+// right one.
+//
+// It also found a defect in the reporter it was proving. The shared
+// message took a Duration, so the block-point arm — whose quantity is a
+// count of BYTES — printed "worst so far 0s". The caller renders its own
+// quantity now.
+const probeArmBudget = 4 * time.Minute
+
+// reportIncompleteArm is the one place an unfinished arm is written
+// down, so the three probes cannot describe the same situation in three
+// different ways.
+// worstSoFar is rendered by the CALLER rather than typed as a duration
+// here, because the three probes do not all measure a duration: the
+// block-point arm's number is a count of bytes, and a reporter that
+// insisted on a Duration printed "worst so far 0s" against an arm whose
+// worst so far was three runs' worth of block points. A shared message
+// is worth having; a shared message that renders one caller's number as
+// another caller's unit is not.
+func reportIncompleteArm(t *testing.T, name string, done, want int, worstSoFar string, elapsed time.Duration) {
+	t.Helper()
+	t.Errorf("%s did not complete on %s%s within %ds: %d of %d runs, %s.\n"+
+		"That is a RESULT about this leg and not a broken instrument — the arm was cut "+
+		"at its budget so the rest of this binary could still report. Record the row as "+
+		"it stands; a leg that cannot finish a shape is telling you something about the "+
+		"shape.", name, probeLeg(), detectorNote(), int(elapsed.Seconds()), done, want,
+		worstSoFar)
+}
+
 // probeLeg is the leg this machine is, named the way the registry names
 // it.
 func probeLeg() timing.Leg {
@@ -334,21 +405,44 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	client.watch(t, pacedPause)
 	store.pin.watch(t, pacedPause)
 
+	// BOUNDED, like every arm in this file. See probeArmBudget: the row
+	// that taught this package the lesson took a whole leg's evidence
+	// down with it, and this probe is one of the ones that died.
+	ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
+	defer cancel()
+
 	var worst time.Duration
 	var samples int
+	completed := 0
+	started := time.Now()
 	for run := 0; run < probeRuns; run++ {
-		gap, n := oneUploadRun(t, store.url, path, pacing.bodySize, transport)
+		gap, n, err := oneUploadRun(ctx, store.url, path, pacing.bodySize, transport)
 		transport.CloseIdleConnections()
 		samples += n
 		if gap > worst {
 			worst = gap
 		}
+		if err != nil {
+			// THE BUDGET EXPIRING IS THE RESULT; anything else is a
+			// broken instrument, and the two are told apart rather than
+			// folded together.
+			if ctx.Err() == nil {
+				t.Fatalf("the probe upload failed on run %d of %d: %v", run+1, probeRuns, err)
+			}
+			break
+		}
+		completed++
 	}
 	if samples == 0 {
 		t.Fatal("the probe recorded no gap at all, so its silence is about an " +
 			"instrument that stopped working rather than about a fast machine")
 	}
 	pinsWereApplied(t, client, store.pin)
+	if completed < probeRuns {
+		reportIncompleteArm(t, entry.Name, completed, probeRuns,
+			fmt.Sprintf("worst gap so far %v", worst), time.Since(started))
+		return
+	}
 
 	report(t, entry, probeRuns, worst, observedPin(client, store.pin),
 		fmt.Sprintf(" (%d gaps sampled, store pacing %d KiB every %v over a "+
@@ -357,13 +451,15 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 }
 
 // oneUploadRun PUTs the body once and returns the worst interval between
-// two progress events, and how many intervals it saw.
-func oneUploadRun(t *testing.T, url, path string, size int64, transport *http.Transport) (time.Duration, int) {
-	t.Helper()
-
+// two progress events, how many intervals it saw, and what went wrong.
+//
+// IT TAKES A CONTEXT AND RETURNS AN ERROR RATHER THAN FAILING, because
+// its caller has a budget and a fatal inside the loop is exactly the
+// shape that cannot be cut short. See probeArmBudget.
+func oneUploadRun(ctx context.Context, url, path string, size int64, transport *http.Transport) (time.Duration, int, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("opening the probe body: %v", err)
+		return 0, 0, fmt.Errorf("opening the probe body: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
@@ -381,21 +477,21 @@ func oneUploadRun(t *testing.T, url, path string, size int64, transport *http.Tr
 		last = now
 	}}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, url, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
 	if err != nil {
-		t.Fatalf("building the probe request: %v", err)
+		return worst, gaps, fmt.Errorf("building the probe request: %w", err)
 	}
 	req.ContentLength = size
 
 	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
-		t.Fatalf("the probe upload failed: %v", err)
+		return worst, gaps, fmt.Errorf("the probe upload failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		t.Fatalf("draining the probe response: %v", err)
+		return worst, gaps, fmt.Errorf("draining the probe response: %w", err)
 	}
-	return worst, gaps
+	return worst, gaps, nil
 }
 
 // TestProbeTheUploadBlockPoint measures the other half of the write
@@ -439,13 +535,27 @@ func TestProbeTheUploadBlockPoint(t *testing.T) {
 	client.watch(t, pacedPause)
 	store.pin.watch(t, pacedPause)
 
+	// BOUNDED, like every arm here. This probe's own loop already waits
+	// for quiescence rather than for completion, so it cannot hang on a
+	// slow upload — but it CAN be slow enough to matter on a leg where
+	// the far end is crawling, and an arm that eats the package's
+	// timeout takes the rest of the binary's numbers with it.
+	ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
+	defer cancel()
+
 	var worst int64
+	completed := 0
+	started := time.Now()
 	for run := 0; run < probeRuns; run++ {
-		at := oneBlockPointRun(t, store.url, path, bodySize, quiet, transport)
+		at := oneBlockPointRun(t, ctx, store.url, path, bodySize, quiet, transport)
 		transport.CloseIdleConnections()
 		if at > worst {
 			worst = at
 		}
+		if ctx.Err() != nil {
+			break
+		}
+		completed++
 	}
 	// THE BLOCK POINT IS A NUMBER UNDER A CONDITION TOO, so this probe
 	// runs under the same pin its gap-measuring sibling does. On darwin
@@ -454,6 +564,11 @@ func TestProbeTheUploadBlockPoint(t *testing.T) {
 	// against one of them says nothing about the other.
 	pinsWereApplied(t, client, store.pin)
 	t.Logf("block point measured under %s", pinNote(observedPin(client, store.pin)))
+	if completed < probeRuns {
+		reportIncompleteArm(t, "the upload block point", completed, probeRuns,
+			fmt.Sprintf("largest block point so far %d bytes", worst), time.Since(started))
+		return
+	}
 
 	if worst >= bodySize {
 		t.Fatalf("the client handed over the whole %d-byte body without ever "+
@@ -499,7 +614,7 @@ func TestProbeTheUploadBlockPoint(t *testing.T) {
 
 // oneBlockPointRun writes until the client has made no progress for
 // quiet, and returns how many bytes it had handed over by then.
-func oneBlockPointRun(t *testing.T, url, path string, size int64, quiet time.Duration, transport *http.Transport) int64 {
+func oneBlockPointRun(t *testing.T, parent context.Context, url, path string, size int64, quiet time.Duration, transport *http.Transport) int64 {
 	t.Helper()
 
 	file, err := os.Open(path)
@@ -515,7 +630,10 @@ func oneBlockPointRun(t *testing.T, url, path string, size int64, quiet time.Dur
 		moved.Add(1)
 	}}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// DERIVED FROM THE ARM'S BUDGET, so a run cannot outlive the arm it
+	// belongs to. The cancel below is what ends the run once the client
+	// has gone quiet; the parent is what ends it if the arm has.
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
@@ -540,7 +658,7 @@ func oneBlockPointRun(t *testing.T, url, path string, size int64, quiet time.Dur
 	last := moved.Load()
 	still := time.Duration(0)
 	const step = 25 * time.Millisecond
-	for still < quiet {
+	for still < quiet && ctx.Err() == nil {
 		time.Sleep(step)
 		if now := moved.Load(); now != last {
 			last, still = now, 0
@@ -635,18 +753,42 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			t.Cleanup(srv.Close)
 			t.Cleanup(func() { close(script.release) })
 
+			// BOUNDED, like every arm here. These are the cheapest arms
+			// in the file — the whole read side costs under a minute —
+			// and they are bounded anyway, because the rule is that
+			// NOTHING a probe measures may take the suite down with it,
+			// and a rule with an exception for the cheap cases is a rule
+			// that stops applying the first time a cheap case is not.
+			ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
+			defer cancel()
+
 			var worst time.Duration
 			var samples int
+			completed := 0
+			started := time.Now()
 			for run := 0; run < tc.runs; run++ {
-				gap, n := oneStreamRun(t, srv.URL)
+				gap, n, err := oneStreamRun(ctx, srv.URL)
 				samples += n
 				if gap > worst {
 					worst = gap
 				}
+				if err != nil {
+					if ctx.Err() == nil {
+						t.Fatalf("the probe stream failed on run %d of %d: %v",
+							run+1, tc.runs, err)
+					}
+					break
+				}
+				completed++
 			}
 			if samples == 0 {
 				t.Fatal("the probe recorded no arrival at all, so its silence is " +
 					"about an instrument that stopped working")
+			}
+			if completed < tc.runs {
+				reportIncompleteArm(t, tc.entry.Name, completed, tc.runs,
+					fmt.Sprintf("worst gap so far %v", worst), time.Since(started))
+				return
 			}
 
 			// THE FIXTURE'S OWN WIDEST FLUSH GAP, reported beside the
@@ -714,9 +856,7 @@ func confirmPace(t *testing.T, entry *timing.Entry, script eventScript) {
 // oneStreamRun opens one connection and returns the worst interval
 // between the watchdog's arming — here, the instant before the request
 // goes out — and each byte arriving, and how many arrivals it saw.
-func oneStreamRun(t *testing.T, base string) (time.Duration, int) {
-	t.Helper()
-
+func oneStreamRun(ctx context.Context, base string) (time.Duration, int, error) {
 	var worst time.Duration
 	arrivals := 0
 	// ARMED BEFORE THE CONNECTION IS OPENED, which is where the shipped
@@ -733,9 +873,14 @@ func oneStreamRun(t *testing.T, base string) (time.Duration, int) {
 		arrivals++
 	}
 
-	resp, err := http.Get(base + "/v1/deploys/probe/events")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		base+"/v1/deploys/probe/events", nil)
 	if err != nil {
-		t.Fatalf("opening the probe stream: %v", err)
+		return worst, arrivals, fmt.Errorf("building the probe stream request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return worst, arrivals, fmt.Errorf("opening the probe stream: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -748,93 +893,62 @@ func oneStreamRun(t *testing.T, base string) (time.Duration, int) {
 			break
 		}
 	}
-	return worst, arrivals
+	return worst, arrivals, ctx.Err()
 }
 
 // -------------------------------------------------------------------
-// The control, and it is LAST in this file on purpose
+// The receive-end control, and it is LAST in this file on purpose
 // -------------------------------------------------------------------
 //
 // Go runs a file's rows in source order, so anything below a row that
-// hangs is a row whose number nobody gets. This one has already taken a
-// hosted runner to its twenty-five-minute timeout once, and it took the
-// block point and all three read-side numbers with it — measurements
-// that had nothing to do with the question it was asking. It is bounded
-// now, and it is also placed where a failure of that bound costs the
-// least.
+// runs long is a row whose number nobody gets. This one has already
+// taken a hosted runner to its twenty-five-minute timeout once and taken
+// the block point and all three read-side numbers down with it. It is
+// bounded now — see probeArmBudget — and it is also placed where a
+// failure of that bound costs the least.
 
-// TestProbeWhatTheReceiveEndIsWorth is a CONTROL rather than a probe,
-// and it is here to answer one question that a record currently answers
-// with an assumption.
+// TestProbeWhatTheReceiveEndIsWorth holds the SEND end still and varies
+// only the receive end, so that what each end is worth is a measurement
+// on each leg rather than an argument made once and applied to three.
 //
-// # THE CLAIM UNDER TEST
+// # WHY THE QUESTION EXISTS
 //
-// One of this project's three legs cannot hold a receive pin: macOS
-// ships its own receive autosizing, setting SO_RCVBUF does not clear it,
-// and an accepted socket's buffer is moved by the kernel while the body
-// is still going out — sampled between 131,072 and 646,336 against a
-// 131,072-byte request. The registry records that as an error on that
-// end, and the rule beside it says a leg that cannot pin STOPS.
+// One of the three legs cannot hold a receive pin: its kernel moves an
+// accepted socket's receive buffer whatever SO_RCVBUF asked for, so the
+// gap there is taken under a buffer that wanders across a factor of five
+// while the body goes out. A story was available that made this not
+// matter — that the send end governs and the receive end is a detail —
+// and a story that lets a leg's numbers stand is exactly the kind that
+// has to be measured rather than believed.
 //
-// The argument for not stopping is that the pair rule is really a
-// SEND-end rule: a client can never have more outstanding than its own
-// send buffer holds, so its writes are released about once per that many
-// bytes drained, and the far end's receive buffer only governs when it
-// is the SMALLER of the two. On the leg in question it never is.
+// # WHERE IT RUNS, AND WHY NOT EVERYWHERE
 //
-// THAT IS A PRIOR AND NOT A MEASUREMENT. It is a plausible story about a
-// mechanism, and this round has already killed two plausible stories
-// about this same connection. So it is measured, on the leg whose
-// receive pin demonstrably holds: the send end is held at the shipped
-// size and the receive end is varied across three arms — larger than the
-// send buffer, not pinned at all, and SMALLER than it — with everything
-// else identical.
+// WINDOWS is the leg where all three arms complete, so it is where the
+// full table comes from. LINUX runs the same bounded arms ONCE: two of
+// them complete and the third does not, and that row IS this leg's
+// answer rather than a hole in its table — see pinnedBuffer, where the
+// collapse and both of the hypotheses that were killed about it are
+// recorded. DARWIN is not asked at all, and that is not an omission: a
+// control varies one end while the other stays where it is put, and this
+// is the leg whose kernel will not let it.
 //
-// If the receive end were second-order the three arms would agree. If it
-// binds when it is smaller, the third arm separates from the other two,
-// and the pair rule stands.
+// # IT REFUSES SO THAT IT PRINTS, AND IT DOES NOT STAY
 //
-// # EVERY ARM IS BOUNDED, AND THAT IS THIS ROW'S OWN HISTORY
-//
-// The first version of this control ran all three arms inside one
-// function and reported at the end. On the hosted linux runner it
-// PANICKED AT THE 25-MINUTE TIMEOUT with 24m1s on the clock, in both of
-// the conditions the gate runs — and because the report came at the end,
-// it brought back nothing at all: not the arms that had finished, and
-// not the block point or the three read-side numbers from the probes
-// that sit after it in the same binary. A run spent, a leg's whole
-// measurement lost, and no answer to the question it was spent on.
-//
-// So: each arm is a SUBTEST that reports its own row the moment it has
-// one, the arms are ordered with the suspect one LAST, and each is given
-// a wall-clock budget after which it reports what it managed instead of
-// continuing. An arm that does not finish inside its budget is not a
-// failure of this control — it is a result, and on this leg it may be
-// the most interesting one available.
-//
-// # WHAT IT COSTS AND WHY IT DOES NOT STAY
-//
-// Sixty upload runs at about three seconds each, in each of the two
-// conditions the gate runs. That is minutes on one leg to answer a
-// question once. It is written as a row so that it runs where the answer
-// is — two of the three legs can only be reached by a run on those
-// runners, and the gate runs one command — and it is REMOVED in the
-// commit that records its table, the way the pin-size table before it
-// was taken by an instrument that is not in the tree either.
-//
-// IT REFUSES SO THAT IT PRINTS. A passing row's log output goes nowhere
-// a gate shows anybody, and a control whose whole product is a table is
-// a control that has to red to deliver it.
+// A passing row's log output goes nowhere a gate shows anybody, and a
+// control whose whole product is a table has to red to deliver it. It is
+// removed in the commit that records the table, the way the pin-size
+// table before it was taken by an instrument that is not in the tree
+// either.
 func TestProbeWhatTheReceiveEndIsWorth(t *testing.T) {
-	if probeLeg() != timing.Linux {
+	switch probeLeg() {
+	case timing.Windows, timing.Linux:
+	default:
 		// NOT A SKIP, because a skip nobody declared fails this
 		// repository's suite wrapper and a declared one would be a line
-		// in a manifest outliving a row that is meant to be temporary.
-		// This is a control about the leg whose receive pin HOLDS;
-		// asking it on a leg whose kernel moves that buffer would be
-		// varying something the kernel is also varying.
-		t.Logf("the receive-end control asks about a leg that holds a receive pin, "+
-			"and this is %s — nothing measured here", probeLeg())
+		// in a manifest outliving a row meant to be temporary.
+		t.Logf("the receive-end control varies one end while the other stays put, "+
+			"and on %s the kernel moves the end being varied — nothing measured here",
+			probeLeg())
 		return
 	}
 
@@ -847,117 +961,38 @@ func TestProbeWhatTheReceiveEndIsWorth(t *testing.T) {
 		receive int
 	}{
 		// LARGER THAN THE SEND BUFFER, which is the arm the registry's
-		// current record stands on: if the send end binds, this is the
-		// same measurement as the shipped one.
+		// own record stands closest to.
 		{"receive pinned at 256 KiB", 256 << 10},
-		// NOT PINNED AT ALL, which is what the leg that cannot hold a
-		// pin is actually running. A Linux receive buffer autotunes into
-		// the megabytes.
+		// NOT PINNED AT ALL, which is what a leg that cannot hold a pin
+		// is actually running.
 		{"receive unpinned", 0},
-		// SMALLER THAN THE SEND BUFFER, BY A FACTOR OF EIGHT. This is
-		// the discriminating arm and it is LAST on purpose: a receive
-		// buffer of this size is the one configuration this project has
-		// already watched a hosted linux runner fail to finish under,
-		// and an arm that may not return should not be standing in front
-		// of two that will.
+		// SMALLER THAN THE SEND BUFFER, BY A FACTOR OF EIGHT, and LAST
+		// on purpose: this is the configuration one hosted runner has
+		// already been watched failing to finish, and an arm that may
+		// not return should not stand in front of two that will.
 		{"receive pinned at 16 KiB", 16 << 10},
 	}
 
-	results := make([]armResult, 0, len(arms))
-	for _, arm := range arms {
-		var got armResult
-		t.Run(arm.name, func(t *testing.T) {
-			got = runReceiveArm(t, arm.name, arm.receive, pacing, path)
-		})
-		results = append(results, got)
-	}
-
-	table := fmt.Sprintf("the receive end's contribution on %s%s, send held at %d bytes, "+
+	table := fmt.Sprintf("what the receive end is worth on %s%s, send held at %d bytes, "+
 		"%d runs per arm:\n", probeLeg(), detectorNote(), pinnedBuffer, probeRuns)
-	complete := 0
-	var widest, narrowest time.Duration
-	for _, r := range results {
-		table += "  " + r.line() + "\n"
-		if !r.complete {
-			continue
-		}
-		if complete == 0 || r.worst > widest {
-			widest = r.worst
-		}
-		if complete == 0 || r.worst < narrowest {
-			narrowest = r.worst
-		}
-		complete++
+	for _, arm := range arms {
+		var row string
+		t.Run(arm.name, func(t *testing.T) {
+			row = runReceiveArm(t, arm.name, arm.receive, pacing, path)
+		})
+		table += "  " + row + "\n"
 	}
 
-	// THE LEG SPREAD IS DERIVED FROM THE RECORD rather than typed here,
-	// so the threshold cannot drift away from the numbers it is a
-	// threshold about. It is the difference between the widest and the
-	// narrowest worst gap this entry has measured across the three legs
-	// — the irreducible variation between kernels and runners — and it
-	// is the yardstick because a receive-end effect smaller than the
-	// difference between two operating systems is not a thing a shared
-	// window can be sized around.
-	spread, ok := legSpread(entry)
-	if !ok {
-		t.Fatal("this entry has fewer than two measured legs, so there is no observed " +
-			"leg spread to compare an arm spread against — the threshold this control " +
-			"turns on would be a number somebody chose")
-	}
-	if complete < len(arms) {
-		table += fmt.Sprintf("  %d of %d arms finished, so there is no arm spread to "+
-			"compare against the observed leg spread of %v — an arm that will not "+
-			"complete is a result about this runner rather than a missing number\n",
-			complete, len(arms), spread)
-	} else {
-		table += fmt.Sprintf("  arm spread %v against an observed leg spread of %v\n",
-			widest-narrowest, spread)
-	}
-
-	t.Errorf("%s\nTHIS ROW IS A CONTROL AND IT REFUSES SO THAT IT PRINTS. If the arm "+
-		"spread is UNDER the leg spread, the receive end is second-order here and the "+
-		"pair rule narrows to a send-end rule, with this table as the evidence and the "+
-		"one leg that cannot hold a receive pin recorded as disclosed fact. If it is "+
-		"OVER, the receive end binds and the pair rule stands, and that leg becomes a "+
-		"ruling somebody makes at a desk. Either way the window does not move to make "+
-		"a leg quiet. Record the table and delete this row.", table)
-}
-
-// armBudget is how long one arm of the control above may spend before it
-// reports what it has instead of continuing.
-//
-// FOUR MINUTES IS ABOUT FOUR TIMES WHAT AN ARM SHOULD COST — twenty runs
-// at roughly three seconds each — and it is a budget rather than an
-// expectation. The thing it exists for has already happened once: a
-// receive buffer at the small end took a hosted linux runner past
-// twenty-four minutes on this same fixture, and an unbounded arm turned
-// that into a binary-wide panic that reported nothing.
-const armBudget = 4 * time.Minute
-
-// armResult is one arm's outcome, including the case where the arm did
-// not finish — which is a result and not an absence.
-type armResult struct {
-	name     string
-	worst    time.Duration
-	gaps     int
-	runs     int
-	elapsed  time.Duration
-	complete bool
-	pin      *timing.PinnedPair
-}
-
-func (r armResult) line() string {
-	if !r.complete {
-		return fmt.Sprintf("%-28s DID NOT FINISH: %d of %d runs in %v, worst so far %v",
-			r.name, r.runs, probeRuns, r.elapsed.Round(time.Second), r.worst)
-	}
-	return fmt.Sprintf("%-28s worst gap %-14v (%d gaps, %d runs in %v)%s",
-		r.name, r.worst, r.gaps, r.runs, r.elapsed.Round(time.Second), pinNote(r.pin))
+	t.Errorf("%s\nTHIS ROW IS A CONTROL AND IT REFUSES SO THAT IT PRINTS. It is one "+
+		"leg's table and it is recorded as one leg's: what each end of this connection "+
+		"is worth is measured on the leg it is claimed about, and each leg's window "+
+		"comes from its own measurement under its own recorded condition. Record the "+
+		"table beside pinnedBuffer and delete this row.", table)
 }
 
 // runReceiveArm runs one arm and reports its row immediately, so that an
-// arm which never returns cannot take the arms before it down with it.
-func runReceiveArm(t *testing.T, name string, receive int, pacing uploadPacing, path string) armResult {
+// arm which runs long cannot take the arms before it down with it.
+func runReceiveArm(t *testing.T, name string, receive int, pacing uploadPacing, path string) string {
 	t.Helper()
 
 	store := newObjectStore(t, &deployJournal{}, receive)
@@ -970,41 +1005,35 @@ func runReceiveArm(t *testing.T, name string, receive int, pacing uploadPacing, 
 	client.watch(t, pacedPause)
 	store.pin.watch(t, pacedPause)
 
-	ctx, cancel := context.WithTimeout(context.Background(), armBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
 	defer cancel()
 
-	result := armResult{name: name, complete: true}
+	var worst time.Duration
+	gaps, completed := 0, 0
 	started := time.Now()
 	for run := 0; run < probeRuns; run++ {
-		gap, n, err := oneControlUploadRun(ctx, store.url, path, pacing.bodySize, transport)
+		gap, n, err := oneUploadRun(ctx, store.url, path, pacing.bodySize, transport)
 		transport.CloseIdleConnections()
-		result.gaps += n
-		if gap > result.worst {
-			result.worst = gap
+		gaps += n
+		if gap > worst {
+			worst = gap
 		}
 		if err != nil {
-			// THE BUDGET EXPIRING IS THE RESULT, not an error to report
-			// as a broken instrument. Anything else is a broken
-			// instrument, and the two are told apart rather than folded
-			// together.
 			if ctx.Err() == nil {
 				t.Fatalf("%s failed on run %d of %d: %v", name, run+1, probeRuns, err)
 			}
-			result.complete = false
 			break
 		}
-		result.runs++
+		completed++
 	}
-	result.elapsed = time.Since(started)
-	result.pin = observedPin(client, store.pin)
+	elapsed := time.Since(started)
 
 	// THE POSITIVE CONTROLS, PER ARM, because an arm that measured
 	// nothing reports the same silence as an arm that measured
-	// agreement — and agreement is the answer this control is most
-	// likely to reach. They run even on an arm that ran out of budget:
-	// the partial number it brings back is only worth reading if the
+	// agreement. They run on an arm that ran out of budget too: the
+	// partial number it brings back is only worth reading if the
 	// condition it was taken under was the one this arm is named for.
-	if result.gaps == 0 {
+	if gaps == 0 {
 		t.Fatalf("%s sampled no gap at all, so its number is about an instrument "+
 			"that stopped working rather than about a receive buffer", name)
 	}
@@ -1014,102 +1043,47 @@ func runReceiveArm(t *testing.T, name string, receive int, pacing uploadPacing, 
 			"control HOLDS STILL was not held at all", name)
 	}
 	if send.Err != "" || !send.Held() {
-		t.Fatalf("%s could not hold the send pin (asked %d, read back %d, %q). "+
-			"Every arm here varies the receive end against a fixed send end, and "+
-			"an arm whose fixed end moved is comparing two things at once.",
+		t.Fatalf("%s could not hold the send pin (asked %d, read back %d, %q). Every "+
+			"arm here varies the receive end against a fixed send end, and an arm "+
+			"whose fixed end moved is comparing two things at once.",
 			name, send.Requested, send.ReadBack, send.Err)
 	}
 	got, receiveUses := store.pin.record()
 	if receive == 0 {
-		// THE UNPINNED ARM'S OWN CONTROL, and it is the one an
-		// implementation is most likely to get wrong: "unpinned" has to
-		// mean the listener pinned NOTHING, not that it pinned something
-		// nobody looked at.
+		// THE UNPINNED ARM'S OWN CONTROL, and the one an implementation
+		// is most likely to get wrong: "unpinned" has to mean the
+		// listener pinned NOTHING, not that it pinned something nobody
+		// looked at.
 		if receiveUses != 0 {
-			t.Fatalf("the unpinned arm's listener pinned %d connection(s), so this "+
-				"arm is not the one it is named for", receiveUses)
+			t.Fatalf("the unpinned arm's listener pinned %d connection(s), so this arm "+
+				"is not the one it is named for", receiveUses)
 		}
 	} else {
 		if receiveUses == 0 {
-			t.Fatalf("%s never pinned a receive buffer on any connection, so this "+
-				"arm measured the same autotuning as the unpinned one", name)
+			t.Fatalf("%s never pinned a receive buffer on any connection, so this arm "+
+				"measured the same autotuning as the unpinned one", name)
 		}
 		if got.Err != "" || !got.Held() {
-			t.Fatalf("%s could not hold its receive pin (asked %d, read back %d, "+
-				"%q) — this is the leg that holds one, so an arm that could not is "+
-				"a measurement of something else",
+			t.Fatalf("%s could not hold its receive pin (asked %d, read back %d, %q) "+
+				"— this is a leg that holds one, so an arm that could not is a "+
+				"measurement of something else",
 				name, got.Requested, got.ReadBack, got.Err)
 		}
 	}
 
+	var row string
+	if completed < probeRuns {
+		row = fmt.Sprintf("%-28s did not complete on %s within %ds: %d of %d runs, "+
+			"worst so far %v", name, probeLeg(), int(elapsed.Seconds()), completed,
+			probeRuns, worst)
+	} else {
+		row = fmt.Sprintf("%-28s worst gap %-14v (%d gaps, %d runs in %v)%s",
+			name, worst, gaps, completed, elapsed.Round(time.Second),
+			pinNote(observedPin(client, store.pin)))
+	}
 	// REPORTED HERE AND NOT ONLY AT THE END. The version of this control
 	// that reported only at the end brought back nothing when one arm
 	// ran long, including the arms that had already finished.
-	t.Errorf("%s", result.line())
-	return result
-}
-
-// oneControlUploadRun is oneUploadRun with a context and an error return
-// instead of a fatal, so that an arm can be cut off at its budget rather
-// than taking the test binary down at the suite's timeout.
-func oneControlUploadRun(ctx context.Context, url, path string, size int64, transport *http.Transport) (time.Duration, int, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, 0, fmt.Errorf("opening the probe body: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	var last time.Time
-	var worst time.Duration
-	gaps := 0
-	body := &progressReader{r: file, progress: func(int) {
-		now := time.Now()
-		if !last.IsZero() {
-			if gap := now.Sub(last); gap > worst {
-				worst = gap
-			}
-			gaps++
-		}
-		last = now
-	}}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
-	if err != nil {
-		return worst, gaps, fmt.Errorf("building the request: %w", err)
-	}
-	req.ContentLength = size
-
-	resp, err := (&http.Client{Transport: transport}).Do(req)
-	if err != nil {
-		return worst, gaps, fmt.Errorf("the upload failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		return worst, gaps, fmt.Errorf("draining the response: %w", err)
-	}
-	return worst, gaps, nil
-}
-
-// legSpread is the difference between the widest and narrowest worst gap
-// an entry has measured, over the legs that have a measurement.
-func legSpread(entry *timing.Entry) (time.Duration, bool) {
-	var widest, narrowest time.Duration
-	measured := 0
-	for _, leg := range timing.Legs {
-		m := entry.Measurements[leg]
-		if !m.Measured() {
-			continue
-		}
-		if measured == 0 || m.WorstGap > widest {
-			widest = m.WorstGap
-		}
-		if measured == 0 || m.WorstGap < narrowest {
-			narrowest = m.WorstGap
-		}
-		measured++
-	}
-	if measured < 2 {
-		return 0, false
-	}
-	return widest - narrowest, true
+	t.Errorf("%s", row)
+	return row
 }

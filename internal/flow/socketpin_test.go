@@ -45,11 +45,51 @@ import (
 // HUNDRED runs — a third worse on two thirds of the evidence. And the
 // buffers this machine hands out when nobody asks, read off a live
 // socket while the mutation below was running, are 146,988 bytes
-// sending and 408,300 receiving: three times the pinned size on the end
-// that governs, on the leg with the NARROWEST autotuning range of the
-// three. A Linux receive buffer autotunes into the megabytes, so the
-// half-pinned measurement there would be further out still.
+// sending and 408,300 receiving: three times the pinned size, on the leg
+// with the NARROWEST autotuning range of the three. A Linux receive
+// buffer autotunes into the megabytes, so the half-pinned measurement
+// there would be further out still.
 //
+// # WHAT EACH END IS WORTH, MEASURED PER LEG
+//
+// A standing story about this connection said the pair rule was really a
+// SEND-end rule, and it mattered because one of the three legs cannot
+// hold a receive pin at all — the story is what would have let that
+// leg's numbers stand on a general claim. The answer is measured per leg
+// instead, because a claim about three legs made from one leg's
+// arithmetic is the thing this whole exercise exists to stop.
+//
+// THE CONTROL VARIES ONE END. The send buffer is held at the shipped
+// size on every arm, read back and confirmed held across every sample
+// taken while bodies moved, and only the receive end moves: larger than
+// the send buffer, absent, and smaller than it. Twenty runs an arm, both
+// of the conditions the gate runs, each arm bounded so that one that
+// will not finish is a ROW rather than a dead test binary.
+//
+// LINUX, 2026-09-10, send read back 262,144 and held:
+//
+//	receive pinned 256 KiB   178.092 ms (-race)   178.277 ms (plain)
+//	receive unpinned          77.047 ms (-race)    76.541 ms (plain)
+//	receive pinned 16 KiB    DID NOT COMPLETE: 2 of 20 runs in 4m0s,
+//	                         worst so far 880.727 ms (-race),
+//	                         880.185 ms (plain)
+//
+// That is one leg's table and it is written as one leg's. What it says
+// about THIS leg is that the receive end is not a detail here: two arms
+// whose receive buffers were both larger than the send buffer differ by
+// 101.0 ms under the detector and 101.7 ms without it, and the arm at
+// the small end does not finish at all. So linux is recorded with the
+// PAIR pinned, and its window comes from the gap measured under that
+// pair.
+//
+// WINDOWS is the leg where all three arms complete, and its table is
+// below at windowsReceiveControl.
+//
+// DARWIN is recorded differently and the difference is the honest one:
+// its send end is pinned and its receive end is UNPINNABLE, with the
+// autotuned range recorded rather than a size claimed. See the section
+// below and Pin.Sustained in internal/timing.
+
 // # A PIN IS A CLAIM, SO IT IS READ BACK
 //
 // setsockopt may clamp, round, double or silently ignore a request and
@@ -94,6 +134,17 @@ import (
 // reproduces neither the hang nor anything close to it (the whole
 // package in 130s). The MECHANISM on that runner is not identified, and
 // an unexplained collapse is not a thing to ship a leg on.
+//
+// # AND IT IS THE RECEIVE END, WHICH IS THE ONE NEW FACT ABOUT IT
+//
+// The control above pinned only the RECEIVE end at 16 KiB and left the
+// send end at the shipped size, and it reproduced: two runs in four
+// minutes against twenty in fifty-seven seconds at a quarter megabyte,
+// with a worst gap past 880 ms where the sibling arms sit at 77 and
+// 178. Whatever this is, it is not a property of the pair or of the send
+// end — it is the far end's receive buffer at the small end of the
+// range, on this one runner. That narrows the search for whoever picks
+// it up; it does not identify the mechanism, and it is not chased here.
 //
 // So the size is the one with evidence on all three legs rather than the
 // one the curve prefers on one of them. What it costs is real and
@@ -142,16 +193,22 @@ import (
 // off. Re-setting the option on every drain step was tried: it held the
 // floor and not the ceiling.
 //
-// That does NOT make the numbers above meaningless, and the table is why
-// — the gap tracks the requested size across a factor of thirty-two,
-// which it could not do if the pin governed nothing. It is the SEND end
-// that governs: the client can never have more than its own send buffer
-// outstanding, so it is released roughly once per that many bytes
-// drained, and the receive buffer matters only when it is the SMALLER of
-// the two. On darwin it never is. The record says so per leg through
-// Pin.Sustained rather than leaving the read-back to be read as a
-// duration; see socketPin.sample, and see the registry's own promise
-// paragraph for what is still open.
+// THAT USED TO BE FOLLOWED BY A REASON IT DID NOT MATTER — a general
+// claim that the send end governs everywhere — and a general claim is
+// exactly what this record does not make. What is recorded for this leg
+// is the CONDITION: the send end pinned and confirmed, the receive end
+// unpinnable, and the range the kernel actually ran it over while the
+// body moved. A window sized from a gap taken under that is a window
+// sized under a condition that is disclosed rather than claimed.
+//
+// The record's own per-leg numbers behave like a quantity measured under
+// a buffer that moves: this same probe reported 108, 113, 128, 135, 195,
+// 208 and 421 ms across seven passes on one machine in one day. What
+// follows from that is a ruling rather than a number — see the Pin field
+// in internal/timing — and the honest state is that this leg's
+// write-side figures are taken under a condition it does not hold still.
+// The record says so per leg through Pin.Sustained rather than leaving
+// the read-back to be read as a duration; see socketPin.sample.
 const pinnedBuffer = 128 << 10
 
 // socketPin is one END's record across a run: what was asked for, what
@@ -272,12 +329,25 @@ func pinBuffer(conn net.Conn, size, option int, into *socketPin) {
 		into.applied(size, 0, fmt.Errorf("controlling the socket to pin its buffer: %w", err))
 		return
 	}
+	// WATCHED EVEN WHEN THE REQUEST FAILED, and that is the refined stop
+	// rule's other half rather than tidiness. A receive pin that cannot
+	// be applied is RECORDED AS THE CONDITION and the measurement
+	// proceeds under it — so the thing that has to be recorded is what
+	// the buffer actually was over the body, which is precisely the
+	// number a socket nobody sampled cannot supply. Registering only on
+	// success meant a leg running in that mode reported an error and no
+	// range: the condition named and not measured.
+	//
+	// MEASURED, not reasoned: with the receive setsockopt made to fail,
+	// the row reddened on the sampler's own positive control — "was
+	// never sampled while a body was moving" — which is that control
+	// correctly reporting that the record would have been half a fact.
+	into.watching(tcp, option)
 	if opErr != nil {
 		into.applied(size, 0, opErr)
 		return
 	}
 	into.applied(size, readBack, nil)
-	into.watching(tcp, option)
 }
 
 // watching remembers a socket so it can be asked again later.
@@ -538,9 +608,33 @@ func observedPin(client, fixture *socketPin) *timing.PinnedPair {
 // reds here rather than running on:
 //
 //	send NOT PINNED (asking for a 131072-byte buffer: operation not
-//	permitted). This row's window is a margin over a gap measured under
-//	a stated pair of socket buffers, and this run does not have that
-//	pair. It cannot pay for the difference either …
+//	permitted). This row's window is a margin over a gap measured with
+//	this client's own send buffer held at a stated size …
+//
+// REQUIRED MUTATION FOR THE OTHER HALF OF THAT RULE, RUN 2026-09-10 IN
+// TWO PARTS, because the rule turns on what the RECORD says and one part
+// cannot show that.
+//
+//  1. Make the setsockopt fail on the RECEIVE end alone, on a leg whose
+//     record already says it cannot pin that end. The row does NOT stop:
+//     it logs the condition, measures under it, and PASSES. That is the
+//     refined rule working — the gate is green on that leg because its
+//     row is true, not because the rule bent.
+//  2. The same mutation with that leg's record edited to CLAIM a held
+//     receive pin. Now it reds, one function down in confirmPin:
+//     "records a gap on darwin measured with the store fixture's
+//     SO_RCVBUF pinned at 131072 bytes, and this run could not pin it at
+//     all". A leg that was pinning and has stopped is a different event
+//     from a leg that never could, and the record is the only thing that
+//     can tell them apart.
+//
+// AND THE FIRST PART REDDENED SOMEWHERE THE PREDICTION DID NOT NAME, on
+// the sampler's own positive control: "was never sampled while a body
+// was moving". pinBuffer registered a socket with the sampler only after
+// a successful request, so a leg running in the cannot-pin mode reported
+// an error and NO RANGE — the condition named and not measured, which is
+// exactly the half this record needs most. Fixed there rather than
+// waived here.
 //
 // REQUIRED MUTATION FOR THE SAMPLER'S CONTROL, RUN 2026-09-10: drop the
 // two watch calls from pinnedUploadRun. Both ends red, each saying it
@@ -559,34 +653,46 @@ func pinsWereApplied(t *testing.T, client, fixture *socketPin) {
 			"autotuning — the listener wrapper is not the one being accepted on")
 	}
 
-	// A LEG THAT CANNOT PIN IS A STOP, NOT A PAYER. The earlier
-	// ruling said an unpinned leg pays for its wider window in paced
-	// bytes; it cannot. pacingFor refuses above a window of about
-	// 2.47 seconds, because the body it would need exceeds this
-	// product's own 30 MB input limit — and that limit is the product's,
-	// not the test's, so it does not move for a measurement. Darwin's
-	// own autotuned gap was 434 ms, which asks for a 2.17 s window and
-	// is already inside a rounding error of the refusal.
+	// THE STOP RULE, AND IT IS ABOUT THE SEND END. A run stops when the
+	// SEND pin fails, because that is the end this repository sets on
+	// the socket it owns and a failure there means the condition the
+	// whole measurement is named for was never established.
 	//
-	// So there is nothing for a leg that cannot pin to pay WITH. The row
-	// stops, the operator sees which end failed and why, and whether
-	// that leg is recorded as unpinnable is a ruling a person makes at a
-	// desk — not a skip, and not a fixture that quietly grows until it
-	// trips a product limit somewhere else.
-	for _, end := range []struct {
-		which string
-		pin   *socketPin
-	}{{"send", client}, {"receive", fixture}} {
-		got, _ := end.pin.record()
-		if got.Err == "" {
-			continue
-		}
-		t.Fatalf("%s NOT PINNED (%s).\nThis row's window is a margin over a gap "+
-			"measured under a stated pair of socket buffers, and this run does not "+
-			"have that pair. It cannot pay for the difference either: a margin over "+
-			"an autotuned buffer needs a fixture past this client's own input limit, "+
-			"which is the product's number and not this suite's. Record the leg as "+
-			"unpinnable and rule on the row.", end.which, got.Err)
+	// A RECEIVE PIN THAT CANNOT BE APPLIED IS THE CONDITION, NOT A STOP,
+	// and that is a refinement rather than a loosening. One of the three
+	// legs has a kernel that moves an accepted socket's receive buffer
+	// whatever SO_RCVBUF asked for; there is nothing this suite can do
+	// about that, and there is nothing for that leg to pay with either —
+	// pacingFor refuses above a window of about 2.47 seconds, because
+	// the body it would need exceeds this product's own 30 MB input
+	// limit, and that limit is the product's rather than the test's. So
+	// the failure is RECORDED as the condition the gap was taken under,
+	// the range the buffer actually ran over is sampled and written down
+	// beside it, and the measurement proceeds. The gate is green on that
+	// leg because its row is TRUE as written, not because the rule bent
+	// for it.
+	//
+	// WHAT STILL REDS ON THE RECEIVE END is a pin the RECORD CLAIMS is
+	// held and this run could not hold — a leg that was pinning and has
+	// stopped, or two connections in one run disagreeing about a size the
+	// record says is one condition. That comparison needs the record, so
+	// it lives in confirmPin, one function down, where the record is in
+	// hand.
+	if got, _ := client.record(); got.Err != "" {
+		t.Fatalf("send NOT PINNED (%s).\nThis row's window is a margin over a gap "+
+			"measured with this client's own send buffer held at a stated size, and "+
+			"this run does not have it. That is the end this repository sets on a "+
+			"socket it owns, so a failure here is not a kernel's answer — it is the "+
+			"condition never having been established at all.", got.Err)
+	}
+	if got, _ := fixture.record(); got.Err != "" {
+		// LOGGED RATHER THAN SWALLOWED. A condition that is disclosed
+		// only in a package-level record is a condition nobody reading a
+		// run's output can see, and this is the line that says which of
+		// the two modes this particular run was in.
+		t.Logf("receive NOT PINNED (%s) — recorded as this leg's condition, and the "+
+			"gap below is measured under it rather than under a size anybody chose",
+			got.Err)
 	}
 
 	// THE SAMPLER'S OWN POSITIVE CONTROL. Everything the record now says

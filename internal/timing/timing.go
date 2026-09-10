@@ -87,16 +87,19 @@
 // not the ceiling.
 //
 // So on this leg the pair is one pinned end and one that is merely
-// asked. It is still a condition — the gap tracks the requested size
-// across a factor of thirty-two, which it could not do if the pin
-// governed nothing — because the SEND buffer is the binding one: a
-// client can never have more outstanding than its own send buffer holds,
-// so it is released about once per that many bytes drained, and the
-// receive buffer matters only when it is the SMALLER of the two. Here it
-// never is. Whether a leg whose receive end cannot be held should be
-// recorded as unpinnable under the rule at Measurement.Pin is a ruling
-// nobody has made; what this package now does is measure it rather than
-// assert the opposite.
+// asked, and that is what the entry records: send pinned and confirmed,
+// receive UNPINNABLE, with the range the kernel ran it over while the
+// body moved written down beside the gap. It is a disclosed condition
+// rather than a claimed one.
+//
+// # WHAT EACH END IS WORTH IS A PER-LEG QUESTION AND IS MEASURED AS ONE
+//
+// There is no general sentence here about which end governs. A control
+// in internal/flow holds the send end still and varies only the receive
+// end, and its tables are recorded beside the pin, per leg, because a
+// claim about three legs made from one leg's arithmetic is precisely
+// what this package exists to stop. Each leg's window comes from that
+// leg's own measurement, under that leg's own recorded condition.
 //
 // # This package is imported by test files only
 //
@@ -668,20 +671,27 @@ var UploadSlowIsNotStalled = Entry{
 		// code, reads back what it was asked for and HOLDS there across
 		// every sample.
 		//
-		// The SEND end does hold, and it is the binding one: a client can
-		// never have more outstanding than its own send buffer, so it is
-		// released about once per that many bytes drained, and the
-		// receive buffer only governs when it is the smaller of the two.
-		// Here it never is. That is why the gap still tracks the
-		// requested size across a factor of thirty-two.
+		// THE SEND END DOES HOLD, and this leg is recorded as exactly
+		// that: send pinned and confirmed across every sample, receive
+		// UNPINNABLE with the range written down. No sentence here says
+		// which end governs in general — that is measured per leg by the
+		// control whose tables sit beside pinnedBuffer in internal/flow,
+		// and this leg is not one the control can ask, because varying
+		// one end needs the other to stay where it is put.
 		//
-		// WHAT HAPPENS NEXT IS A RULING RATHER THAN A NUMBER. The rule at
-		// Pin says a leg that cannot pin STOPS: the row reds naming the
-		// end, and it does — intermittently, because the kernel's timing
-		// varies. Whether this leg is written off as unpinnable, whether
-		// the pair rule becomes a send-end rule, or whether the row
-		// changes shape here, is a decision for a person with this
-		// evidence in front of them.
+		// THE STOP RULE IS ABOUT THE SEND END AND ABOUT A PIN THAT WAS
+		// CLAIMED. A run stops when the send pin fails, or when two
+		// connections in one run read back different sizes for a pin the
+		// record claims is held. A receive pin that cannot be applied is
+		// the CONDITION on this leg and the measurement proceeds under
+		// it — which is why the gate is green here without the rule
+		// having bent: this leg's row is true as written.
+		//
+		// WHAT REMAINS A RULING RATHER THAN A NUMBER is what this leg's
+		// write-side figures are worth, given that the condition behind
+		// them moves across a factor of five while the body goes out.
+		// That is a decision for a person with the evidence in front of
+		// them, and the evidence is all here.
 		Darwin: {
 			WorstGap: 127606 * time.Microsecond, Runs: 140, Date: "2026-09-10",
 			BlockPoint: 819200,
@@ -785,20 +795,27 @@ var UploadWedgedStops = Entry{
 		// code, reads back what it was asked for and HOLDS there across
 		// every sample.
 		//
-		// The SEND end does hold, and it is the binding one: a client can
-		// never have more outstanding than its own send buffer, so it is
-		// released about once per that many bytes drained, and the
-		// receive buffer only governs when it is the smaller of the two.
-		// Here it never is. That is why the gap still tracks the
-		// requested size across a factor of thirty-two.
+		// THE SEND END DOES HOLD, and this leg is recorded as exactly
+		// that: send pinned and confirmed across every sample, receive
+		// UNPINNABLE with the range written down. No sentence here says
+		// which end governs in general — that is measured per leg by the
+		// control whose tables sit beside pinnedBuffer in internal/flow,
+		// and this leg is not one the control can ask, because varying
+		// one end needs the other to stay where it is put.
 		//
-		// WHAT HAPPENS NEXT IS A RULING RATHER THAN A NUMBER. The rule at
-		// Pin says a leg that cannot pin STOPS: the row reds naming the
-		// end, and it does — intermittently, because the kernel's timing
-		// varies. Whether this leg is written off as unpinnable, whether
-		// the pair rule becomes a send-end rule, or whether the row
-		// changes shape here, is a decision for a person with this
-		// evidence in front of them.
+		// THE STOP RULE IS ABOUT THE SEND END AND ABOUT A PIN THAT WAS
+		// CLAIMED. A run stops when the send pin fails, or when two
+		// connections in one run read back different sizes for a pin the
+		// record claims is held. A receive pin that cannot be applied is
+		// the CONDITION on this leg and the measurement proceeds under
+		// it — which is why the gate is green here without the rule
+		// having bent: this leg's row is true as written.
+		//
+		// WHAT REMAINS A RULING RATHER THAN A NUMBER is what this leg's
+		// write-side figures are worth, given that the condition behind
+		// them moves across a factor of five while the body goes out.
+		// That is a decision for a person with the evidence in front of
+		// them, and the evidence is all here.
 		Darwin: {
 			WorstGap: 127606 * time.Microsecond, Runs: 140, Date: "2026-09-10",
 			BlockPoint: 819200,
@@ -879,9 +896,15 @@ var UploadWedgedStops = Entry{
 // covers connection establishment as well as delivery. Nothing paces
 // this fixture, so there is no inter-frame gap to measure.
 var StreamGoesQuiet = Entry{
-	Name:   "StreamGoesQuiet",
-	Row:    "TestAStreamThatStopsTalkingIsReconnected",
-	Window: 100 * time.Millisecond,
+	Name: "StreamGoesQuiet",
+	Row:  "TestAStreamThatStopsTalkingIsReconnected",
+	// 55 ms: five times darwin's 10.2835 ms is 51.42 ms, and this is the
+	// next round number above it. It was 100 ms, chosen from nothing,
+	// and the measurement has brought it DOWN — which is worth saying,
+	// because every other move this task has made to a window has been
+	// upward and a reader could be forgiven for thinking that is what
+	// measuring a margin does.
+	Window: 55 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval from the watchdog being armed — before the connection is " +
 		"opened — to the first byte of the first frame arriving: connection " +
@@ -893,24 +916,57 @@ var StreamGoesQuiet = Entry{
 	// measure is the one from the watchdog being armed to the first byte
 	// arriving.
 	Pace: &FixturePace{Interval: 0, Flushes: 2},
-	// STRUCK, and pending a retake. Every read-side number in this
-	// package was taken while the fixtures were derived from the windows
-	// they were being measured against, which is the treadmill described
-	// at FixturePace. The fixtures are stated constants now, so the
-	// numbers are retaken under them and none of the old ones carries —
-	// including this entry's, whose own fixture did not change, because
-	// every pass of it shared a process with the two that did.
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes on each
+	// leg — one under the race detector and one without, which is the
+	// pair of conditions make ci runs this row in — and a THOUSAND runs
+	// per pass rather than twenty. The run count is this entry's alone
+	// and it is the round's other correction: this fixture writes its
+	// frames and goes silent, so it yields about one arrival per run,
+	// and twenty runs was a twenty-sample maximum sitting beside two
+	// fifteen-hundred-sample ones and being compared with them by the
+	// same five-times rule. A thousand costs eighty milliseconds.
+	//
+	// IT CHANGED THE ANSWER BY A FACTOR OF FIFTEEN, and only on the leg
+	// that decides. On this machine the larger sample found nothing new
+	// — 2,000 runs reported 1.605 ms against 1.879 ms over twenty — and
+	// that killed the hypothesis it was run on. On the gate's macOS
+	// runner the same change took the figure from 0.685 ms to 10.284 ms.
+	// The tail is real, it lives on a leg this machine is not, and
+	// twenty runs could not see it.
+	Measurements: map[Leg]Measurement{
+		// 746.761µs under the detector, 468.614µs without it.
+		Linux: {WorstGap: 746761 * time.Nanosecond, Runs: 2000, Date: "2026-09-10"},
+		// 10.2835ms under the detector, 1.033458ms without it — a factor
+		// of ten between the two conditions, and the detector is the one
+		// this window is sized against because it is the worse of two
+		// the gate actually runs.
+		Darwin: {WorstGap: 10283500 * time.Nanosecond, Runs: 2000, Date: "2026-09-10"},
+		// 2.2355ms under the detector, 2.0315ms without it.
+		Windows: {WorstGap: 2235500 * time.Nanosecond, Runs: 2000, Date: "2026-09-10"},
+	},
+	SetBy: Darwin,
 }
 
 // StreamKeepAlivesAreProofOfLife bounds the row that proves a comment
 // frame counts as traffic. The fixture sends nothing but keep-alives,
 // paced, for longer than the window.
 var StreamKeepAlivesAreProofOfLife = Entry{
-	Name:   "StreamKeepAlivesAreProofOfLife",
-	Row:    "TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered",
-	Window: 300 * time.Millisecond,
+	Name: "StreamKeepAlivesAreProofOfLife",
+	Row:  "TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered",
+	// 525 ms: five times darwin's 104.351792 ms is 521.76 ms. It was
+	// 300 ms, chosen from nothing.
+	//
+	// IT IS NOW WITHIN 75 ms OF WHAT ITS OWN ROW CAN AFFORD, and that is
+	// stated here rather than discovered later. The row buys its quiet
+	// with forty beats at fifteen milliseconds — six hundred
+	// milliseconds — and asserts that the quiet outlasts this window. A
+	// leg measuring past about 120 ms would push the window past what
+	// the fixture covers, and the row reds asking a person to lengthen
+	// the fixture deliberately. That is the stated-constant rule working
+	// rather than a trap: the fixture does not grow to meet the window
+	// on its own, because a fixture that follows the window is what
+	// stopped the read side converging in the first place.
+	Window: 525 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two flushes ARRIVING at this client at the " +
 		"fixture's keep-alive pace — the pace plus delivery plus scheduling, not " +
@@ -924,12 +980,36 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// is new is that the row and the probe beside it now read the SAME
 	// two, so the thing being measured is the thing that ships.
 	Pace: &FixturePace{Interval: 15 * time.Millisecond, Flushes: 41},
-	// STRUCK, and pending a retake — see the note at StreamGoesQuiet.
-	// The probe that takes this number now runs the row's own forty
-	// beats rather than twenty of its own, so the earlier figures are
-	// about a fixture half this length.
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes of twenty
+	// on each leg, one under the race detector and one without. The
+	// probe now runs the row's own forty beats rather than twenty of its
+	// own, so nothing from before that carries.
+	//
+	// # THE WORSE CONDITION IS NOT THE SAME ONE ON EVERY LEG
+	//
+	// Recorded per leg with both figures, because on this entry the
+	// detector is the FRIENDLIER condition on two of the three legs and
+	// a record naming only one of them would understate the margin the
+	// gate has to hold. Every number here is the worse of the two, which
+	// is what WorstGap means and what the probe's own paste hint asks
+	// for.
+	Measurements: map[Leg]Measurement{
+		// 15.692101ms under the detector, 15.475903ms without it.
+		Linux: {WorstGap: 15692101 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+		// 24.413541ms under the detector and 104.351792ms WITHOUT it, on
+		// the gate's macOS runner — and the fixture's own widest pause
+		// between two flushes in that pass was 104.142542ms, which says
+		// what the number is: the runner starved the server goroutine
+		// for a tenth of a second. This machine produced 92.959375ms in
+		// a pass of its own while a second suite ran beside it. A
+		// read-side window is a margin over how long the machine can
+		// stop the far end from writing, and this is the largest such
+		// pause anybody has measured here.
+		Darwin: {WorstGap: 104351792 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+		// 16.6084ms under the detector, 28.8472ms without it.
+		Windows: {WorstGap: 28847200 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+	},
+	SetBy: Darwin,
 }
 
 // StreamPartialLineIsNotAStall bounds the row that proves bytes arriving
@@ -973,9 +1053,12 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 // up and then runs out of string, so a computed count of forty-three
 // silently produced thirty.
 var StreamPartialLineIsNotAStall = Entry{
-	Name:   "StreamPartialLineIsNotAStall",
-	Row:    "TestBytesArrivingWithoutANewlineAreNotAStall",
-	Window: 400 * time.Millisecond,
+	Name: "StreamPartialLineIsNotAStall",
+	Row:  "TestBytesArrivingWithoutANewlineAreNotAStall",
+	// 230 ms: five times darwin's 45.707917 ms is 228.54 ms. It was 400,
+	// and before that 350, 250, 150 and 60 — the four moves before this
+	// one were a window chasing a fixture that was chasing it back.
+	Window: 230 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two partial writes of one frame ARRIVING at this " +
 		"client at the fixture's own pace — the pace plus delivery plus scheduling; " +
@@ -990,15 +1073,31 @@ var StreamPartialLineIsNotAStall = Entry{
 	// needs — a fixture sitting at the boundary is one that reds the
 	// first time a leg is slower.
 	Pace: &FixturePace{Interval: 20 * time.Millisecond, Flushes: 76},
-	// STRUCK, and this is the entry the striking is really about. Every
-	// figure that stood here was taken through a fixture whose length
-	// was computed from the window it was being measured against, so
-	// each one describes a delivery that no longer exists — and the
-	// numbers themselves are the evidence for the rule at FixturePace,
-	// since the window they produced moved three times inside one round
-	// without ever settling.
-	Measurements: map[Leg]Measurement{},
-	SetBy:        Darwin,
+	// TAKEN OFF THE GATE'S OWN RUNNERS, 2026-09-10: two passes of twenty
+	// on each leg, one under the race detector and one without. Every
+	// figure that stood here before was taken through a fixture whose
+	// length was computed from the window it was being measured against,
+	// so each one described a delivery that no longer exists.
+	//
+	// AND THE MARGIN CONVERGED IN ONE PASS UNDER THE STATED FIXTURE,
+	// which is the point of the change rather than a pleasant surprise.
+	// The window had gone 150 to 250 to 350 to 400 inside a single round
+	// while the fixture followed it; with the fixture stated, three legs
+	// measured once produced one number and it has not moved since.
+	Measurements: map[Leg]Measurement{
+		// 20.831652ms under the detector, 20.591115ms without it.
+		Linux: {WorstGap: 20831652 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+		// 45.707917ms under the detector, 43.846625ms without it. In the
+		// detector's pass the fixture's own widest gap between flushes
+		// was 59.916792ms — LARGER than the client's worst arrival gap,
+		// which is what it looks like when the runner starves the server
+		// goroutine between two writes the client then receives
+		// together.
+		Darwin: {WorstGap: 45707917 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+		// 21.4369ms under the detector, 26.8971ms without it.
+		Windows: {WorstGap: 26897100 * time.Nanosecond, Runs: 40, Date: "2026-09-10"},
+	},
+	SetBy: Darwin,
 }
 
 // Registry is every stall window in this repository, keyed by name.
