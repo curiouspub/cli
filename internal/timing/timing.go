@@ -311,6 +311,69 @@ func (p *PinnedPair) Held() bool {
 	return p != nil && p.Send.Held() && p.Receive.Held()
 }
 
+// FixturePace is the READ side's condition, and it is to a read-side
+// number what a pinned pair of socket buffers is to a write-side one:
+// the thing the gap was measured UNDER, stated where the gap is
+// recorded so that neither can be read without the other.
+//
+// # WHY IT HAD TO BE WRITTEN DOWN, AND WHY IT HAD TO BE A CONSTANT
+//
+// Measured across twenty-one passes in one round: the worst gap a
+// read-side probe reports IS the fixture's own widest pause between two
+// flushes, to within a millisecond, every time. That is the honest
+// answer to what a read-side window is a margin over — how long the
+// machine can starve the server goroutine — and it has a consequence
+// that took a round to see.
+//
+// While anything about the fixture is DERIVED FROM THE WINDOW, a margin
+// of five times a measured maximum cannot converge. The maximum of a
+// heavy-tailed sample grows with how long you look; a wider window made
+// the fixture deliver for longer; the longer delivery produced a larger
+// maximum; five times that asked for a wider window. It went from 150
+// to 250 to 350 to 400 milliseconds inside a single round on exactly
+// that treadmill, and every step of it was the rule being applied
+// correctly.
+//
+// AN INSTRUMENT THAT FOLLOWS ITS OWN READING CANNOT CONVERGE. So the
+// fixture's pace and the length of what it delivers are STATED
+// CONSTANTS in internal/flow, chosen once by a person, and this field is
+// where the registry records which constants a leg's number was taken
+// under. The window is then five times the measured maximum and stays
+// there, because nothing downstream of it moves the fixture.
+//
+// IT IS ON THE ENTRY AND NOT ON THE MEASUREMENT, which is the opposite
+// of where the write side's condition lives, and the difference is real
+// rather than tidy. A socket buffer is the KERNEL's answer to a request,
+// so it differs per leg and is recorded per leg. A fixture's pace is
+// this repository's own constant: it is the same number on all three
+// legs by construction, and three copies of one constant would be three
+// chances to disagree.
+type FixturePace struct {
+	// Interval is the pause the fixture leaves between two flushes.
+	//
+	// ZERO IS A STATEMENT AND NOT A BLANK. One of these fixtures writes
+	// its frames and then goes silent for the rest of the row, so there
+	// is no interval to state, and what its gap is made of is
+	// connection establishment plus delivery plus the scheduler. Which
+	// of the two a zero means is answered by the field below and by the
+	// entry's own Governs line; "nobody said" is a nil FixturePace, and
+	// the guard beside this package refuses that.
+	Interval time.Duration
+
+	// Flushes is how many times the fixture writes and flushes on the
+	// connection the gap is measured over.
+	//
+	// IT IS CHECKED AGAINST THE FIXTURE rather than transcribed beside
+	// it. The probe in internal/flow asserts that the script it is about
+	// to run has exactly this many frames at exactly the interval above,
+	// so a constant moved in one place and not the other reds at the
+	// measurement rather than sitting here describing a fixture that
+	// stopped existing. A record is pasted or it is retyped, and a
+	// retyped number is a number with a transcription error waiting in
+	// it.
+	Flushes int
+}
+
 // Measurement is one leg's evidence for one window: the worst gap
 // observed, over how many runs, on what date, and — on the write side —
 // the socket buffers it was observed under.
@@ -470,6 +533,15 @@ type Entry struct {
 	// through. A measurement may only be carried between rows on the
 	// same side, through the same reader.
 	Instrument string
+
+	// Pace is the fixture's stated pacing, and it is READ SIDE ONLY for
+	// the same reason Pin and BlockPoint are write side only: it is the
+	// condition that side's gap is measured under, and the other side
+	// has a different one. A read-side entry with no Pace is nobody
+	// saying, and the guard reds on it; a write-side entry carrying one
+	// is a condition with no bearing on the number beside it, and the
+	// guard reds on that too.
+	Pace *FixturePace
 
 	// Measurements is the per-leg evidence. A leg absent from this map,
 	// or present with a zero Measurement, is UNMEASURED and the guard
@@ -815,23 +887,21 @@ var StreamGoesQuiet = Entry{
 		"opened — to the first byte of the first frame arriving: connection " +
 		"establishment plus delivery plus whatever the scheduler adds",
 	Instrument: "streamProgress, internal/flow/stream.go",
-	Measurements: map[Leg]Measurement{
-		// Seven passes of twenty on 2026-09-10, all under the race
-		// detector and all with the whole package running: 1.380, 1.421,
-		// 1.859, 1.888, 1.942, 2.142, 2.362ms. Earlier passes in the same
-		// round are not folded in, because the pin the write side runs
-		// under changed and every pass here shared a process with it.
-		//
-		// Nothing paces this fixture, so what is measured is
-		// establishment plus delivery plus the scheduler, and the
-		// numbers sit where a loopback connection sits.
-		Darwin: {WorstGap: 2362 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
-		// Two passes of twenty on each hosted runner, 2026-09-10, one
-		// under the race detector and one without — nothing paces this fixture, so what is measured is establishment plus delivery plus the scheduler.
-		Linux:   {WorstGap: 1003 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
-		Windows: {WorstGap: 1122 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
-	},
-	SetBy: Darwin,
+	// NOTHING PACES THIS ONE, and the zero says so rather than leaving
+	// it out. The fixture writes its frames and then holds the
+	// connection open in silence, so the only interval there is to
+	// measure is the one from the watchdog being armed to the first byte
+	// arriving.
+	Pace: &FixturePace{Interval: 0, Flushes: 2},
+	// STRUCK, and pending a retake. Every read-side number in this
+	// package was taken while the fixtures were derived from the windows
+	// they were being measured against, which is the treadmill described
+	// at FixturePace. The fixtures are stated constants now, so the
+	// numbers are retaken under them and none of the old ones carries —
+	// including this entry's, whose own fixture did not change, because
+	// every pass of it shared a process with the two that did.
+	Measurements: map[Leg]Measurement{},
+	SetBy:        Darwin,
 }
 
 // StreamKeepAlivesAreProofOfLife bounds the row that proves a comment
@@ -847,32 +917,24 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		"the pace on its own; the first such interval runs from the watchdog " +
 		"being armed, which is before the connection is opened",
 	Instrument: "streamProgress, internal/flow/stream.go",
-	Measurements: map[Leg]Measurement{
-		// Seven passes of twenty on 2026-09-10, all under the race
-		// detector: 18.441, 18.486, 18.492, 18.520, 18.566, 18.629,
-		// 36.545ms. Six of the seven within one per cent of each other
-		// and the seventh at twice that, which is the shape of a
-		// scheduler rather than of a pace.
-		//
-		// AND THE WORST GAP WAS THE FIXTURE'S OWN PAUSE, to within
-		// forty-three microseconds: the probe reports both numbers side
-		// by side and across twenty-one passes they agree every time.
-		// What this window is a margin over, on the read side, is how
-		// long the machine can starve the server goroutine — not
-		// anything this client does. The row carries its own refusal for
-		// that case, and so does its sibling.
-		Darwin: {WorstGap: 36545 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
-		// Two passes of twenty on each hosted runner, 2026-09-10, one
-		// under the race detector and one without — the fixture's own keep-alive pace is 15 ms and every leg sees between 15 and 37.
-		Linux:   {WorstGap: 15783 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
-		Windows: {WorstGap: 17043 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
-	},
-	SetBy: Darwin,
+	// Forty comment frames and a terminating one, fifteen milliseconds
+	// apart — six hundred milliseconds of nothing but keep-alives, which
+	// is what makes the row able to see a client that stopped counting
+	// them as proof of life. Both numbers were already constants; what
+	// is new is that the row and the probe beside it now read the SAME
+	// two, so the thing being measured is the thing that ships.
+	Pace: &FixturePace{Interval: 15 * time.Millisecond, Flushes: 41},
+	// STRUCK, and pending a retake — see the note at StreamGoesQuiet.
+	// The probe that takes this number now runs the row's own forty
+	// beats rather than twenty of its own, so the earlier figures are
+	// about a fixture half this length.
+	Measurements: map[Leg]Measurement{},
+	SetBy:        Darwin,
 }
 
 // StreamPartialLineIsNotAStall bounds the row that proves bytes arriving
-// without a newline are progress. The fixture delivers one frame in ten
-// paced pieces.
+// without a newline are progress. The fixture delivers one frame in a
+// long sequence of paced one-byte pieces.
 //
 // IT IS NOT CARRIED FROM THE KEEP-ALIVE ROW even though both are read
 // side through the same reader, because the two fixtures pace
@@ -881,24 +943,35 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 // slower one, and carrying it would be the defect this package exists
 // against wearing a permitted name.
 //
-// THE WINDOW WAS 60 ms, THEN 150, AND IS NOW 250, EACH TIME BY
-// MEASUREMENT. Sixty was three times the fixture's 20 ms pacing knob —
-// the visible quantity, chosen the day after the rule against doing that
-// was written. A hundred and fifty came from a 24.96 ms measurement of
-// the governing one. This round retook it under the conditions the gate
-// actually runs — the race detector among them — and the worst over 140
-// runs is past 33 ms, which the 150 ms window cleared by 4.5 and the
-// rule asks 5 of.
+// # THIS WINDOW IS THE INSTANCE BEHIND THE RULE AT FixturePace
 //
-// THE FIXTURE IS NOW DERIVED rather than written down, and that is the
-// more useful half of the change. It has been a constant twice, ten
-// pieces and then twenty-eight, and both times somebody had to notice
-// that a wider window needed a longer line to spend three of itself on.
-// See partialLineFrames in internal/flow: it grows the line until
-// delivering it outlasts three and a half windows, and CHECKS what it
-// got rather than trusting a piece count — splitEvenly rounds the piece
-// size up and then runs out of string, so a computed count of
-// forty-three silently produced thirty.
+// It has been 60 ms, then 150, then 250, then 350, then 400 — the last
+// three inside a single round, each one arrived at by applying the
+// five-times rule correctly to a fresh measurement. Sixty was three
+// times the fixture's own pacing knob, the visible quantity rather than
+// the governing one, and that was the defect everyone knew about. The
+// three that followed were something else: the fixture's LENGTH was
+// computed from the window, so a wider window delivered for longer, a
+// longer delivery sampled more of a heavy tail, and the larger maximum
+// asked for a wider window again.
+//
+// AN INSTRUMENT THAT FOLLOWS ITS OWN READING CANNOT CONVERGE, and no
+// amount of care at any one step of that loop would have shown it. What
+// shows it is the sequence.
+//
+// So the fixture is a STATED CONSTANT — see partialLineDelivery and
+// partialLinePace in internal/flow — and the window is five times the
+// maximum measured under it. The row still asserts it spent three
+// windows on one line, and it now CHECKS that the stated fixture is
+// long enough to do so rather than growing one that is: a window past
+// what the constant can cover is a red that asks a person to raise the
+// constant deliberately, which is the same decision as before with the
+// feedback loop taken out of it.
+//
+// The helper still grows the line and CHECKS what it got rather than
+// computing a count and trusting it — splitEvenly rounds the piece size
+// up and then runs out of string, so a computed count of forty-three
+// silently produced thirty.
 var StreamPartialLineIsNotAStall = Entry{
 	Name:   "StreamPartialLineIsNotAStall",
 	Row:    "TestBytesArrivingWithoutANewlineAreNotAStall",
@@ -909,40 +982,23 @@ var StreamPartialLineIsNotAStall = Entry{
 		"the first such interval runs from the watchdog being armed, which is " +
 		"before the connection is opened",
 	Instrument: "streamProgress, internal/flow/stream.go",
-	Measurements: map[Leg]Measurement{
-		// Seven passes of twenty on 2026-09-10, under the race detector:
-		// 24.770, 26.558, 27.042, 28.588, 34.262, 47.461, 50.323ms.
-		//
-		// SEVEN AND NOT MORE, because this row's fixture is derived from
-		// its window and the window moved twice inside the round. Only
-		// the passes taken after the last move are evidence about the
-		// delivery that ships, which is the same rule that keeps a
-		// read-side number from being carried across two paces.
-		//
-		// EVERY ONE OF THESE GAPS EQUALLED THE FIXTURE'S OWN WIDEST
-		// PAUSE to within a millisecond, on all twenty-one passes taken
-		// across this round — the probe prints both numbers side by side
-		// and they agree every time. So what a read-side window is a
-		// margin over is how long the machine can starve the server
-		// goroutine, and not the length of the line. The row carries its
-		// own refusal for the case where that pause reaches the window.
-		//
-		// IT ALSO DOES NOT CONVERGE BY ITERATION, and that is worth
-		// saying out loud. The fixture follows the window and the worst
-		// of a heavy-tailed sample grows with how long you look, so
-		// raising the window to clear five times the last maximum
-		// lengthens the delivery and invites a larger one. It went 150
-		// to 250 to 350 to 400 inside this round on exactly that
-		// treadmill. Whether the read side's rule should be a percentile
-		// rather than a maximum, or the fixture should stop following
-		// the window, is a ruling this round is not entitled to make.
-		Darwin: {WorstGap: 50324 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
-		// Two passes of twenty on each hosted runner, 2026-09-10, one
-		// under the race detector and one without — the two hosted runners sit at half what this machine does, and the read-side gap is the fixture pausing rather than the client waiting.
-		Linux:   {WorstGap: 20917 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
-		Windows: {WorstGap: 21524 * time.Microsecond, Runs: 40, Date: "2026-09-10"},
-	},
-	SetBy: Darwin,
+	// Seventy-five one-byte pieces of a single log frame and a
+	// terminating frame, twenty milliseconds apart: a second and a half
+	// of delivery, STATED, so that it no longer follows the window it is
+	// a margin over. See partialLineDelivery in internal/flow for why
+	// the constant is generously above what the row's own assertion
+	// needs — a fixture sitting at the boundary is one that reds the
+	// first time a leg is slower.
+	Pace: &FixturePace{Interval: 20 * time.Millisecond, Flushes: 76},
+	// STRUCK, and this is the entry the striking is really about. Every
+	// figure that stood here was taken through a fixture whose length
+	// was computed from the window it was being measured against, so
+	// each one describes a delivery that no longer exists — and the
+	// numbers themselves are the evidence for the rule at FixturePace,
+	// since the window they produced moved three times inside one round
+	// without ever settling.
+	Measurements: map[Leg]Measurement{},
+	SetBy:        Darwin,
 }
 
 // Registry is every stall window in this repository, keyed by name.

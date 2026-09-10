@@ -371,6 +371,233 @@ func oneUploadRun(t *testing.T, url, path string, size int64, transport *http.Tr
 	return worst, gaps
 }
 
+// TestProbeWhatTheReceiveEndIsWorth is a CONTROL rather than a probe,
+// and it is here to answer one question that a record currently answers
+// with an assumption.
+//
+// # THE CLAIM UNDER TEST
+//
+// One of this project's three legs cannot hold a receive pin: macOS
+// ships its own receive autosizing, setting SO_RCVBUF does not clear it,
+// and an accepted socket's buffer is moved by the kernel while the body
+// is still going out — sampled between 131,072 and 646,336 against a
+// 131,072-byte request. The registry records that as an error on that
+// end, and the rule beside it says a leg that cannot pin STOPS.
+//
+// The argument for not stopping is that the pair rule is really a
+// SEND-end rule: a client can never have more outstanding than its own
+// send buffer holds, so its writes are released about once per that many
+// bytes drained, and the far end's receive buffer only governs when it
+// is the SMALLER of the two. On the leg in question it never is.
+//
+// THAT IS A PRIOR AND NOT A MEASUREMENT. It is a plausible story about a
+// mechanism, and this round has already killed two plausible stories
+// about this same connection. So it is measured, on the leg whose
+// receive pin demonstrably holds: the send end is held at the shipped
+// size and the receive end is varied across three arms — larger than the
+// send buffer, SMALLER than it, and not pinned at all — with everything
+// else identical.
+//
+// If the receive end were second-order the three arms would agree. If it
+// binds when it is smaller, the middle arm separates from the other two,
+// and the pair rule stands.
+//
+// # WHAT IT COSTS AND WHY IT DOES NOT STAY
+//
+// Sixty upload runs at about three seconds each, in each of the two
+// conditions the gate runs. That is minutes on one leg to answer a
+// question once. It is written as a row so that it runs where the answer
+// is — two of the three legs can only be reached by a run on those
+// runners, and the gate runs one command — and it is REMOVED in the
+// commit that records its table, the way the pin-size table before it
+// was taken by an instrument that is not in the tree either.
+//
+// IT REFUSES SO THAT IT PRINTS. A passing row's log output goes nowhere
+// a gate shows anybody, and a control whose whole product is a table is
+// a control that has to red to deliver it.
+func TestProbeWhatTheReceiveEndIsWorth(t *testing.T) {
+	if probeLeg() != timing.Linux {
+		// NOT A SKIP, because a skip nobody declared fails this
+		// repository's suite wrapper and a declared one would be a line
+		// in a manifest outliving a row that is meant to be temporary.
+		// This is a control about the leg whose receive pin HOLDS;
+		// asking it on a leg whose kernel moves that buffer would be
+		// varying something the kernel is also varying.
+		t.Logf("the receive-end control asks about a leg that holds a receive pin, "+
+			"and this is %s — nothing measured here", probeLeg())
+		return
+	}
+
+	entry := &timing.UploadSlowIsNotStalled
+	pacing := pacingFor(t, entry.Window)
+	path := probeBody(t, pacing.bodySize)
+
+	arms := []struct {
+		name    string
+		receive int
+	}{
+		// LARGER THAN THE SEND BUFFER, which is the arm the registry's
+		// current record stands on: if the send end binds, this is the
+		// same measurement as the shipped one.
+		{"receive pinned at 256 KiB", 256 << 10},
+		// SMALLER THAN THE SEND BUFFER. This is the discriminating arm.
+		// The story says a receive buffer governs only when it is the
+		// smaller of the two; here it is, by a factor of eight.
+		{"receive pinned at 16 KiB", 16 << 10},
+		// NOT PINNED AT ALL, which is what the leg that cannot hold a
+		// pin is actually running. A Linux receive buffer autotunes into
+		// the megabytes.
+		{"receive unpinned", 0},
+	}
+
+	type result struct {
+		name  string
+		worst time.Duration
+		gaps  int
+		pin   *timing.PinnedPair
+	}
+	results := make([]result, 0, len(arms))
+
+	for _, arm := range arms {
+		store := newObjectStore(t, &deployJournal{}, arm.receive)
+		store.readChunk = pacing.chunk
+		store.readPause = pacing.pause
+		store.pauseUntil = pacing.pacedBytes
+
+		transport, client := pinnedTransport(pinnedBuffer)
+		t.Cleanup(transport.CloseIdleConnections)
+		client.watch(t, pacedPause)
+		store.pin.watch(t, pacedPause)
+
+		var worst time.Duration
+		var gaps int
+		for run := 0; run < probeRuns; run++ {
+			gap, n := oneUploadRun(t, store.url, path, pacing.bodySize, transport)
+			transport.CloseIdleConnections()
+			gaps += n
+			if gap > worst {
+				worst = gap
+			}
+		}
+
+		// THE POSITIVE CONTROLS, PER ARM, because an arm that measured
+		// nothing reports the same silence as an arm that measured
+		// agreement — and agreement is the answer this control is most
+		// likely to reach.
+		if gaps == 0 {
+			t.Fatalf("%s sampled no gap at all, so its number is about an instrument "+
+				"that stopped working rather than about a receive buffer", arm.name)
+		}
+		send, sendUses := client.record()
+		if sendUses == 0 {
+			t.Fatalf("%s never pinned a send buffer on any connection, so the end this "+
+				"control HOLDS STILL was not held at all", arm.name)
+		}
+		if send.Err != "" || !send.Held() {
+			t.Fatalf("%s could not hold the send pin (asked %d, read back %d, %q). "+
+				"Every arm here varies the receive end against a fixed send end, and "+
+				"an arm whose fixed end moved is comparing two things at once.",
+				arm.name, send.Requested, send.ReadBack, send.Err)
+		}
+		receive, receiveUses := store.pin.record()
+		if arm.receive == 0 {
+			// THE UNPINNED ARM'S OWN CONTROL, and it is the one an
+			// implementation is most likely to get wrong: "unpinned" has
+			// to mean the listener pinned NOTHING, not that it pinned
+			// something nobody looked at.
+			if receiveUses != 0 {
+				t.Fatalf("the unpinned arm's listener pinned %d connection(s), so this "+
+					"arm is not the one it is named for", receiveUses)
+			}
+		} else {
+			if receiveUses == 0 {
+				t.Fatalf("%s never pinned a receive buffer on any connection, so this "+
+					"arm measured the same autotuning as the unpinned one", arm.name)
+			}
+			if receive.Err != "" || !receive.Held() {
+				t.Fatalf("%s could not hold its receive pin (asked %d, read back %d, "+
+					"%q) — this is the leg that holds one, so an arm that could not is "+
+					"a measurement of something else",
+					arm.name, receive.Requested, receive.ReadBack, receive.Err)
+			}
+		}
+
+		results = append(results, result{
+			name:  arm.name,
+			worst: worst,
+			gaps:  gaps,
+			pin:   observedPin(client, store.pin),
+		})
+	}
+
+	// THE LEG SPREAD IS DERIVED FROM THE RECORD rather than typed here,
+	// so the threshold cannot drift away from the numbers it is a
+	// threshold about. It is the difference between the widest and the
+	// narrowest worst gap this entry has measured across the three legs
+	// — the irreducible variation between kernels and runners — and it
+	// is the yardstick because a receive-end effect smaller than the
+	// difference between two operating systems is not a thing a shared
+	// window can be sized around.
+	spread, ok := legSpread(entry)
+	if !ok {
+		t.Fatal("this entry has fewer than two measured legs, so there is no observed " +
+			"leg spread to compare an arm spread against — the threshold this control " +
+			"turns on would be a number somebody chose")
+	}
+
+	var widest, narrowest time.Duration
+	for i, r := range results {
+		if i == 0 || r.worst > widest {
+			widest = r.worst
+		}
+		if i == 0 || r.worst < narrowest {
+			narrowest = r.worst
+		}
+	}
+	armSpread := widest - narrowest
+
+	table := fmt.Sprintf("the receive end's contribution on %s%s, send held at %d bytes, "+
+		"%d runs per arm:\n", probeLeg(), detectorNote(), pinnedBuffer, probeRuns)
+	for _, r := range results {
+		table += fmt.Sprintf("  %-28s worst gap %-14v (%d gaps)%s\n",
+			r.name, r.worst, r.gaps, pinNote(r.pin))
+	}
+	table += fmt.Sprintf("  arm spread %v against an observed leg spread of %v\n",
+		armSpread, spread)
+
+	t.Errorf("%s\nTHIS ROW IS A CONTROL AND IT REFUSES SO THAT IT PRINTS. If the arm "+
+		"spread is UNDER the leg spread, the receive end is second-order here and the "+
+		"pair rule narrows to a send-end rule, with this table as the evidence and the "+
+		"one leg that cannot hold a receive pin recorded as disclosed fact. If it is "+
+		"OVER, the receive end binds and the pair rule stands, and that leg becomes a "+
+		"ruling somebody makes at a desk. Either way the window does not move to make "+
+		"a leg quiet. Record the table and delete this row.", table)
+}
+
+// legSpread is the difference between the widest and narrowest worst gap
+// an entry has measured, over the legs that have a measurement.
+func legSpread(entry *timing.Entry) (time.Duration, bool) {
+	var widest, narrowest time.Duration
+	measured := 0
+	for _, leg := range timing.Legs {
+		m := entry.Measurements[leg]
+		if !m.Measured() {
+			continue
+		}
+		if measured == 0 || m.WorstGap > widest {
+			widest = m.WorstGap
+		}
+		if measured == 0 || m.WorstGap < narrowest {
+			narrowest = m.WorstGap
+		}
+		measured++
+	}
+	if measured < 2 {
+		return 0, false
+	}
+	return widest - narrowest, true
+}
+
 // TestProbeTheUploadBlockPoint measures the other half of the write
 // side: the bytes this client hands over before it stops making progress
 // at all.
@@ -546,17 +773,14 @@ func oneBlockPointRun(t *testing.T, url, path string, size int64, quiet time.Dur
 func TestProbeTheStreamStallGaps(t *testing.T) {
 	done := doneFrame(wire.StatusBuilt)
 
-	keepAlive := make([]string, 0, 21)
-	for i := 0; i < 20; i++ {
-		keepAlive = append(keepAlive, commentFrame())
-	}
-	keepAlive = append(keepAlive, done)
-
-	// THE ROW'S OWN FIXTURE, down to the derivation, for the reason the
-	// write-side probe takes its body from pacingFor: a probe measuring
-	// a cheaper shape answers a different question, and the two cannot
-	// drift apart if they call the same function.
-	partial := append(partialLineFrames(t, timing.StreamPartialLineIsNotAStall.Window), done)
+	// THE ROW'S OWN FIXTURE, built by the row's own helpers, for the
+	// reason the write-side probe takes its body from pacingFor: a probe
+	// measuring a cheaper shape answers a different question, and the
+	// two cannot drift apart if they call the same function. That is not
+	// a hypothetical here — this probe ran twenty keep-alive beats
+	// against a row that runs forty, and the number it produced was
+	// recorded as that row's margin.
+	partial := append(partialLineFrames(t), done)
 
 	cases := []struct {
 		entry  *timing.Entry
@@ -572,7 +796,7 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 		},
 		{
 			entry:  &timing.StreamKeepAlivesAreProofOfLife,
-			script: eventScript{frames: keepAlive, pace: 15 * time.Millisecond},
+			script: eventScript{frames: keepAliveFrames(), pace: keepAlivePace},
 		},
 		{
 			entry:  &timing.StreamPartialLineIsNotAStall,
@@ -582,6 +806,15 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.entry.Name, func(t *testing.T) {
+			// THE RECORDED PACE IS CHECKED AGAINST THE FIXTURE ABOUT TO
+			// RUN, which is what makes it a condition rather than a
+			// transcription. A read-side gap IS the fixture's own pause
+			// between flushes to within a millisecond, so an entry whose
+			// stated pace has drifted from the fixture is an entry whose
+			// number is about something else — and a number and its
+			// condition are one fact.
+			confirmPace(t, tc.entry, tc.script)
+
 			script := &deployScript{
 				journal:      &deployJournal{},
 				release:      make(chan struct{}),
@@ -620,6 +853,50 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			// had no bearing on the number beside it.
 			report(t, tc.entry, worst, nil, extra)
 		})
+	}
+}
+
+// confirmPace refuses when the fixture this probe is about to run is not
+// the one the registry says the number was measured under.
+//
+// IT IS THE READ SIDE'S confirmPin, and it exists for the same reason.
+// A window is five times a gap and a gap is that number only under one
+// condition; on the write side that condition is a pair of socket
+// buffers, and here it is the fixture's own pacing. The difference is
+// that this condition is a constant in this repository rather than a
+// kernel's answer, so it can be checked exactly rather than compared
+// within a band.
+//
+// A RECORD IS PASTED OR IT IS RETYPED. Two numbers written in two files
+// agree on the day they are written and not afterwards, and the failure
+// is silent: a fixture lengthened here and not recorded there leaves a
+// margin standing over a measurement of something shorter. This is the
+// one place the two meet.
+//
+// REQUIRED MUTATION, RUN 2026-09-10: set the keep-alive entry's Flushes
+// to one less than the fixture's. Reds here, naming both counts, and
+// nothing in internal/timing moves — which is the tie doing its job,
+// since the registry alone cannot see a fixture.
+func confirmPace(t *testing.T, entry *timing.Entry, script eventScript) {
+	t.Helper()
+	if entry.Pace == nil {
+		// The registry guard reds on this on the read side, alone and
+		// with a better message. Reporting it twice would make the
+		// second report look like a second problem.
+		return
+	}
+	if got := len(script.frames); got != entry.Pace.Flushes {
+		t.Errorf("timing.%s records a fixture of %d flushes and the fixture this probe "+
+			"is about to run has %d.\nA read-side gap is the fixture's own pause "+
+			"between flushes, so a number taken over a different fixture is a margin "+
+			"over a different quantity. Record what ships, or ship what is recorded.",
+			entry.Name, entry.Pace.Flushes, got)
+	}
+	if script.pace != entry.Pace.Interval {
+		t.Errorf("timing.%s records a fixture pace of %v and this probe is about to run "+
+			"one at %v.\nThe pace is most of the gap being measured, so these are two "+
+			"different measurements wearing one name.",
+			entry.Name, entry.Pace.Interval, script.pace)
 	}
 }
 

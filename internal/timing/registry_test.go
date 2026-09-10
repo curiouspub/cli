@@ -439,6 +439,155 @@ func TestABlockPointIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 	}
 }
 
+// paceProblem reports what is wrong with one entry's recorded fixture
+// pace, or "" when there is nothing wrong with it.
+//
+// It is a FUNCTION rather than a loop body for the reason carryProblem
+// and pinProblem are: the real registry is expected to be clean, so run
+// only over that, this check can be seen to say yes and never to say no.
+func paceProblem(entry *timing.Entry) string {
+	// THE TWO MECHANISMS ARE HELD APART IN THE DATA, in both directions,
+	// exactly as the block point and the socket-buffer pin are. On the
+	// write side the gap is a send buffer draining; no pace this
+	// repository states governs it, and one recorded there would be a
+	// fact about something else sitting where a reader will take it for
+	// evidence.
+	if entry.Side == timing.Write {
+		if entry.Pace != nil {
+			return "is a write-side window recording a fixture pace. The gap it bounds is " +
+				"the time for a send buffer to free space, which is set by the far end's " +
+				"drain rate and by socket buffers — a pace written here is a condition " +
+				"with no bearing on the number beside it"
+		}
+		return ""
+	}
+	// A READ-SIDE ENTRY WITH NO PACE AT ALL IS "NOBODY SAID", and that
+	// is a different thing from a fixture that does not pace. The gap a
+	// read-side window bounds IS the fixture's own pause between
+	// flushes, measured to within a millisecond across twenty-one
+	// passes, so an entry recording the gap and not the pace has
+	// recorded half of one fact.
+	if entry.Pace == nil {
+		return "is a read-side window with no record of the pace its gap was measured " +
+			"under. That is not 'unpaced', it is nobody saying: the gap a read-side " +
+			"window bounds is the fixture's own pause between flushes, so a number " +
+			"recorded without it is half a fact"
+	}
+	// A FIXTURE THAT NEVER FLUSHES PRODUCES NO ARRIVAL, so there is no
+	// interval for anything to be a margin over. Zero here is the shape
+	// a struct literal takes when somebody filled in the interval and
+	// stopped.
+	if entry.Pace.Flushes <= 0 {
+		return "records a fixture that flushes " + strconv.Itoa(entry.Pace.Flushes) +
+			" time(s), which delivers nothing — there is no interval between arrivals " +
+			"for this window to be a margin over"
+	}
+	if entry.Pace.Interval < 0 {
+		return "records a negative fixture pace, which is not a pause any fixture can take"
+	}
+	// AN UNPACED FIXTURE FLUSHES AND STOPS. A zero interval says the
+	// frames go out back to back, which is only a coherent description
+	// of a fixture small enough to have nothing to pace: a hundred
+	// frames at no interval is a fixture whose gaps are the scheduler
+	// alone, and calling that a stated pace would be recording a
+	// condition nobody chose.
+	if entry.Pace.Interval == 0 && entry.Pace.Flushes > unpacedFlushCeiling {
+		return "records a fixture with no pace at all and " + strconv.Itoa(entry.Pace.Flushes) +
+			" flushes. With no interval stated, every gap between those flushes is " +
+			"whatever the scheduler gave — which is a condition nobody chose rather " +
+			"than a pace anybody stated"
+	}
+	return ""
+}
+
+// unpacedFlushCeiling is how many flushes a fixture may make with no
+// stated interval before the zero stops being a statement and starts
+// being an omission. Small: an unpaced fixture in this suite writes
+// what it has and goes silent, which is two or three frames.
+const unpacedFlushCeiling = 4
+
+// TestAPaceIsRecordedOnTheReadSideAndNowhereElse, and it is the read
+// side's half of the condition rule.
+//
+// A window is five times a gap, and a gap is that number only under the
+// condition it was taken in. On the write side that condition is a pair
+// of socket buffers. On the read side it is the fixture's own pacing —
+// measured, across twenty-one passes of three probes, the client's worst
+// gap and the fixture's own widest pause between flushes agreed to
+// within a millisecond every time. So the pace is not context for the
+// number, it very nearly IS the number, and an entry that records one
+// without the other has recorded half a fact.
+//
+// WHAT IS REFUSED HERE IS SILENCE, in both directions: a read-side entry
+// with no pace cannot be told apart from one nobody thought about, and a
+// write-side entry carrying one is a condition with no bearing on the
+// figure beside it.
+//
+// REQUIRED MUTATIONS, RUN 2026-09-10:
+//
+//  1. Drop the Pace from StreamPartialLineIsNotAStall. Reds here alone,
+//     with the wording about nobody saying; the other two read entries
+//     stay green, and so does every write-side row.
+//  2. Give UploadSlowIsNotStalled a Pace. Reds here alone, on the write
+//     side. Both of these add exactly one failing row to this package's
+//     baseline, which is the "alone" being a measurement rather than a
+//     claim — the baseline itself is red on the legs still pending, and
+//     an extra red in a suite that already has one is easy to assert
+//     and easy to get wrong.
+//  3. Set StreamKeepAlivesAreProofOfLife's Flushes to one less than its
+//     fixture's. Reds in internal/flow rather than here, at the probe,
+//     which is the tie that makes this record checked rather than
+//     transcribed: "the registry records 40 flushes and this fixture
+//     makes 41".
+func TestAPaceIsRecordedOnTheReadSideAndNowhereElse(t *testing.T) {
+	for _, entry := range sortedEntries() {
+		if problem := paceProblem(entry); problem != "" {
+			t.Errorf("timing.%s %s", entry.Name, problem)
+		}
+	}
+
+	// THE BENCH, because a check run only over a clean registry can be
+	// seen to say yes and never to say no.
+	paced := &timing.FixturePace{Interval: 20 * time.Millisecond, Flushes: 76}
+	for _, tc := range []struct {
+		name  string
+		entry timing.Entry
+	}{
+		{"a read-side entry with a stated pace", timing.Entry{Side: timing.Read, Pace: paced}},
+		// The unpaced case is accepted ON PURPOSE: one fixture here
+		// writes two frames and then goes silent, so it has no interval
+		// to state, and a check that quietly required a positive one
+		// would refuse the only entry whose gap is establishment rather
+		// than pacing.
+		{"a read-side entry whose fixture does not pace", timing.Entry{Side: timing.Read,
+			Pace: &timing.FixturePace{Interval: 0, Flushes: 2}}},
+		{"a write-side entry with no pace", timing.Entry{Side: timing.Write}},
+	} {
+		if problem := paceProblem(&tc.entry); problem != "" {
+			t.Errorf("%s was refused: %s — this check refuses everything and its reds "+
+				"mean nothing", tc.name, problem)
+		}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		entry timing.Entry
+	}{
+		{"a read-side entry with no pace recorded at all", timing.Entry{Side: timing.Read}},
+		{"a write-side entry carrying a pace", timing.Entry{Side: timing.Write, Pace: paced}},
+		{"a fixture that flushes nothing", timing.Entry{Side: timing.Read,
+			Pace: &timing.FixturePace{Interval: 20 * time.Millisecond}}},
+		{"a negative pace", timing.Entry{Side: timing.Read,
+			Pace: &timing.FixturePace{Interval: -time.Millisecond, Flushes: 10}}},
+		{"a long fixture with no pace stated", timing.Entry{Side: timing.Read,
+			Pace: &timing.FixturePace{Interval: 0, Flushes: 40}}},
+	} {
+		if paceProblem(&tc.entry) == "" {
+			t.Errorf("%s was accepted, so this check says yes to everything", tc.name)
+		}
+	}
+}
+
 // TestEveryDeclaredEntryIsInTheRegistry reads this package's own source.
 //
 // The registry map is written out rather than assembled by reflection,
