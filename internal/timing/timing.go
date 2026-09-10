@@ -63,9 +63,17 @@
 // 107.8 ms at 64 KiB, 110-122 ms at 128 KiB, 139.5 ms at 512 KiB, and
 // 417.9-434.1 ms with no pin at all. The curve saturates above about
 // 64 KiB, where what is left is the fixture's own pacing quantum and the
-// scheduler; below it the buffer is the whole quantity. 16 KiB is what
-// this repository asks for, and the reasoning is at pinnedBuffer in
-// internal/flow.
+// scheduler; below it the buffer is the whole quantity.
+//
+// 128 KiB IS WHAT THIS REPOSITORY ASKS FOR, AND IT IS NOT WHAT THE
+// CURVE PREFERS. The table above is one leg's, and a second leg
+// overruled it: at 16 KiB the hosted linux runner stopped finishing the
+// upload probe at all, where 128 KiB completes it in about thirty
+// seconds there. A leg that reports nothing is worse than a leg that
+// reports a wider margin, so the size is the one with evidence on all
+// three legs rather than the one with the best number on one of them.
+// The reasoning, and the two hypotheses that were killed before it was
+// accepted, are at pinnedBuffer in internal/flow.
 //
 // # AND ON DARWIN ONLY ONE OF THE TWO ENDS STAYS WHERE IT IS PUT
 //
@@ -536,10 +544,24 @@ const MinimumMargin = 5
 // The three-window assertion costs paced bytes in proportion to the
 // window, so the row derives its fixture from this number rather than
 // carrying constants that agree with it only on the leg they were typed
-// on. See pacingFor in internal/flow. Measured at this window on darwin:
-// the two upload rows cost 7.80 s and 6.53 s under the race detector —
-// 14.33 s combined, against a ceiling of 15 s that was set before the
-// detector was in the gate — and 3.17 s and 1.89 s without it.
+// on. See pacingFor in internal/flow.
+//
+// # THE CEILING IS TWENTY SECONDS, AND IT INCLUDES THE RACE PASS
+//
+// It was fifteen, and fifteen was chosen while the gate ran these rows
+// once. The gate now runs them TWICE — plainly and under the race
+// detector — and the detector is not a rounding error here: measured on
+// darwin, 2026-09-10, on an idle machine, the two rows cost 7.74 s and
+// 6.01 s under it against 3.10 s and 1.52 s without. Thirteen point
+// seven five seconds combined under the detector, four point six two
+// without.
+//
+// So the ceiling restates rather than moves: it is the same intent —
+// the live suite's timeout has to exceed its row budgets, and that is a
+// number to see rather than to discover — applied to the condition the
+// gate actually runs. A ceiling that excluded the detector pass would
+// be a budget for a run nobody makes, and the number it reported would
+// be the friendlier of two figures with nothing beside it saying which.
 var UploadSlowIsNotStalled = Entry{
 	Name:   "UploadSlowIsNotStalled",
 	Row:    "TestASlowUploadIsNotAStalledOne",

@@ -43,6 +43,33 @@
 # digits.
 \bR-[0-9]+\b
 
+# An internal round identifier: the capital letter R, digits, a hyphen
+# and digits. The same shape as the cross-epic identifier further down,
+# and it has no ambiguous twin in Go source or in ordinary prose either,
+# so it is matched bare.
+#
+# IT WAS EARNED ON REAL INSTANCES RATHER THAN ADDED ON PRINCIPLE, and
+# the measurement is worth recording because the gap it closes was in
+# the checker rather than in anybody's discipline. The identifier one
+# entry up — the same letter with no digits before the hyphen — was
+# already here, so a reader of this file would have said the family was
+# covered. It was not: the variant with digits on both sides of the
+# hyphen slipped past, and it is the spelling a delivery round is
+# actually named with, which makes it the one most likely to reach a
+# commit subject.
+#
+# Measured 2026-09-10 against the surfaces of a real branch, before and
+# after this line existed. Fourteen published surfaces, the same range
+# both times. WITHOUT the line: clean. WITH it: seven findings on
+# exactly two of the fourteen, three of the seven on the two subjects
+# themselves and four in the bodies below them — messages already
+# written, already pushed, and green under every check this repository
+# had. The two commits were then rewritten, so the instances this
+# pattern was proved on are no longer reachable from any ref and cannot
+# become a self-test commit; see tools/surfacecheck's own note on why
+# an amended-away message can never be a control.
+\bR[0-9]+-[0-9]+\b
+
 # An internal epic identifier, spelled out as a word followed by a
 # number.
 (?i)\bEpic[ -]?[0-9]+\b
