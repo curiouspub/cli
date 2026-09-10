@@ -400,3 +400,186 @@ func declaredEntries(dir string) ([]string, error) {
 	sort.Strings(names)
 	return names, nil
 }
+
+// pinProblem reports what is wrong with one leg's recorded pin, or ""
+// when there is nothing wrong with it.
+//
+// It is a FUNCTION rather than a loop body for the reason carryProblem
+// is: the real registry is expected to be clean, so run only over that,
+// this check can show that it says yes and never that it can say no.
+func pinProblem(side timing.Side, leg timing.Leg, m timing.Measurement) string {
+	// THE TWO MECHANISMS ARE HELD APART IN THE DATA, exactly as the
+	// block point is. On the read side the gap is the far end's pacing
+	// plus the scheduler; nothing buffers on this client's behalf and no
+	// socket option it can set governs the number, so a pin recorded
+	// there is a condition with no bearing on the figure beside it.
+	if side == timing.Read {
+		if m.Pin != nil {
+			return "is a read-side window recording a socket-buffer pin on " + string(leg) +
+				". Nothing buffers on this client's behalf while it reads, so that " +
+				"condition has no bearing on the gap it sits beside"
+		}
+		return ""
+	}
+	// A WRITE-SIDE MEASUREMENT WITH NO PIN AT ALL IS "NOBODY SAID",
+	// which is a different thing from "this leg could not pin" and has
+	// to be refused rather than read as either. What the row costs on
+	// this leg follows from the answer: a pinned leg gets a narrow window
+	// and a cheap fixture, and a leg that cannot pin gets a margin over
+	// an autotuned buffer and pays for it in paced bytes.
+	if m.Pin == nil {
+		return "is a write-side window measured on " + string(leg) + " with no record " +
+			"of the socket buffers it was measured under. That is not 'unpinned', it " +
+			"is nobody saying: record the pin the run held, or record the failure " +
+			"that stopped it holding one"
+	}
+	for _, end := range []struct {
+		name string
+		pin  timing.Pin
+	}{{"send", m.Pin.Send}, {"receive", m.Pin.Receive}} {
+		if end.pin.Requested <= 0 {
+			return "records a " + end.name + " pin on " + string(leg) +
+				" that asked for nothing, so there is no request for the read-back to " +
+				"be an answer to"
+		}
+		if end.pin.Err != "" {
+			continue
+		}
+		if end.pin.ReadBack <= 0 {
+			return "records a " + end.name + " pin on " + string(leg) + " with no error " +
+				"and no read-back. Setting a socket option proves only that the request " +
+				"was made — a kernel may clamp it, round it, double it or ignore it and " +
+				"report none of that — so a pin nobody read back is a claim rather than " +
+				"a condition"
+		}
+	}
+	return ""
+}
+
+// TestAPinIsRecordedOnTheWriteSideAndNowhereElse, and it says which mode
+// the leg is in.
+//
+// A window is five times a gap, and a gap is that number only under the
+// condition it was taken in. On the write side that condition is a pair
+// of socket buffers, neither of which any kernel holds still on its own;
+// on the read side there is no such condition, and one written down
+// would be a fact about something else sitting where a reader will take
+// it for evidence.
+//
+// THE ERR CASE IS DATA AND NOT A DEFECT. A leg that tried to pin and
+// could not is a leg running in the other mode — a margin over an
+// autotuned buffer, which is wide, and a fixture large enough to spend
+// three of them — and the record is where that is said. What is refused
+// is silence: a write-side measurement with no pin at all cannot be told
+// apart from one nobody thought about.
+//
+// REQUIRED MUTATION, RUN 2026-09-10, three of them, each reverted:
+//
+//  1. Drop the Pin from UploadSlowIsNotStalled's darwin measurement.
+//     Reds alone, on that entry, with the wording about nobody saying;
+//     UploadWedgedStops stays green, because it carries its own copy.
+//  2. Give StreamGoesQuiet's darwin measurement a Pin. Reds alone, on
+//     the read side, and no write-side row moves.
+//  3. Blank the ReadBack on the send end of UploadSlowIsNotStalled's
+//     pin. Reds here — and ALSO, unpredicted, in internal/flow, where
+//     TestASlowUploadIsNotAStalledOne and TestProbeTheUploadStallGap
+//     both refuse: the live socket reads back 131072 and the record now
+//     says 0, so confirmPin reports a condition the record does not
+//     describe. That second red is the more valuable one, because it is
+//     the row saying it is running a margin over a number that was
+//     measured somewhere else.
+func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
+	for _, entry := range sortedEntries() {
+		for _, leg := range timing.Legs {
+			m := entry.Measurements[leg]
+			if !m.Measured() {
+				continue
+			}
+			if problem := pinProblem(entry.Side, leg, m); problem != "" {
+				t.Errorf("timing.%s %s", entry.Name, problem)
+			}
+		}
+	}
+
+	// THE BENCH, because a check run only over a clean registry can be
+	// seen to say yes and never to say no — and one that refused
+	// everything would make the loop above red rather than silent, which
+	// is a failure mode a reader would blame on the registry.
+	held := &timing.PinnedPair{
+		Send:    timing.Pin{Requested: 131072, ReadBack: 262144},
+		Receive: timing.Pin{Requested: 131072, ReadBack: 262144},
+	}
+	for _, tc := range []struct {
+		name string
+		side timing.Side
+		m    timing.Measurement
+	}{
+		// The doubled read-back is the accepted case ON PURPOSE: it is
+		// what a Linux kernel reports for an honoured request, and a
+		// check that quietly required ReadBack == Requested would refuse
+		// the one leg where the pin is most certainly applied.
+		{"a held pin whose read-back is doubled", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10", Pin: held}},
+		{"a write-side leg that could not pin", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{
+					Send:    timing.Pin{Requested: 131072, Err: "operation not permitted"},
+					Receive: timing.Pin{Requested: 131072, Err: "operation not permitted"},
+				}}},
+		{"a read-side leg with no pin", timing.Read,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10"}},
+	} {
+		if problem := pinProblem(tc.side, timing.Linux, tc.m); problem != "" {
+			t.Errorf("%s was refused: %s — this check refuses everything and its reds "+
+				"mean nothing", tc.name, problem)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		side timing.Side
+		m    timing.Measurement
+	}{
+		{"a write-side leg with no pin recorded at all", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10"}},
+		{"a read-side leg carrying a pin", timing.Read,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10", Pin: held}},
+		{"a pin that asked for nothing", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{Receive: timing.Pin{Requested: 131072, ReadBack: 131072}}}},
+		{"a pin with no error and no read-back", timing.Write,
+			timing.Measurement{WorstGap: time.Millisecond, Runs: 20, Date: "2026-09-10",
+				Pin: &timing.PinnedPair{
+					Send:    timing.Pin{Requested: 131072},
+					Receive: timing.Pin{Requested: 131072, ReadBack: 131072},
+				}}},
+	} {
+		if pinProblem(tc.side, timing.Linux, tc.m) == "" {
+			t.Errorf("%s was accepted", tc.name)
+		}
+	}
+
+	// AND Pinned MUST STILL BE ABLE TO SAY NO, because everything the
+	// rows do with the mode keys on it. A predicate satisfied by any
+	// non-nil pin would report a leg that failed to pin as one that
+	// succeeded, and that leg would then run the narrow window it has no
+	// evidence for.
+	for _, tc := range []struct {
+		name   string
+		m      timing.Measurement
+		pinned bool
+	}{
+		{"a pin held at both ends", timing.Measurement{Pin: held}, true},
+		{"no pin at all", timing.Measurement{}, false},
+		{"a pin whose send end errored", timing.Measurement{Pin: &timing.PinnedPair{
+			Send: timing.Pin{Requested: 1, Err: "no"}, Receive: held.Receive}}, false},
+		{"a pin whose receive end errored", timing.Measurement{Pin: &timing.PinnedPair{
+			Send: held.Send, Receive: timing.Pin{Requested: 1, Err: "no"}}}, false},
+		{"a pin with only one end at all", timing.Measurement{Pin: &timing.PinnedPair{
+			Send: held.Send}}, false},
+	} {
+		if got := tc.m.Pinned(); got != tc.pinned {
+			t.Errorf("%s reported Pinned() as %v, want %v", tc.name, got, tc.pinned)
+		}
+	}
+}
