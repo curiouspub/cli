@@ -90,16 +90,18 @@ func probeLeg() timing.Leg {
 // function so that the five rows cannot drift into saying different
 // things about the same situation.
 //
-// measured is the worst gap this run saw; extra is whatever else the
-// probe has to say, printed with it.
-func report(t *testing.T, entry *timing.Entry, measured time.Duration, extra string) {
+// measured is the worst gap this run saw; pin is the socket-buffer pair
+// it was measured under, or nil on the read side, where no buffer this
+// client can set governs the gap; extra is whatever else the probe has
+// to say, printed with it.
+func report(t *testing.T, entry *timing.Entry, measured time.Duration, pin *timing.PinnedPair, extra string) {
 	t.Helper()
 	leg := probeLeg()
 	recorded, known := entry.Measurements[leg], false
 	known = recorded.Measured()
 
-	t.Logf("%s on %s: worst gap %v over %d runs, against a %v window%s",
-		entry.Name, leg, measured, probeRuns, entry.Window, extra)
+	t.Logf("%s on %s: worst gap %v over %d runs, against a %v window%s%s",
+		entry.Name, leg, measured, probeRuns, entry.Window, pinNote(pin), extra)
 
 	if measured >= entry.Window {
 		t.Errorf("%s measured a worst gap of %v on %s, at or past its own %v "+
@@ -112,7 +114,7 @@ func report(t *testing.T, entry *timing.Entry, measured time.Duration, extra str
 	if !known {
 		t.Errorf("%s has no recorded measurement on %s, and this run measured a "+
 			"worst gap of %v over %d runs on %s.\nRecord it in internal/timing: "+
-			"{WorstGap: %v, Runs: %d, Date: \"%s\"%s} — or run this again and "+
+			"{WorstGap: %v, Runs: %d, Date: \"%s\"%s%s} — or run this again and "+
 			"record the worst across the passes, with the run count to match, "+
 			"which is how the darwin entry was taken. Nothing here may be seeded "+
 			"from another leg's number: the buffers and the scheduler belong to "+
@@ -120,9 +122,15 @@ func report(t *testing.T, entry *timing.Entry, measured time.Duration, extra str
 			entry.Name, leg, measured, probeRuns, time.Now().Format("2006-01-02"),
 			measured.Round(time.Microsecond), probeRuns,
 			time.Now().Format("2006-01-02"),
-			blockPointHint(entry))
+			blockPointHint(entry), pinLiteral(pin))
 		return
 	}
+
+	// A GAP AND THE CONDITION IT WAS TAKEN UNDER ARE ONE FACT. A record
+	// whose pin this run could not reproduce is a margin over a quantity
+	// this machine does not have, and comparing the two numbers while
+	// ignoring that would be the whole defect this round removed.
+	confirmPin(t, entry, leg, pin)
 
 	// A TENTH PAST THE RECORD, not a nanosecond past it. The record is a
 	// maximum over many runs, so an ordinary run beats it by a hair
@@ -145,6 +153,47 @@ func blockPointHint(entry *timing.Entry) string {
 		return ", BlockPoint: <see the block-point probe>"
 	}
 	return ""
+}
+
+// pinNote is the one-line rendering of the condition a gap was measured
+// under, for the log line a reader of a run's output sees.
+//
+// IT PRINTS THE READ-BACK BESIDE THE REQUEST, because on Linux the two
+// differ by construction — the kernel stores twice what was asked for
+// and hands the doubled number back — and a reader who sees only one of
+// them cannot tell that from a clamp.
+func pinNote(pin *timing.PinnedPair) string {
+	if pin == nil {
+		return ""
+	}
+	end := func(name string, p timing.Pin) string {
+		if p.Err != "" {
+			return fmt.Sprintf("%s NOT PINNED (%s)", name, p.Err)
+		}
+		return fmt.Sprintf("%s asked %d read back %d", name, p.Requested, p.ReadBack)
+	}
+	return fmt.Sprintf(" [%s; %s]", end("send", pin.Send), end("receive", pin.Receive))
+}
+
+// pinLiteral is the same fact as Go source, so an operator on a leg with
+// no record can paste the whole measurement in rather than transcribe
+// four numbers out of a log line.
+//
+// A RECORD IS PASTED OR IT IS RETYPED, and a retyped number is a number
+// with a transcription error waiting in it — which is exactly the kind
+// of defect a margin cannot show, because it goes on passing.
+func pinLiteral(pin *timing.PinnedPair) string {
+	if pin == nil {
+		return ""
+	}
+	end := func(p timing.Pin) string {
+		if p.Err != "" {
+			return fmt.Sprintf("{Requested: %d, Err: %q}", p.Requested, p.Err)
+		}
+		return fmt.Sprintf("{Requested: %d, ReadBack: %d}", p.Requested, p.ReadBack)
+	}
+	return fmt.Sprintf(", Pin: &timing.PinnedPair{Send: timing.Pin%s, Receive: timing.Pin%s}",
+		end(pin.Send), end(pin.Receive))
 }
 
 // -------------------------------------------------------------------
@@ -171,54 +220,47 @@ func probeBody(t *testing.T, size int64) string {
 	return path
 }
 
-// probeTransport is a transport of this probe's own. The upload takes
-// the API client's, which on loopback differs in nothing that touches a
-// socket buffer; what matters is that the body travels through
-// progressReader over a real connection.
-func probeTransport() *http.Transport {
-	return &http.Transport{DisableCompression: true}
-}
-
 // TestProbeTheUploadStallGap measures the write side's governing
 // quantity: the worst interval between two progress events while the far
-// end reads at a paced rate.
+// end reads at a paced rate, over a connection whose buffers are PINNED
+// at both ends.
 //
-// THE FIXTURE IS THE ROW'S OWN. The store consumes 64 KiB at a time with
-// a pause between, which is what makes the client's writes wait on
-// buffer space rather than on the network; the body is far past any
-// plausible block point, so the client really does block. A probe run
-// against a store that drained freely would measure the speed of
-// loopback and call it a margin.
+// THE FIXTURE IS THE ROW'S OWN, down to the derivation. The store
+// consumes one chunk at a time with a pause between, which is what makes
+// the client's writes wait on buffer space rather than on the network;
+// the body comes from pacingFor, the same call the row makes, so the two
+// cannot drift apart as the window moves.
+//
+// THE PIN IS THE ROW'S OWN TOO, and it has to be. A gap measured over an
+// autotuned socket is a margin over a number nobody chose: the same
+// probe over a warm connection reported 594 ms where a fresh one
+// reported 434 ms. Both ends are pinned, because a socket option has an
+// end — pin the sender alone and this measures the receiver's
+// autotuning.
 func TestProbeTheUploadStallGap(t *testing.T) {
-	// EVERY NUMBER HERE IS THE ROW'S OWN, and that is not tidiness. A
-	// cheaper shape was tried first — a third of the paced volume, one
-	// connection kept warm across the runs — and it answered a
-	// DIFFERENT question: gaps of 594ms against the row's 432ms, because
-	// a connection that has sustained throughput for twenty runs has an
-	// autotuned buffer the row never has. Reproduce the row or measure
-	// something else.
-	const (
-		bodySize   = 12 << 20
-		chunk      = 64 << 10
-		pause      = 25 * time.Millisecond
-		pacedBytes = 6 << 20
-	)
+	entry := &timing.UploadSlowIsNotStalled
+	pacing := pacingFor(t, entry.Window)
 
-	path := probeBody(t, bodySize)
+	path := probeBody(t, pacing.bodySize)
 	store := newObjectStore(t, &deployJournal{})
-	store.readChunk = chunk
-	store.readPause = pause
-	store.pauseUntil = pacedBytes
+	store.readChunk = pacing.chunk
+	store.readPause = pacing.pause
+	store.pauseUntil = pacing.pacedBytes
+	store.pinReceiveBuffer = pinnedBuffer
+
+	// ONE TRANSPORT ACROSS THE RUNS, AND A CONNECTION PER RUN. The row
+	// gets one connection, and the gap being measured is set by how much
+	// buffer this connection has — which is why every run closes its
+	// idle connection rather than reusing it. The transport is shared
+	// only so the send-buffer pin has one record to accumulate into; it
+	// dials afresh each time.
+	transport, client := pinnedTransport(pinnedBuffer)
+	t.Cleanup(transport.CloseIdleConnections)
 
 	var worst time.Duration
 	var samples int
 	for run := 0; run < probeRuns; run++ {
-		// A CONNECTION OF ITS OWN PER RUN, because the row gets one. The
-		// gap being measured is set by how much buffer the kernel has
-		// decided this connection deserves, and that grows with the
-		// connection's age.
-		transport := probeTransport()
-		gap, n := oneUploadRun(t, store.url, path, bodySize, transport)
+		gap, n := oneUploadRun(t, store.url, path, pacing.bodySize, transport)
 		transport.CloseIdleConnections()
 		samples += n
 		if gap > worst {
@@ -229,10 +271,12 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 		t.Fatal("the probe recorded no gap at all, so its silence is about an " +
 			"instrument that stopped working rather than about a fast machine")
 	}
+	pinsWereApplied(t, client, store.pin)
 
-	report(t, &timing.UploadSlowIsNotStalled, worst,
-		fmt.Sprintf(" (%d gaps sampled, store pacing %d KiB every %v)",
-			samples, chunk>>10, pause))
+	report(t, entry, worst, observedPin(client, store.pin),
+		fmt.Sprintf(" (%d gaps sampled, store pacing %d KiB every %v over a "+
+			"%d-byte body, %d of it paced)",
+			samples, pacing.chunk>>10, pacing.pause, pacing.bodySize, pacing.pacedBytes))
 }
 
 // oneUploadRun PUTs the body once and returns the worst interval between
@@ -294,30 +338,44 @@ func oneUploadRun(t *testing.T, url, path string, size int64, transport *http.Tr
 // about the rows rather than a number to tune, and this probe refuses
 // rather than reporting a block point it did not observe.
 func TestProbeTheUploadBlockPoint(t *testing.T) {
-	const (
-		bodySize = 12 << 20
-		// How long with no progress at all counts as blocked. It is far
-		// past any scheduling hiccup on loopback and far under the
-		// shipped stall window, so it can neither be tripped by noise
-		// nor confused with the behaviour under test.
-		quiet = 250 * time.Millisecond
-	)
+	// How long with no progress at all counts as blocked. It is far past
+	// any scheduling hiccup on loopback, and it is a QUANTITY OF ITS OWN
+	// rather than a fraction of the stall window: this probe answers
+	// "how many bytes fit", and tying its quiescence threshold to the
+	// window would make the answer move whenever the window did.
+	const quiet = 250 * time.Millisecond
+
+	// THE ROW'S OWN BODY, because the question this probe answers is
+	// whether the ROW's fixture is large enough to make the client
+	// block. A body of some other size would answer it about some other
+	// fixture.
+	bodySize := pacingFor(t, timing.UploadSlowIsNotStalled.Window).bodySize
 
 	path := probeBody(t, bodySize)
 	store := newObjectStore(t, &deployJournal{})
 	// The store reads a little and then stops, holding the request open.
 	// That is what makes the client fill the buffer and stay there.
 	store.stopReadingAfter = 64 << 10
+	store.pinReceiveBuffer = pinnedBuffer
+
+	transport, client := pinnedTransport(pinnedBuffer)
+	t.Cleanup(transport.CloseIdleConnections)
 
 	var worst int64
 	for run := 0; run < probeRuns; run++ {
-		transport := probeTransport()
 		at := oneBlockPointRun(t, store.url, path, bodySize, quiet, transport)
 		transport.CloseIdleConnections()
 		if at > worst {
 			worst = at
 		}
 	}
+	// THE BLOCK POINT IS A NUMBER UNDER A CONDITION TOO, so this probe
+	// runs under the same pin its gap-measuring sibling does. On darwin
+	// the two conditions measured 819,200 bytes pinned against 3,014,656
+	// autotuned — a factor of 3.7, and the reason a fixture sized
+	// against one of them says nothing about the other.
+	pinsWereApplied(t, client, store.pin)
+	t.Logf("block point measured under %s", pinNote(observedPin(client, store.pin)))
 
 	if worst >= bodySize {
 		t.Fatalf("the client handed over the whole %d-byte body without ever "+
@@ -479,7 +537,13 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			// measured the runner.
 			extra := fmt.Sprintf(" (%d arrivals sampled; the fixture's own widest "+
 				"gap between flushes was %v)", samples, script.widestGap())
-			report(t, tc.entry, worst, extra)
+			// NIL PIN, and that is the two mechanisms held apart rather
+			// than an omission. Nothing buffers on this client's behalf
+			// while it reads: the gap is the far end's pacing plus the
+			// scheduler, and no socket buffer this client can set
+			// governs it. A pin recorded here would be a condition that
+			// had no bearing on the number beside it.
+			report(t, tc.entry, worst, nil, extra)
 		})
 	}
 }

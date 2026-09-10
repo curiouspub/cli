@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curiouspub/cli/internal/api"
 	"github.com/curiouspub/cli/internal/pack"
 	"github.com/curiouspub/cli/internal/timing"
 	"github.com/curiouspub/cli/internal/ui"
@@ -1005,6 +1006,111 @@ func readFileString(t *testing.T, path string) string {
 	return string(data)
 }
 
+// The paced-store fixture, DERIVED FROM THE WINDOW rather than written
+// down beside it.
+// -------------------------------------------------------------------
+//
+// The slow-upload row asserts two things at once: that no gap between
+// two progress events reached the stall window, and that the upload as a
+// whole spent at least THREE windows — which is what makes it evidence
+// that a total deadline would have killed the same upload. The second
+// assertion is what costs money, and it costs money in proportion to the
+// window, because the only way to spend three windows uploading is to
+// pace three windows' worth of bytes past a store that drains at a fixed
+// rate.
+//
+// So the fixture cannot be a constant. A leg that can PIN its socket
+// buffers has a small window and pays almost nothing; a leg that cannot
+// has a window that is a margin over an autotuned buffer — large — and
+// its fixture has to grow to match, or the row silently stops proving
+// the second half. Written as constants, the two numbers agree with the
+// window on the leg they were typed on and nowhere else.
+
+const (
+	// pacedChunk and pacedPause are the store's drain rate: it swallows
+	// pacedChunk bytes, waits pacedPause, and goes again. They are the
+	// GOVERNING quantity's other half — the gap a window bounds is the
+	// time for the client's send buffer to free space, and space frees
+	// at exactly this rate.
+	pacedChunk = 64 << 10
+	pacedPause = 25 * time.Millisecond
+
+	// The paced phase is this many windows long, as a fraction, because
+	// the row asserts three and a fixture sized at exactly three would
+	// be one scheduling hiccup from failing its own assertion. The
+	// halves are real: 3.5 is a margin over the assertion, not over the
+	// gap, and the two margins are different questions.
+	pacedWindowsNum = 7
+	pacedWindowsDen = 2
+
+	// pacedFloor is the least paced volume this fixture is ever built
+	// with, however small the window gets, and it is a floor on the
+	// MECHANISM rather than on the duration. The client does not begin
+	// waiting on buffer space until it has handed over a block point's
+	// worth of body; a paced phase shorter than that is a phase the
+	// client spent writing into a buffer, and a row that never blocked
+	// measured nothing at all.
+	//
+	// Six MiB is roughly eight times the largest block point recorded in
+	// internal/timing — 819,200 bytes on darwin, with the buffers pinned
+	// — and it is deliberately not derived from that record. A floor
+	// exists to be right when the record is empty, which is the state of
+	// two of the three legs, and a floor computed from a leg's own
+	// measurement would be widest exactly where least is known.
+	pacedFloor = 6 << 20
+
+	// drainTail is how much body is left after the pacing stops, to be
+	// drained at full speed. It matters for the reason the paced phase
+	// does: once the client has handed its last byte to the socket there
+	// is no progress left to report, so a paced drain of a bufferful
+	// would look like a stall the client did not cause. It is a constant
+	// rather than a fraction because what it has to exceed is a socket
+	// buffer, which does not grow with the window.
+	drainTail = 6 << 20
+)
+
+// uploadPacing is one built fixture: the store's knobs, how much it
+// paces, and how large the body has to be.
+type uploadPacing struct {
+	chunk      int
+	pause      time.Duration
+	pacedBytes int64
+	bodySize   int64
+}
+
+// pacingFor derives the fixture from the stall window it has to spend
+// three of.
+//
+// IT REFUSES RATHER THAN TRUNCATES when the answer will not fit. A
+// window wide enough that the row proving it cannot be built inside this
+// product's own 30 MB input limit is a finding about the ROW — the two
+// constraints, a five-times margin and a transfer spanning three
+// windows, are set against each other by one kernel buffer — and the
+// answer to that is to say so, not to quietly build a smaller fixture
+// that passes by asserting less.
+func pacingFor(t *testing.T, window time.Duration) uploadPacing {
+	t.Helper()
+	paced := int64(pacedChunk) * pacedWindowsNum * window.Nanoseconds() /
+		(pacedWindowsDen * int64(pacedPause))
+	if paced < pacedFloor {
+		paced = pacedFloor
+	}
+	body := paced + drainTail
+	// The project carries a few hundred bytes of Astro scaffolding
+	// besides its payload, and the packed archive is measured against
+	// the same ceiling as the source, so the headroom is not decorative.
+	if body > wire.MaxSourceTotalBytes-(1<<20) {
+		t.Fatalf("a %v stall window needs %d bytes of paced body to spend three of "+
+			"itself, and a %d-byte body will not pass this client's own %d-byte input "+
+			"limit.\nThat is not a fixture to shrink: the window and the "+
+			"three-window assertion are set against each other by one kernel buffer, "+
+			"and which of them gives is a ruling. Pin the buffers on this leg, or "+
+			"rule on the row.",
+			window, paced, body, int64(wire.MaxSourceTotalBytes))
+	}
+	return uploadPacing{chunk: pacedChunk, pause: pacedPause, pacedBytes: paced, bodySize: body}
+}
+
 // bulkyProject is a deployable project whose archive is far larger than
 // any socket buffer between this client and a store on loopback.
 //
@@ -1014,20 +1120,30 @@ func readFileString(t *testing.T, path string) string {
 // would measure nothing — a "slow" store the client never waited for, and
 // a "wedged" one it had already finished with. The bytes the client hands
 // over before it blocks — the block point — is recorded per leg in
-// internal/timing, beside the window it governs; twelve MiB is comfortably
-// past every block point recorded there, in three files, each under the
-// per-file cap. The content is random so the packer's gzip cannot shrink
-// it back to nothing.
-func bulkyProject(t *testing.T) string {
+// internal/timing, beside the window it governs, and pacingFor above is
+// what keeps this fixture past it as the window moves. The content is
+// random so the packer's gzip cannot shrink it back to nothing.
+//
+// THE FILES ARE SPLIT AT FOUR MiB, which is under the per-file cap this
+// client enforces with room to spare. A fixture that tripped a local
+// limit would fail these rows at the pre-flight, before a byte reached a
+// socket, and the failure would name a limit rather than a window.
+func bulkyProject(t *testing.T, size int64) string {
 	t.Helper()
+	const perFile = 4 << 20
 	files := astroProject(nil)
 	src := rand.New(rand.NewSource(1))
-	for _, name := range []string{"public/a.bin", "public/b.bin", "public/c.bin"} {
-		buf := make([]byte, 4<<20)
+	for written := int64(0); written < size; {
+		n := int64(perFile)
+		if remaining := size - written; remaining < n {
+			n = remaining
+		}
+		buf := make([]byte, n)
 		if _, err := io.ReadFull(src, buf); err != nil {
 			t.Fatalf("building the bulky fixture: %v", err)
 		}
-		files[name] = buf
+		files[fmt.Sprintf("public/bulk-%d.bin", written/perFile)] = buf
+		written += n
 	}
 	return writeProject(t, files)
 }
@@ -1058,21 +1174,64 @@ func bulkyProject(t *testing.T) string {
 // report, so a paced drain of a bufferful would look like a stall the
 // client did not cause.
 //
+// THE SOCKETS ARE PINNED AT BOTH ENDS, and that is what makes the window
+// a margin over something. The gap this row must not reach is the time
+// for the kernel's send buffer to free space — a quantity neither end of
+// this connection holds still, because both kernels grow a connection's
+// buffers as it carries traffic. Measured rather than argued: the same
+// probe over a warm connection reported 594 ms where a fresh one
+// reported 434 ms. Pinned, the gap collapses to the store fixture's own
+// pacing quantum, which is a number this repository chose. The pin is a
+// PAIR because a socket option has an end and an upload has two of them;
+// it is read back because setsockopt may clamp, round, double or ignore
+// a request and says so nowhere. See socketpin_test.go.
+//
+// THE FIXTURE IS DERIVED FROM THE WINDOW rather than written here, so
+// the three-window assertion below keeps meaning what it says on a leg
+// whose window is not this one's. See pacingFor.
+//
 // REQUIRED MUTATION: stop resetting the watchdog on progress.
+//
+// REQUIRED MUTATION, RUN 2026-09-10, for the fixture derivation: make
+// pacingFor return its floor whatever the window is. Reds here and
+// nowhere else —
+//
+//	the upload took 2.701646834s, which is under 3s — this row did not
+//	spend long enough to prove a total deadline would have killed it
+//
+// — which is the assertion this row exists for going quiet by 300 ms.
+// The two other mutations this row carries, on the pin itself, are
+// recorded beside the functions they break in socketpin_test.go: they
+// red HERE, and the record belongs where the property lives.
 func TestASlowUploadIsNotAStalledOne(t *testing.T) {
+	// THE SELECTOR IS WRITTEN OUT rather than reached through a local
+	// holding the entry, because the guard in internal/timing resolves a
+	// stall window through exactly that shape and one level of local
+	// assigned once from it. A local entry with `stall := entry.Window`
+	// resolves to nothing and reds there — which is the guard working:
+	// an identifier that starts at a registry window and could be
+	// replaced by a number of somebody's own is the hole it exists to
+	// close.
 	stall := timing.UploadSlowIsNotStalled.Window
+	pacing := pacingFor(t, stall)
 
-	run := newDeployRun(t, bulkyProject(t)).scriptedLogin()
+	run := newDeployRun(t, bulkyProject(t, pacing.bodySize)).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.UploadStallTimeout = stall
-	run.store.readChunk = 64 << 10
-	run.store.readPause = 25 * time.Millisecond
-	run.store.pauseUntil = 6 << 20
+	client, fixture := run.pinnedUpload(pinnedBuffer)
+	run.store.readChunk = pacing.chunk
+	run.store.readPause = pacing.pause
+	run.store.pauseUntil = pacing.pacedBytes
 
 	started := time.Now()
 	handoff, err := run.run()
 	defer handoff.Release()
 	elapsed := time.Since(started)
+
+	// THE POSITIVE CONTROL FIRST, because everything below it is a claim
+	// about a pinned connection and a pin nobody applied is silent.
+	pinsWereApplied(t, client, fixture)
+	confirmPin(t, &timing.UploadSlowIsNotStalled, probeLeg(), observedPin(client, fixture))
 
 	if err != nil {
 		t.Fatalf("a slow but progressing upload was refused after %v: %v", elapsed, err)
@@ -1102,19 +1261,30 @@ func TestASlowUploadIsNotAStalledOne(t *testing.T) {
 // reached. It says the upload stalled, and it names the host so a person
 // can tell a wrong address from a quiet one.
 //
+// IT IS PINNED LIKE ITS SIBLING, for the reason the two share a window:
+// one number has to let a slow upload through and stop a wedged one, so
+// a wedged row running over an autotuned socket while the slow row runs
+// over a pinned one would be two rows proving two different things with
+// one constant.
+//
 // REQUIRED MUTATION: collapse the stall branch into the unreachable one.
 func TestAWedgedUploadStopsAndSaysSo(t *testing.T) {
+	// Written out for the reason its sibling's is, one row up.
 	stall := timing.UploadWedgedStops.Window
 
-	run := newDeployRun(t, bulkyProject(t)).scriptedLogin()
+	run := newDeployRun(t, bulkyProject(t, pacingFor(t, stall).bodySize)).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.UploadStallTimeout = stall
+	client, fixture := run.pinnedUpload(pinnedBuffer)
 	run.store.stopReadingAfter = 64 << 10
 
 	started := time.Now()
 	handoff, err := run.run()
 	defer handoff.Release()
 	elapsed := time.Since(started)
+
+	pinsWereApplied(t, client, fixture)
+	confirmPin(t, &timing.UploadWedgedStops, probeLeg(), observedPin(client, fixture))
 
 	if err == nil {
 		t.Fatal("a wedged upload was reported as a completed one")
@@ -1168,5 +1338,173 @@ func TestTheUnreachableCopyIsOnlyForAFailureThatSentNothing(t *testing.T) {
 	}
 	if strings.Contains(text, uploadStalled) {
 		t.Errorf("a dial failure rendered the stall copy:\n%s", text)
+	}
+}
+
+// -------------------------------------------------------------------
+// The upload's transport, and what production gets when nothing is
+// injected
+// -------------------------------------------------------------------
+
+// The names the syntax-tree half of the row below looks for, written out
+// for the reason the two at the top of this file are: a rename that
+// misses one produces a FAILURE rather than a silent pass.
+const (
+	uploadTransportFuncName = "uploadTransport"
+	uploadDepsTypeName      = "uploadDeps"
+)
+
+// TestTheUploadTakesTheAPIClientsOwnTransportWithNoSeamSupplied is the
+// price of DeployDeps.UploadTransport, paid in the round that added it.
+//
+// A SEAM IS A SECOND WAY FOR A VALUE TO ARRIVE, and the failure it
+// invites is not the injected value being wrong — a row supplies that one
+// and can watch it work. It is the DEFAULT quietly ceasing to be what
+// ships. Every row in this package injects a transport, so every row
+// would go on passing while production moved to a different one, and the
+// suite would be measuring the seam rather than the client.
+//
+// The thing that must not change is stated as IDENTITY rather than as
+// resemblance, because the near miss is a transport that looks right. A
+// bare &http.Transport{} has no Proxy, so it ignores HTTPS_PROXY,
+// HTTP_PROXY and NO_PROXY altogether — and it does so quietly, since a
+// direct connection still works on every dev machine and every CI runner
+// and fails only at the one desk behind a corporate proxy. So the row
+// asserts the pointer, and then asserts the property the pointer buys,
+// so that a client whose own transport had lost its proxy resolver could
+// not satisfy this by identity alone.
+//
+// THE THIRD HALF IS THE CALL SITE. The two checks above are about the
+// resolver, and a resolver nothing calls is a correct answer to a
+// question nobody asked. The syntax-tree pass reads deploy.go and
+// requires the upload's Transport field to be filled by that function,
+// so a later edit putting a fresh transport there is a red rather than a
+// discovery.
+//
+// THAT THE SEAM IS ACTUALLY THREADED is asserted next door and not here:
+// the two write-side rows fail outright if the transport they supply
+// never dialled, because the pin they hang everything on is applied in
+// its dialler. A seam that accepted a transport and dropped it would
+// leave those two rows unable to find a single pinned connection.
+//
+// REQUIRED MUTATIONS, ALL THREE RUN 2026-09-10, one per assertion,
+// because a row with three claims and one mutation has tested one claim:
+//
+//  1. Return a fresh &http.Transport{Proxy: http.ProxyFromEnvironment}
+//     from uploadTransport instead of the client's — the near miss, and
+//     the whole reason the check is identity. Reds on the first
+//     assertion with two pointers; every other row in the package stays
+//     green, which is the finding: they all inject.
+//  2. Drop the seam branch from uploadTransport, so a supplied transport
+//     is accepted and ignored. Reds on the third assertion AND in
+//     TestASlowUploadIsNotAStalledOne, which cannot find a single pinned
+//     connection — the seam being threaded is asserted over there, and
+//     this is what that looks like when it breaks.
+//  3. Fill the upload's Transport at the call site with authed
+//     .Transport() directly. The first three assertions stay green and
+//     the syntax-tree pass reds, naming the file and line: a resolver
+//     nothing calls is a correct answer to a question nobody asked.
+func TestTheUploadTakesTheAPIClientsOwnTransportWithNoSeamSupplied(t *testing.T) {
+	client, err := api.New("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("building an API client to ask what its transport is: %v", err)
+	}
+
+	if got := uploadTransport(DeployDeps{}, client); got != client.Transport() {
+		t.Errorf("with no transport supplied the upload got %p and the API client's "+
+			"own is %p. Production passes nothing here, so this is the transport "+
+			"every real upload travels over — and one that merely resembles the "+
+			"client's is how a proxy configuration, extra TLS trust material or any "+
+			"other connection-level setting silently stops applying to the largest "+
+			"request this program makes.", got, client.Transport())
+	}
+
+	// THE PROPERTY THE IDENTITY BUYS. Without this, a client whose own
+	// transport had lost its proxy resolver would satisfy the check
+	// above and the row would be asserting that two things are the same
+	// thing without any claim about what that thing is.
+	if client.Transport().Proxy == nil {
+		t.Error("the API client's transport no longer resolves a proxy from the " +
+			"environment, so the identity asserted above is an identity with " +
+			"something that ignores HTTPS_PROXY, HTTP_PROXY and NO_PROXY")
+	}
+
+	// AND IT MUST STILL SAY YES TO THE SEAM. A resolver that returned
+	// the client's transport unconditionally would pass everything above
+	// and make the seam a field nothing reads — which is the defect this
+	// round is meant to avoid rather than commit.
+	seam := &http.Transport{}
+	if got := uploadTransport(DeployDeps{UploadTransport: seam}, client); got != seam {
+		t.Errorf("a supplied transport was not the one resolved: got %p, want %p. "+
+			"A field that is accepted and not used is worse than one that was never "+
+			"accepted, because it reads as a working knob.", got, seam)
+	}
+
+	assertTheUploadFillsItsTransportFromTheResolver(t)
+}
+
+// assertTheUploadFillsItsTransportFromTheResolver reads deploy.go and
+// requires the upload's Transport field to be the resolver's answer.
+//
+// It is a function rather than more lines in the row above so the
+// failures read apart: one is "the resolver answers wrongly" and this is
+// "nothing asks the resolver", and an implementer looking at a red
+// should not have to work out which.
+func assertTheUploadFillsItsTransportFromTheResolver(t *testing.T) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "deploy.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing deploy.go: %v", err)
+	}
+
+	literals, fields := 0, 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		name, ok := lit.Type.(*ast.Ident)
+		if !ok || name.Name != uploadDepsTypeName {
+			return true
+		}
+		literals++
+		for _, element := range lit.Elts {
+			kv, ok := element.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok || key.Name != "Transport" {
+				continue
+			}
+			fields++
+			call, ok := kv.Value.(*ast.CallExpr)
+			if !ok {
+				t.Errorf("the upload's Transport at %s is not a call at all, so "+
+					"whatever production now uploads through, it is not what %s "+
+					"answers", fset.Position(kv.Pos()), uploadTransportFuncName)
+				continue
+			}
+			fn, ok := call.Fun.(*ast.Ident)
+			if !ok || fn.Name != uploadTransportFuncName {
+				t.Errorf("the upload's Transport at %s is filled by something other "+
+					"than %s, so the default this row asserts is no longer the "+
+					"default anything uses",
+					fset.Position(kv.Pos()), uploadTransportFuncName)
+			}
+		}
+		return true
+	})
+
+	if literals == 0 {
+		t.Fatalf("deploy.go builds no %s literal, so this row passed over nothing "+
+			"— the upload is now started somewhere else and its transport is "+
+			"unasserted", uploadDepsTypeName)
+	}
+	if fields == 0 {
+		t.Fatalf("no %s literal in deploy.go sets a Transport, so the upload takes "+
+			"the zero value and every connection-level setting the API client "+
+			"carries is being dropped", uploadDepsTypeName)
 	}
 }

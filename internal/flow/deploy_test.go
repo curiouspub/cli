@@ -672,6 +672,20 @@ type objectStore struct {
 	// outlive its row.
 	release chan struct{}
 
+	// pinReceiveBuffer, when non-zero, is the SO_RCVBUF every connection
+	// this store accepts is pinned to, and pin is what the kernel said
+	// when asked to. It is the FAR HALF of the write side's pin: the gap
+	// a write-side row bounds is the time for the client's send buffer
+	// to free space, and that is governed by how fast this end drains
+	// and how much window it advertises at a time. Pinning only the
+	// client would measure this end's autotuning; see socketpin_test.go.
+	//
+	// Zero pins nothing, which is what every row that is not about a
+	// stall window wants: the pin narrows a socket deliberately, and a
+	// row about an error message has no business running through one.
+	pinReceiveBuffer int
+	pin              *socketPin
+
 	srv *httptest.Server
 }
 
@@ -686,8 +700,15 @@ type storePut struct {
 
 func newObjectStore(t *testing.T, journal *deployJournal) *objectStore {
 	t.Helper()
-	store := &objectStore{journal: journal, release: make(chan struct{})}
-	srv := httptest.NewServer(store)
+	store := &objectStore{journal: journal, release: make(chan struct{}), pin: &socketPin{}}
+	// UNSTARTED, so the listener can be wrapped before anything is
+	// accepted on it. The wrapper is always in place and pins nothing
+	// until a row asks: the only moment a receive buffer can be set
+	// before the client starts filling it is the accept, which is over
+	// long before a handler is called.
+	srv := httptest.NewUnstartedServer(store)
+	srv.Listener = &pinnedListener{Listener: srv.Listener, store: store}
+	srv.Start()
 	store.srv = srv
 	// The release closes FIRST, so a wedged handler is let go before
 	// srv.Close waits for it. Cleanups run last-registered-first.
@@ -727,7 +748,25 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pauseUntil := s.pauseUntil
 	s.mu.Unlock()
 
-	var body []byte
+	// THE BODY IS COUNTED AND NOT KEPT. Nothing anywhere asks this
+	// fixture what the bytes WERE — only how many arrived — and the
+	// version that accumulated them appended up to a whole archive per
+	// request, reallocating and copying a growing slice while the paced
+	// loop was running, on the critical path of the very gap the
+	// write-side probe measures.
+	//
+	// THAT WAS A HYPOTHESIS ABOUT THE PROBE'S TAIL AND THE MEASUREMENT
+	// REFUTED IT, which is why it is written down here rather than
+	// claimed. On darwin, 2026-09-10, the worst gap over one hundred runs
+	// was 162.4 ms with the body counted against 221.3 ms with it kept —
+	// and the per-pass maxima on both sides of the change ran from about
+	// 105 ms to about 220 ms, so the two sets overlap almost completely
+	// and the difference is where each set's outlier happened to land.
+	// The allocator was not what sets this tail. The change stays because
+	// it removes a whole-archive allocation from every upload row in the
+	// suite and costs nothing; it is not the reason the number moved,
+	// because the number did not move.
+	var bodyLength int64
 	switch {
 	case stopAfter > 0:
 		_, _ = io.CopyN(io.Discard, r.Body, stopAfter)
@@ -738,7 +777,6 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var paced int64
 		for paced < pauseUntil {
 			n, err := io.ReadFull(r.Body, buf)
-			body = append(body, buf[:n]...)
 			paced += int64(n)
 			if err != nil {
 				break
@@ -749,10 +787,10 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		rest, _ := io.ReadAll(r.Body)
-		body = append(body, rest...)
+		rest, _ := io.Copy(io.Discard, r.Body)
+		bodyLength = paced + rest
 	default:
-		body, _ = io.ReadAll(r.Body)
+		bodyLength, _ = io.Copy(io.Discard, r.Body)
 	}
 
 	s.mu.Lock()
@@ -773,7 +811,7 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.puts = append(s.puts, storePut{
 		method:        r.Method,
 		contentLength: r.ContentLength,
-		bodyLength:    int64(len(body)),
+		bodyLength:    bodyLength,
 		authorization: r.Header.Get("Authorization"),
 		status:        status,
 	})
