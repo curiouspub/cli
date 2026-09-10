@@ -71,9 +71,9 @@
 //
 // A read-back is an INSTANT. Sampled repeatedly while a body was
 // actually moving — which is what Pin.Sustained records — the client's
-// SO_SNDBUF held at the requested 16,384 bytes across every one of
-// 16,562 samples, and the accepting end's SO_RCVBUF read back 16,384 and
-// was then run by the kernel between 16,384 and 539,008 across 16,560.
+// SO_SNDBUF held at the requested 131,072 bytes across every one of
+// 16,653 samples, and the accepting end's SO_RCVBUF read back 131,072
+// and was then run by the kernel up to 646,336 across 16,649.
 // macOS ships net.inet.tcp.doautorcvbuf=1 and setting SO_RCVBUF does not
 // clear it; re-setting the option on every drain step held the floor and
 // not the ceiling.
@@ -195,11 +195,12 @@ type Pin struct {
 	//
 	// This field was added in round 3 because the difference turned out
 	// to be the whole measurement on one of the three legs. Measured on
-	// darwin, 2026-09-10, with a 16,384-byte request at both ends: the
-	// client's SO_SNDBUF read back 16,384 and was still 16,384 when the
-	// last byte went out, and the accepting end's SO_RCVBUF read back
-	// 16,384 and was between 331,996 and 539,008 for every sample taken
-	// after the first two hundred milliseconds. macOS ships
+	// darwin, 2026-09-10: the client's SO_SNDBUF read back what it asked
+	// for and was still that when the last byte went out, and the
+	// accepting end's SO_RCVBUF read back the same figure and was
+	// several times it for every sample taken after the first two
+	// hundred milliseconds — up to 646,336 against a 131,072 request,
+	// and up to 539,008 against a 16,384 one. macOS ships
 	// net.inet.tcp.doautorcvbuf=1 and setting SO_RCVBUF does not turn it
 	// off: re-setting the option on every drain step held the FLOOR at
 	// the requested size and moved the ceiling not at all.
@@ -501,9 +502,9 @@ const MinimumMargin = 5
 // detector. An 800 ms window is 6.34 times it.
 //
 // The condition is named because a gap is only that number under one:
-// both ends asked for a 16,384-byte socket buffer, the client's held
+// both ends asked for a 131,072-byte socket buffer, the client's held
 // there for every sample taken while a body was moving, and the store
-// fixture's was moved by the kernel up to 539,008 — see the package
+// fixture's was moved by the kernel up to 646,336 — see the package
 // comment, and Pin.Sustained. Every connection is fresh: the row opens
 // one, and a connection kept warm across runs answered a different
 // question by 160 ms when round 1 tried it.
@@ -550,13 +551,13 @@ var UploadSlowIsNotStalled = Entry{
 		"while both ends' buffers are pinned",
 	Instrument: "progressReader, internal/flow/upload.go",
 	Measurements: map[Leg]Measurement{
-		// ELEVEN PASSES OF TWENTY on 2026-09-10, every one under the
-		// race detector because that is one of the two conditions the
-		// gate runs this row in and it is the worse of them; several
-		// with the whole module's suite running in parallel. Worst
-		// 126.162ms, rounded up to the microsecond the way the probe's
-		// own paste hint rounds it. The rest sit between 35 and 55, so
-		// the tail is the machine rather than the buffer.
+		// SEVEN PASSES OF TWENTY on 2026-09-10, every one under the race
+		// detector because that is one of the two conditions the gate
+		// runs this row in and it is the worse of them, and every one
+		// with the whole package running: 108.885, 109.099, 109.526,
+		// 110.223, 112.683, 115.266, 127.605ms. Six of the seven inside
+		// six per cent of each other, which is what a quantity that is
+		// mostly a fixture's own pacing quantum looks like.
 		//
 		// # THE RECEIVE END CARRIES AN ERROR, AND IT IS NOT A FAILURE OF THIS CODE
 		//
@@ -566,11 +567,11 @@ var UploadSlowIsNotStalled = Entry{
 		// socket's buffer on its own — between the setsockopt and the
 		// getsockopt even when they are adjacent syscalls, and
 		// continuously afterwards. Measured three ways: two connections
-		// in one run read back 16,384 and 277,696; sampling the buffer
-		// while a body moved found it between 261,376 and 539,008
-		// against a request of 16,384; and re-setting the option on
-		// every drain step held the floor and not the ceiling. Windows,
-		// on the same code, reads back 16,384 and HOLDS there across
+		// in one run read back different sizes; sampling the buffer while
+		// a body moved found it between 131,072 and 646,336 against a
+		// request of 131,072; and re-setting the option on every drain
+		// step held the floor and not the ceiling. Windows, on the same
+		// code, reads back what it was asked for and HOLDS there across
 		// every sample.
 		//
 		// The SEND end does hold, and it is the binding one: a client can
@@ -580,25 +581,25 @@ var UploadSlowIsNotStalled = Entry{
 		// Here it never is. That is why the gap still tracks the
 		// requested size across a factor of thirty-two.
 		//
-		// WHAT HAPPENS NEXT IS A RULING RATHER THAN A NUMBER. The rule
-		// at Pin says a leg that cannot pin STOPS: the row reds naming
-		// the end, and it does — intermittently, because the kernel's
-		// timing varies. Whether this leg is written off as unpinnable,
-		// whether the pair rule becomes a send-end rule, or whether the
-		// row changes shape here, is a decision for a person with this
+		// WHAT HAPPENS NEXT IS A RULING RATHER THAN A NUMBER. The rule at
+		// Pin says a leg that cannot pin STOPS: the row reds naming the
+		// end, and it does — intermittently, because the kernel's timing
+		// varies. Whether this leg is written off as unpinnable, whether
+		// the pair rule becomes a send-end rule, or whether the row
+		// changes shape here, is a decision for a person with this
 		// evidence in front of them.
 		Darwin: {
-			WorstGap: 126162 * time.Microsecond, Runs: 220, Date: "2026-09-10",
-			BlockPoint: 622592,
+			WorstGap: 127606 * time.Microsecond, Runs: 140, Date: "2026-09-10",
+			BlockPoint: 819200,
 			Pin: &PinnedPair{
-				Send: Pin{Requested: 16384, ReadBack: 16384,
-					Sustained: &Sustained{Samples: 16562, Low: 16384, High: 16384}},
-				Receive: Pin{Requested: 16384,
+				Send: Pin{Requested: 131072, ReadBack: 131072,
+					Sustained: &Sustained{Samples: 16653, Low: 131072, High: 131072}},
+				Receive: Pin{Requested: 131072,
 					Err: "this kernel's own receive autosizing moves an accepted socket's " +
-						"buffer whatever SO_RCVBUF asked for: two connections in one run " +
-						"read back 16384 and 277696, and sampling during a body found it " +
-						"between 261376 and 539008",
-					Sustained: &Sustained{Samples: 16560, Low: 16384, High: 539008}},
+						"buffer whatever SO_RCVBUF asked for: sampling during a body found " +
+						"it between 131072 and 646336, and two connections in one run can " +
+						"read back different sizes",
+					Sustained: &Sustained{Samples: 16649, Low: 131072, High: 646336}},
 			},
 		},
 	},
@@ -626,13 +627,13 @@ var UploadWedgedStops = Entry{
 		"the same pin",
 	Instrument: "progressReader, internal/flow/upload.go",
 	Measurements: map[Leg]Measurement{
-		// ELEVEN PASSES OF TWENTY on 2026-09-10, every one under the
-		// race detector because that is one of the two conditions the
-		// gate runs this row in and it is the worse of them; several
-		// with the whole module's suite running in parallel. Worst
-		// 126.162ms, rounded up to the microsecond the way the probe's
-		// own paste hint rounds it. The rest sit between 35 and 55, so
-		// the tail is the machine rather than the buffer.
+		// SEVEN PASSES OF TWENTY on 2026-09-10, every one under the race
+		// detector because that is one of the two conditions the gate
+		// runs this row in and it is the worse of them, and every one
+		// with the whole package running: 108.885, 109.099, 109.526,
+		// 110.223, 112.683, 115.266, 127.605ms. Six of the seven inside
+		// six per cent of each other, which is what a quantity that is
+		// mostly a fixture's own pacing quantum looks like.
 		//
 		// # THE RECEIVE END CARRIES AN ERROR, AND IT IS NOT A FAILURE OF THIS CODE
 		//
@@ -642,11 +643,11 @@ var UploadWedgedStops = Entry{
 		// socket's buffer on its own — between the setsockopt and the
 		// getsockopt even when they are adjacent syscalls, and
 		// continuously afterwards. Measured three ways: two connections
-		// in one run read back 16,384 and 277,696; sampling the buffer
-		// while a body moved found it between 261,376 and 539,008
-		// against a request of 16,384; and re-setting the option on
-		// every drain step held the floor and not the ceiling. Windows,
-		// on the same code, reads back 16,384 and HOLDS there across
+		// in one run read back different sizes; sampling the buffer while
+		// a body moved found it between 131,072 and 646,336 against a
+		// request of 131,072; and re-setting the option on every drain
+		// step held the floor and not the ceiling. Windows, on the same
+		// code, reads back what it was asked for and HOLDS there across
 		// every sample.
 		//
 		// The SEND end does hold, and it is the binding one: a client can
@@ -656,25 +657,25 @@ var UploadWedgedStops = Entry{
 		// Here it never is. That is why the gap still tracks the
 		// requested size across a factor of thirty-two.
 		//
-		// WHAT HAPPENS NEXT IS A RULING RATHER THAN A NUMBER. The rule
-		// at Pin says a leg that cannot pin STOPS: the row reds naming
-		// the end, and it does — intermittently, because the kernel's
-		// timing varies. Whether this leg is written off as unpinnable,
-		// whether the pair rule becomes a send-end rule, or whether the
-		// row changes shape here, is a decision for a person with this
+		// WHAT HAPPENS NEXT IS A RULING RATHER THAN A NUMBER. The rule at
+		// Pin says a leg that cannot pin STOPS: the row reds naming the
+		// end, and it does — intermittently, because the kernel's timing
+		// varies. Whether this leg is written off as unpinnable, whether
+		// the pair rule becomes a send-end rule, or whether the row
+		// changes shape here, is a decision for a person with this
 		// evidence in front of them.
 		Darwin: {
-			WorstGap: 126162 * time.Microsecond, Runs: 220, Date: "2026-09-10",
-			BlockPoint: 622592,
+			WorstGap: 127606 * time.Microsecond, Runs: 140, Date: "2026-09-10",
+			BlockPoint: 819200,
 			Pin: &PinnedPair{
-				Send: Pin{Requested: 16384, ReadBack: 16384,
-					Sustained: &Sustained{Samples: 16562, Low: 16384, High: 16384}},
-				Receive: Pin{Requested: 16384,
+				Send: Pin{Requested: 131072, ReadBack: 131072,
+					Sustained: &Sustained{Samples: 16653, Low: 131072, High: 131072}},
+				Receive: Pin{Requested: 131072,
 					Err: "this kernel's own receive autosizing moves an accepted socket's " +
-						"buffer whatever SO_RCVBUF asked for: two connections in one run " +
-						"read back 16384 and 277696, and sampling during a body found it " +
-						"between 261376 and 539008",
-					Sustained: &Sustained{Samples: 16560, Low: 16384, High: 539008}},
+						"buffer whatever SO_RCVBUF asked for: sampling during a body found " +
+						"it between 131072 and 646336, and two connections in one run can " +
+						"read back different sizes",
+					Sustained: &Sustained{Samples: 16649, Low: 131072, High: 646336}},
 			},
 		},
 	},
@@ -711,17 +712,16 @@ var StreamGoesQuiet = Entry{
 		"establishment plus delivery plus whatever the scheduler adds",
 	Instrument: "streamProgress, internal/flow/stream.go",
 	Measurements: map[Leg]Measurement{
-		// TWENTY-ONE passes of twenty on 2026-09-10, all under the race
-		// detector and several with the whole module's suite in
-		// parallel. Twenty-one rather than seven because this row's
-		// fixture never changed inside the round, so every pass is
-		// evidence about the same thing. Worst 5.432ms; the rest sit
-		// under 2.7.
+		// Seven passes of twenty on 2026-09-10, all under the race
+		// detector and all with the whole package running: 1.380, 1.421,
+		// 1.859, 1.888, 1.942, 2.142, 2.362ms. Earlier passes in the same
+		// round are not folded in, because the pin the write side runs
+		// under changed and every pass here shared a process with it.
 		//
 		// Nothing paces this fixture, so what is measured is
 		// establishment plus delivery plus the scheduler, and the
 		// numbers sit where a loopback connection sits.
-		Darwin: {WorstGap: 5432 * time.Microsecond, Runs: 420, Date: "2026-09-10"},
+		Darwin: {WorstGap: 2362 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
 	},
 	SetBy: Darwin,
 }
@@ -740,11 +740,11 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		"being armed, which is before the connection is opened",
 	Instrument: "streamProgress, internal/flow/stream.go",
 	Measurements: map[Leg]Measurement{
-		// Twenty-one passes of twenty on 2026-09-10, all under the race
-		// detector — this row's fixture was untouched by the
-		// partial-line change, so every pass counts. Worst 55.608ms
-		// against a 300ms window, which is 5.4 times it and the
-		// narrowest margin in this file.
+		// Seven passes of twenty on 2026-09-10, all under the race
+		// detector: 18.441, 18.486, 18.492, 18.520, 18.566, 18.629,
+		// 36.545ms. Six of the seven within one per cent of each other
+		// and the seventh at twice that, which is the shape of a
+		// scheduler rather than of a pace.
 		//
 		// AND THE WORST GAP WAS THE FIXTURE'S OWN PAUSE, to within
 		// forty-three microseconds: the probe reports both numbers side
@@ -753,7 +753,7 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		// long the machine can starve the server goroutine — not
 		// anything this client does. The row carries its own refusal for
 		// that case, and so does its sibling.
-		Darwin: {WorstGap: 55609 * time.Microsecond, Runs: 420, Date: "2026-09-10"},
+		Darwin: {WorstGap: 36545 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
 	},
 	SetBy: Darwin,
 }
@@ -799,7 +799,7 @@ var StreamPartialLineIsNotAStall = Entry{
 	Instrument: "streamProgress, internal/flow/stream.go",
 	Measurements: map[Leg]Measurement{
 		// Seven passes of twenty on 2026-09-10, under the race detector:
-		// 23.431, 23.851, 25.886, 26.484, 65.935, 78.138, 78.212ms.
+		// 24.770, 26.558, 27.042, 28.588, 34.262, 47.461, 50.323ms.
 		//
 		// SEVEN AND NOT MORE, because this row's fixture is derived from
 		// its window and the window moved twice inside the round. Only
@@ -807,15 +807,13 @@ var StreamPartialLineIsNotAStall = Entry{
 		// delivery that ships, which is the same rule that keeps a
 		// read-side number from being carried across two paces.
 		//
-		// THOSE PASSES WERE TAKEN AT A 350ms WINDOW AND THE WINDOW IS
-		// NOW 400, which is a fixture one step longer — 71 pieces rather
-		// than 62 — and the number is kept rather than retaken because
-		// of what the pairs above say it is. Every one of these gaps
-		// equalled the FIXTURE's own widest pause to within a
-		// millisecond, so the quantity is the machine starving a
-		// goroutine and not the length of the line; a longer line
-		// samples more of the same distribution rather than a different
-		// one.
+		// EVERY ONE OF THESE GAPS EQUALLED THE FIXTURE'S OWN WIDEST
+		// PAUSE to within a millisecond, on all twenty-one passes taken
+		// across this round — the probe prints both numbers side by side
+		// and they agree every time. So what a read-side window is a
+		// margin over is how long the machine can starve the server
+		// goroutine, and not the length of the line. The row carries its
+		// own refusal for the case where that pause reaches the window.
 		//
 		// IT ALSO DOES NOT CONVERGE BY ITERATION, and that is worth
 		// saying out loud. The fixture follows the window and the worst
@@ -826,7 +824,7 @@ var StreamPartialLineIsNotAStall = Entry{
 		// treadmill. Whether the read side's rule should be a percentile
 		// rather than a maximum, or the fixture should stop following
 		// the window, is a ruling this round is not entitled to make.
-		Darwin: {WorstGap: 78213 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
+		Darwin: {WorstGap: 50324 * time.Microsecond, Runs: 140, Date: "2026-09-10"},
 	},
 	SetBy: Darwin,
 }

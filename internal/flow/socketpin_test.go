@@ -63,10 +63,10 @@ import (
 // pinnedBuffer is the size both ends of a write-side row's connection
 // ask for, in bytes.
 //
-// # SIXTEEN KIBIBYTES, CHOSEN FROM A MEASURED CURVE
+// # THE CURVE SAYS SMALLER, AND ONE LEG SAYS OTHERWISE
 //
-// Darwin, one probe, one pass of twenty runs at each size, 2026-09-10 —
-// the worst gap between two progress events at the client:
+// Darwin, one probe, one pass of twenty runs at each size — the worst
+// gap between two progress events at the client:
 //
 //	16 KiB    37.7 ms
 //	64 KiB   107.8 ms
@@ -77,36 +77,46 @@ import (
 // The curve SATURATES above about 64 KiB: a doubling from 64 to 128
 // moves the tail by under three per cent, because past that point what
 // is left is the fixture's own pacing quantum and the scheduler rather
-// than the buffer. Below it the buffer is the whole quantity, and 16 KiB
-// is a third of what 64 costs.
+// than the buffer. Below it the buffer is the whole quantity, and on
+// that table alone the right answer is the small end — the row measures
+// a stall DETECTOR rather than throughput, the window is five times this
+// gap by rule, and every upload row spends three windows.
 //
-// SMALLER IS CHOSEN BECAUSE THE ROW MEASURES THE STALL DETECTOR AND NOT
-// THROUGHPUT. Nothing here is about how fast this client can push bytes;
-// the question is whether a watchdog can tell a slow upload from a
-// stopped one, and the smallest buffer that still makes the client block
-// answers it as well as the largest. What the size actually buys is the
-// WINDOW — the window is five times this gap by rule — and the window is
-// what every upload row spends three of. A third of the gap is a third
-// of the window.
+// THE TABLE IS ONE LEG'S, AND THE OTHER TWO GET A VOTE. Taken to 16 KiB,
+// the hosted linux runner stopped finishing: the upload probe alone ran
+// for twenty-five minutes there without completing, in the plain pass as
+// well as under the detector, where the same probe takes about a minute
+// on this machine and sixty-five seconds in a two-core linux container.
+// The previous size — 128 KiB — completed that probe on the same runner
+// in about thirty seconds. Two hypotheses were tested and killed: the
+// pin size makes no difference to the probe's cost on two cores here
+// (59s at 16 KiB, 59s at 128 KiB), and a two-core linux container
+// reproduces neither the hang nor anything close to it (the whole
+// package in 130s). The MECHANISM on that runner is not identified, and
+// an unexplained collapse is not a thing to ship a leg on.
 //
-// THE ARGUMENT ROUND 2 MADE FOR THE LARGER SIZE IS ANSWERED BY A GUARD
-// RATHER THAN BY A MARGIN. It took 128 KiB over 64 "because it sits
-// further from every platform's own minimum: a request that lands under
-// a kernel's clamp reads back as a number nobody asked for". That danger
-// is real and it is not a reason to guess high — it is a reason to
-// CHECK, which is what the read-back is for and what the coherence rule
-// beside the registry now enforces: a leg whose ReadBack falls outside
-// [Requested, 2*Requested] is not claimed as pinned at all. Linux
-// doubles, and 16,384 is comfortably above every minimum the three legs
-// have (Linux's own floor is a few kilobytes).
+// So the size is the one with evidence on all three legs rather than the
+// one the curve prefers on one of them. What it costs is real and
+// measured — the gap is about three times what 16 KiB gives, and the
+// window with it — and the reason to pay it is that a leg which cannot
+// finish reports nothing at all, which is worse than a leg that reports
+// a wider margin. Revisiting it means measuring 64 KiB on that runner
+// deliberately, which is a run somebody has to spend rather than a
+// number to pick.
+//
+// A REQUEST UNDER A KERNEL'S CLAMP READS BACK AS A NUMBER NOBODY ASKED
+// FOR, and that danger is handled by a guard rather than by guessing
+// high: the coherence rule beside the registry refuses to claim a pin
+// whose ReadBack falls outside [Requested, 2*Requested]. Linux doubles,
+// and reads back 262144 for this request.
 //
 // # AND ONLY ONE OF THE TWO ENDS ACTUALLY HOLDS THIS SIZE ON DARWIN
 //
 // Measured, not assumed, and it is the round's most uncomfortable
-// number: the client's SO_SNDBUF reads back 16,384 and is still 16,384
-// when the last byte goes out, while the accepting end's SO_RCVBUF reads
-// back 16,384 and is then moved by the kernel between about 332,000 and
-// 539,000 for the rest of the body. macOS ships
+// number: the client's SO_SNDBUF reads back what it asked for and is
+// still that when the last byte goes out, while the accepting end's
+// SO_RCVBUF reads back the same figure and is then moved by the kernel
+// up to about 646,000 for the rest of the body. macOS ships
 // net.inet.tcp.doautorcvbuf=1 and setting SO_RCVBUF does not turn it
 // off. Re-setting the option on every drain step was tried: it held the
 // floor and not the ceiling.
@@ -121,7 +131,7 @@ import (
 // Pin.Sustained rather than leaving the read-back to be read as a
 // duration; see socketPin.sample, and see the registry's own promise
 // paragraph for what is still open.
-const pinnedBuffer = 16 << 10
+const pinnedBuffer = 128 << 10
 
 // socketPin is one END's record across a run: what was asked for, what
 // the kernel gave back, what went wrong, and how many connections it was
@@ -506,7 +516,7 @@ func observedPin(client, fixture *socketPin) *timing.PinnedPair {
 // setsockopt fail with "operation not permitted". The slow-upload row
 // reds here rather than running on:
 //
-//	send NOT PINNED (asking for a 16384-byte buffer: operation not
+//	send NOT PINNED (asking for a 131072-byte buffer: operation not
 //	permitted). This row's window is a margin over a gap measured under
 //	a stated pair of socket buffers, and this run does not have that
 //	pair. It cannot pay for the difference either …
@@ -713,9 +723,9 @@ func pinnedUploadRun(t *testing.T, root string, size int) (run *deployRun, clien
 //     everything does
 //
 //  2. Pin the first connection to 392,384 — round 2's own reported
-//     number — and the rest to 16,384. Reds through the runtime
-//     refusal, naming both sizes: "two connections in one run read back
-//     different buffer sizes, 392384 then 16384".
+//     number — and the rest to the pinned size. Reds through the
+//     runtime refusal, naming both: "two connections in one run read
+//     back different buffer sizes, 392384 then …".
 //
 //  3. PUT THE SIZE BACK WHERE ROUND 2 HAD IT: a field on the store,
 //     written after the server has started, read under the store's
