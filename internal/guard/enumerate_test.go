@@ -601,6 +601,52 @@ func TestTheEnumerationHonoursGitignoreAndNothingElse(t *testing.T) {
 	}
 }
 
+// foreignFixture is the name of the file that exists ONLY in the second
+// repository. It is deliberately unlike anything the fixture under test
+// writes, so its presence in a result has exactly one explanation.
+const foreignFixture = "somebody-elses.go"
+
+// foreignRepo builds a repository that is not the one under test,
+// holding foreignFixture committed AND left on disk.
+//
+// On disk matters: repoFiles drops a path it cannot stat, so a foreign
+// path that exists only in an index is absorbed by that filter and the
+// leak goes unreported. A file that is really there defeats the masking.
+func foreignRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatalf("making the foreign home: %v", err)
+	}
+	env := gitSafeEnv(
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, "no-such-global"),
+		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, "no-such-system"),
+		"GIT_AUTHOR_NAME=other", "GIT_AUTHOR_EMAIL=other@example.invalid",
+		"GIT_COMMITTER_NAME=other", "GIT_COMMITTER_EMAIL=other@example.invalid",
+	)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s in the foreign repo: %v\n%s",
+				strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "-q", "--template=", ".")
+	if err := os.WriteFile(filepath.Join(dir, foreignFixture),
+		[]byte("package other\n"), 0o644); err != nil {
+		t.Fatalf("writing the foreign fixture: %v", err)
+	}
+	run("add", foreignFixture)
+	run("commit", "-qm", "not ours")
+	return dir
+}
+
 // TestTheEnumerationIgnoresTheOperatorsGitEnvironment asserts that
 // cmd.Dir is the ONLY thing deciding which repository gets read.
 //
@@ -631,40 +677,7 @@ func TestTheEnumerationIgnoresTheOperatorsGitEnvironment(t *testing.T) {
 		t.Skipf("git is not on PATH: %v", err)
 	}
 
-	// A repository that is not the one under test, holding a file whose
-	// name could not come from the fixture. It is committed AND left on
-	// disk, so that a leak cannot be quietly absorbed by the Lstat
-	// filter the way GIT_INDEX_FILE's was.
-	foreign := t.TempDir()
-	foreignHome := filepath.Join(foreign, "home")
-	if err := os.MkdirAll(foreignHome, 0o755); err != nil {
-		t.Fatalf("making the foreign home: %v", err)
-	}
-	foreignEnv := gitSafeEnv(
-		"HOME="+foreignHome,
-		"USERPROFILE="+foreignHome,
-		"GIT_CONFIG_GLOBAL="+filepath.Join(foreign, "no-such-global"),
-		"GIT_CONFIG_SYSTEM="+filepath.Join(foreign, "no-such-system"),
-		"GIT_AUTHOR_NAME=other", "GIT_AUTHOR_EMAIL=other@example.invalid",
-		"GIT_COMMITTER_NAME=other", "GIT_COMMITTER_EMAIL=other@example.invalid",
-	)
-	runForeign := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = foreign
-		cmd.Env = foreignEnv
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s in the foreign repo: %v\n%s",
-				strings.Join(args, " "), err, out)
-		}
-	}
-	runForeign("init", "-q", "--template=", ".")
-	if err := os.WriteFile(filepath.Join(foreign, "somebody-elses.go"),
-		[]byte("package other\n"), 0o644); err != nil {
-		t.Fatalf("writing the foreign fixture: %v", err)
-	}
-	runForeign("add", "somebody-elses.go")
-	runForeign("commit", "-qm", "not ours")
+	foreign := foreignRepo(t)
 
 	// Now hand the suite the environment an unlucky operator would have.
 	t.Setenv("GIT_DIR", filepath.Join(foreign, ".git"))
@@ -683,7 +696,7 @@ func TestTheEnumerationIgnoresTheOperatorsGitEnvironment(t *testing.T) {
 			"invariant about whichever tree git happened to open.", got, want)
 	}
 	for _, name := range got {
-		if name == "somebody-elses.go" {
+		if name == foreignFixture {
 			t.Errorf("%s reached the enumeration, so it read the foreign "+
 				"repository rather than the one under test", name)
 		}
@@ -758,5 +771,203 @@ func TestTheVendorExceptionsReasonSeesWhatTheFilterRemoves(t *testing.T) {
 			"--others, the check asked about only one of them. An exception that "+
 			"reports itself inert while it is removing files is the failure this "+
 			"list was built to prevent, wearing the reassuring face.", evidence)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The neutralised set, named and asserted
+// ---------------------------------------------------------------------
+//
+// gitSafeEnv's MECHANISM is an allowlist — everything GIT_-prefixed goes
+// except GIT_EXEC_PATH — and that is what covers the variables nobody
+// here thought of. This table is the other half: the ones somebody DID
+// think of, each carrying its reason and what was measured when it was
+// let through to a real git.
+//
+// THE TWO HALVES ANSWER DIFFERENT QUESTIONS and neither replaces the
+// other. The allowlist answers "what about the variable git adds next
+// year", which no list can. The table answers "which of these is
+// load-bearing, and how do you know" — which an allowlist cannot,
+// because a filter that removes everything proves nothing about what
+// mattered.
+//
+// This is the shape the home-directory pair taught: neutralising HOME
+// alone is correct on Linux and macOS and neutralises NOTHING on
+// Windows, where git resolves home from USERPROFILE — and the leg that
+// neutralises nothing is the leg that reports green, on the platform
+// nobody develops on. Both spellings were needed, and the way that was
+// established was by naming them and checking each, not by trusting that
+// a recipe which looked complete was.
+type neutralisedVar struct {
+	name string
+	why  string
+
+	// changesTheAnswer is what was MEASURED on 2026-09-11 by letting this
+	// one variable through to a real `git ls-files` in a temporary
+	// repository, against a second repository tracking a file the first
+	// does not.
+	//
+	// It is recorded per variable rather than assumed, because six of
+	// these nine changed nothing and three changed everything, and a row
+	// asserting a behavioural leak for the six would be a row that cannot
+	// fail. Stripping the six is defence in depth and is asserted AS
+	// THAT — present in the table, removed from the environment, and not
+	// dressed up as a demonstrated control.
+	changesTheAnswer bool
+}
+
+var neutralisedVars = []neutralisedVar{
+	{"GIT_DIR", "names the repository directory outright, so git reads it instead of the one at cmd.Dir", true},
+	{"GIT_INDEX_FILE", "names the index, so --cached reports another repository's tracked set", true},
+	{"GIT_WORK_TREE", "names the working tree, so --others enumerates somewhere else entirely", true},
+	{"GIT_COMMON_DIR", "redirects the shared half of a worktree's git directory", false},
+	{"GIT_OBJECT_DIRECTORY", "redirects the object store", false},
+	{"GIT_ALTERNATE_OBJECT_DIRECTORIES", "adds object stores to the search", false},
+	{"GIT_CEILING_DIRECTORIES", "bounds the upward search for a repository, so discovery can be made to fail", false},
+	{"GIT_NAMESPACE", "scopes ref resolution", false},
+	{"GIT_CONFIG_COUNT", "injects configuration directly, with no file to find — core.excludesFile among it, which is the exact source --exclude-per-directory was chosen to avoid", false},
+}
+
+// TestEveryNeutralisedVariableIsActuallyRemoved asserts the SET, and
+// then asserts the thing the set cannot: that a name nobody has written
+// down goes too.
+func TestEveryNeutralisedVariableIsActuallyRemoved(t *testing.T) {
+	if len(neutralisedVars) == 0 {
+		t.Fatal("the table is empty, so this row checks nothing")
+	}
+	for _, v := range neutralisedVars {
+		t.Run(v.name, func(t *testing.T) {
+			if v.why == "" {
+				t.Fatalf("%s is neutralised and gives no reason", v.name)
+			}
+			t.Setenv(v.name, "/somewhere/that/is/not/ours")
+			for _, kv := range gitSafeEnv() {
+				if name, _, _ := strings.Cut(kv, "="); name == v.name {
+					t.Errorf("%s survived gitSafeEnv.\nIt matters because it %s.",
+						v.name, v.why)
+				}
+			}
+		})
+	}
+
+	// THE ALLOWLIST'S OWN GUARANTEE, and the reason the table above is
+	// evidence rather than the mechanism. A denylist can only remove the
+	// names on it; this one removes a name invented for this assertion,
+	// which is the closest a test can get to proving it covers what
+	// nobody has thought of yet.
+	t.Run("a variable nobody has named", func(t *testing.T) {
+		const invented = "GIT_THIS_ONE_DOES_NOT_EXIST_YET"
+		t.Setenv(invented, "1")
+		for _, kv := range gitSafeEnv() {
+			if name, _, _ := strings.Cut(kv, "="); name == invented {
+				t.Errorf("%s survived, so the filter is matching a list of known names "+
+					"rather than the prefix — and the next variable git adds arrives "+
+					"silently", invented)
+			}
+		}
+	})
+
+	// And the one that is KEPT is kept on purpose, which is only a
+	// decision if something says so.
+	t.Run(gitExecPath+" is kept", func(t *testing.T) {
+		t.Setenv(gitExecPath, "/usr/lib/git-core")
+		var found bool
+		for _, kv := range gitSafeEnv() {
+			if name, _, _ := strings.Cut(kv, "="); name == gitExecPath {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s was removed. It answers where git's own helper binaries are, "+
+				"which is a question about the installation and not about which "+
+				"repository is read; portable and relocated git builds set it and "+
+				"cannot run without it.", gitExecPath)
+		}
+	})
+}
+
+// TestTheLeakOfEachLoadBearingVariableIsCaught runs the three that
+// MEASURABLY change the answer all the way through a real git.
+//
+// The fixture carries a trap: a file that is on disk in the repository
+// under test, IGNORED there, and TRACKED in a second repository. It
+// cannot arrive through the fixture's own .gitignore, and the Lstat
+// filter cannot drop it, so its presence in the set means one thing
+// only — git read the other repository.
+//
+// THE TRAP IS THE POINT, because the first version of this measurement
+// was masked. Letting GIT_DIR through does put a foreign path into
+// `git ls-files --cached`, and repoFiles then drops it for not existing
+// on disk — so the naive assertion passes and the leak goes unreported.
+// A trap file that EXISTS defeats that masking.
+//
+// REQUIRED MUTATION, RUN 2026-09-11: add any one of these three names to
+// gitSafeEnv's keep-list beside GIT_EXEC_PATH. That name's subtest reds
+// and the other two stay green, which is what makes each one its own
+// control.
+//
+// AND ONE OF THE THREE PROVES WHY THIS ROW EXISTS SEPARATELY. Letting
+// GIT_DIR through reds here and does NOT red
+// TestTheEnumerationIgnoresTheOperatorsGitEnvironment, which sets all
+// three hostile variables at once and has no trap file: the foreign path
+// arrives in the index, fails its Lstat, and is dropped. That row would
+// have gone on passing over a GIT_DIR-only leak. GIT_INDEX_FILE and
+// GIT_WORK_TREE red both rows; GIT_DIR reds only this one.
+func TestTheLeakOfEachLoadBearingVariableIsCaught(t *testing.T) {
+	var loadBearing []neutralisedVar
+	for _, v := range neutralisedVars {
+		if v.changesTheAnswer {
+			loadBearing = append(loadBearing, v)
+		}
+	}
+	if len(loadBearing) == 0 {
+		t.Fatal("no variable in the table is marked as changing the answer, so this " +
+			"row has nothing to run and would pass over an empty list")
+	}
+
+	foreign := foreignRepo(t)
+	for _, v := range loadBearing {
+		t.Run(v.name, func(t *testing.T) {
+			var hostile string
+			switch v.name {
+			case "GIT_DIR":
+				hostile = filepath.Join(foreign, ".git")
+			case "GIT_INDEX_FILE":
+				hostile = filepath.Join(foreign, ".git", "index")
+			case "GIT_WORK_TREE":
+				hostile = foreign
+			default:
+				t.Fatalf("%s is marked load-bearing and this row does not know how to "+
+					"make it hostile, so it would pass without exercising it", v.name)
+			}
+			t.Setenv(v.name, hostile)
+
+			root := hermeticRepo(t)
+			// The trap, written after the fixture so the fixture's own
+			// rows are unaffected by it.
+			if err := os.WriteFile(filepath.Join(root, ".gitignore"),
+				[]byte("ignored-by-gitignore.go\n"+foreignFixture+"\n"), 0o644); err != nil {
+				t.Fatalf("extending the fixture's .gitignore: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(root, foreignFixture),
+				[]byte("package trap\n"), 0o644); err != nil {
+				t.Fatalf("writing the trap: %v", err)
+			}
+
+			got := relNames(root, repoFiles(t, root, ""))
+			for _, name := range got {
+				if name == foreignFixture {
+					t.Errorf("%s reached the enumeration with %s exported.\nIt is ignored "+
+						"in the repository under test and tracked in another one, so it "+
+						"can only have come from the other one: %s.\nSet: %v",
+						foreignFixture, v.name, v.why, got)
+				}
+			}
+			want := []string{".gitignore", "tracked.go", "untracked-but-ours.go"}
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("with %s exported the enumeration returned %v, want %v",
+					v.name, got, want)
+			}
+		})
 	}
 }
