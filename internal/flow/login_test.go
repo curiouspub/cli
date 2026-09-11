@@ -425,7 +425,7 @@ func newLoginRun(t *testing.T) *loginRun {
 			run.offer.resetsAt = resetsAt
 			carried, _ := ctx.Value(ctxMarker{}).(string)
 			run.offer.ctxCarried = carried == "carried"
-			return ui.NewFailure("Capacity is closed.", "stub", "stub")
+			return ui.NewFailure("Capacity is closed.", "stub", ui.NextGiveUp, "stub")
 		},
 	}
 	return run
@@ -1695,7 +1695,7 @@ func TestTheTokenIsNeverPrintedOnAnyPath(t *testing.T) {
 		prompt := &scriptedPrompt{}
 		prompt.Step("%s", token)
 		planted := prompt.out.String() + "\n" +
-			rendered(ui.NewFailure(token, token, token))
+			rendered(ui.NewFailure(token, token, ui.NextGiveUp, token))
 		if n := strings.Count(planted, token); n != 4 {
 			t.Fatalf("a planted value was found %d times across the narration "+
 				"buffer and the rendered failure, want 4 — the assertions below "+
@@ -2023,7 +2023,7 @@ func TestTheOfferKeepsItsWordsAndTheFlowKeepsTheCost(t *testing.T) {
 	run.prompt.lines = []answer{says("111111")}
 	run.prompt.confirms = []answer{no()}
 	run.deps.Offer = func(context.Context, string, time.Time) error {
-		return ui.NewFailure("Want a nudge when a slot frees up?", "Because.", "Say yes.")
+		return ui.NewFailure("Want a nudge when a slot frees up?", "Because.", ui.NextGiveUp, "Say yes.")
 	}
 	run.script.verifyOutcomes = []outcome{
 		fails(http.StatusServiceUnavailable, wire.CodeCapacityClosed, "full").after("900"),

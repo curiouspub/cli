@@ -28,10 +28,59 @@ import (
 // unlike an ordinary Go error string on purpose — this is product copy
 // that happens to travel as an error, not an error string that happens
 // to be shown.
+// NextAction is what a failure asks its reader to DO, as a value rather
+// than as a sentence.
+//
+// # Why a sentence was not enough
+//
+// A failure's last paragraph is an instruction, and every instruction
+// this program writes was written for somebody at a terminal: "run
+// `curious deploy` again", "try again a little later". An agent reads
+// those verbatim and cannot act on any of them — it has no terminal and
+// does not run commands; it calls tools. So the most useful paragraph in
+// a refusal was the one paragraph its second audience had to ignore.
+//
+// The ACTION is the same for both readers. Only the wording differs, and
+// wording is a rendering decision that belongs to the surface doing the
+// rendering. This type is the action; NextText below is one surface's
+// words for it.
+//
+// FOUR VALUES, and the fourth is not padding. "None" is a failure with
+// nothing to suggest — it exists so that a surface can tell "this
+// failure has no next step" from "nobody filled the field in", which a
+// bare empty string cannot say.
+type NextAction string
+
+const (
+	// NextNone is a failure with no action to offer.
+	NextNone NextAction = "None"
+	// NextFreshDeploy means: start the whole thing again from the top.
+	NextFreshDeploy NextAction = "FreshDeploy"
+	// NextWait means: the same call will work later, unchanged.
+	NextWait NextAction = "Wait"
+	// NextGiveUp means: retrying cannot help — something outside this
+	// run has to change first.
+	NextGiveUp NextAction = "GiveUp"
+)
+
 type Failure struct {
 	What string
 	Why  string
-	Next string
+
+	// Next is the ACTION, as a value. See NextAction.
+	Next NextAction
+
+	// NextText is the terminal's words for Next, and it is what
+	// Paragraphs renders.
+	//
+	// IT IS NOT DERIVED FROM THE ENUM, and that is deliberate rather
+	// than lazy. Four values cannot reproduce the forty-odd distinct
+	// sentences this program writes — "a fresh link is issued every
+	// time", "what went wrong is in the build log above", "if it keeps
+	// happening, updating curious may help" — and collapsing them would
+	// be a copy change wearing a refactor's clothes. The terminal keeps
+	// every word it had; the enum is what the other surface reads.
+	NextText string
 
 	// Detail is what SOMEBODY ELSE said — a server's own sentence, an
 	// error's own text — and it is a field rather than something a
@@ -50,6 +99,27 @@ type Failure struct {
 	// call site already put it: the server says what happened and this
 	// program says what it means.
 	Detail string
+
+	// DeployID is the server's record for the deploy this failure
+	// happened during, when there was one, and it is a FIELD rather than
+	// a paragraph on purpose.
+	//
+	// WHY IT IS NOT IN THE COPY. Paragraphs() is what a terminal prints,
+	// and a person reading a failed deploy has no use for a base36 id:
+	// they are going to fix something and run the command again. A
+	// machine does. An agent that was told a deploy failed and not which
+	// deploy cannot ask what happened — the one call that would tell it
+	// takes an id — so the refusal ends the conversation exactly where
+	// the follow-up question begins.
+	//
+	// It is therefore carried, never rendered here, and the surface that
+	// wants it reads the field. That keeps the terminal's copy
+	// byte-for-byte what it was.
+	//
+	// EMPTY IS HONEST. A run refused before the server created a record
+	// has no id to carry, and every failure before that step leaves this
+	// zero rather than inventing one.
+	DeployID string
 }
 
 // Error makes a Failure travel as an error, so a check deep in a flow
@@ -75,16 +145,16 @@ func (f *Failure) Error() string { return f.What }
 // the three parts are named at the call site — a positional
 // Failure{a, b, c} reads as three interchangeable strings, and they are
 // not: the third is the only one the reader can act on.
-func NewFailure(what, why, next string) *Failure {
-	return &Failure{What: what, Why: why, Next: next}
+func NewFailure(what, why string, next NextAction, nextText string) *Failure {
+	return &Failure{What: what, Why: why, Next: next, NextText: nextText}
 }
 
 // Quoted is a failure whose middle paragraph is somebody else's sentence
 // and nothing of ours — the commonest shape by far, because where the
 // server knows something this client does not, its words are the only
 // thing that carries it.
-func Quoted(what, detail, next string) *Failure {
-	return &Failure{What: what, Detail: detail, Next: next}
+func Quoted(what, detail string, next NextAction, nextText string) *Failure {
+	return &Failure{What: what, Detail: detail, Next: next, NextText: nextText}
 }
 
 // Quoting returns the failure with somebody else's sentence attached.
@@ -131,7 +201,8 @@ var notInteractiveFailure = &Failure{
 	Why: "It had a question to ask you and no way to ask it. That happens when\n" +
 		"curious runs through a pipe, from a script, or inside a tool that\n" +
 		"captures its output.",
-	Next: "Run curious directly in a terminal and answer the question there.",
+	Next:     NextGiveUp,
+	NextText: "Run curious directly in a terminal and answer the question there.",
 }
 
 // noAnswerFailure is what a prompt renders when it has asked its bounded
@@ -151,7 +222,8 @@ var noAnswerFailure = &Failure{
 	What: "Didn't catch that.",
 	Why: "curious asked the same question a few times and couldn't read any of\n" +
 		"the answers, so it stopped rather than keep asking.",
-	Next: "Run the command again and answer with y or n — or press Ctrl-C to\n" +
+	Next: NextFreshDeploy,
+	NextText: "Run the command again and answer with y or n — or press Ctrl-C to\n" +
 		"stop here.",
 }
 
@@ -170,7 +242,8 @@ var serverClosedFailure = &Failure{
 	What: "curious.pub isn't taking this right now.",
 	Why: "The server is closed to this run — not because of anything wrong with\n" +
 		"your project, and not because of anything you did.",
-	Next: "Try again a little later. Nothing has been uploaded.",
+	Next:     NextWait,
+	NextText: "Try again a little later. Nothing has been uploaded.",
 }
 
 // publishedFailures is every standing Failure this package can put in
@@ -223,15 +296,63 @@ func (u *UI) renderFailure(f *Failure) string {
 	// what this used to look like. Styling is applied after, so the two
 	// escape sequences this program emits on purpose are the only ones
 	// that reach the stream.
-	parts := f.Paragraphs()
-	if len(parts) == 0 {
+	rendered := f.Escaped()
+	if len(rendered) == 0 {
 		return ""
 	}
-	// BY POSITION, NOT BY VALUE. Asking whether a paragraph EQUALS the
-	// quotation gets the right answer for the quotation and the wrong one
-	// for anything that happens to read the same: a Why identical to a
-	// Detail was escaped whole and lost its layout. Paragraphs drops
-	// empties, so the quotation's index is computed the same way.
+	// THE STYLING IS APPLIED AFTER THE ESCAPING, so the two escape
+	// sequences this program emits on purpose are the only ones that
+	// reach the stream. Escaped hands back a fresh slice, so writing
+	// into it cannot reach the failure.
+	if f.What != "" {
+		rendered[0] = u.styled(rendered[0])
+	}
+	return strings.Join(rendered, "\n\n") + "\n"
+}
+
+// Escaped is the failure's parts, in the order they are shown, with
+// every one of them through the escape table.
+//
+// IT IS EXPORTED BECAUSE A TERMINAL IS NOT THE ONLY PLACE A FAILURE IS
+// SHOWN. The agent-facing surface renders the same copy to a client that
+// decodes it and a person who reads it, and a caller that joined
+// Paragraphs itself would be handing a reader bytes that have been
+// through nothing — which is the escaping boundary skipped at the one
+// surface whose output is also kept in a model's context.
+//
+// THE QUOTATION IS ESCAPED WHOLE AND EVERYTHING ELSE PER LINE, which is
+// the rule that cannot be moved outside this package: a Why is
+// paragraphs and its line breaks are this program's, and a quotation has
+// none — every byte of it is content, including a newline. Escaped per
+// line, a server sentence carrying a blank line adds a paragraph that
+// reads as ours, written by the far end. A caller holding only
+// Paragraphs cannot apply that rule at all, because the slice does not
+// say which part is the quotation.
+//
+// BY POSITION, NOT BY VALUE. Asking whether a paragraph EQUALS the
+// quotation gets the right answer for the quotation and the wrong one
+// for anything that happens to read the same: a Why identical to a
+// Detail was escaped whole and lost its layout. Paragraphs drops
+// empties, so the quotation's index is computed the same way.
+func (f *Failure) Escaped() []string {
+	return f.escaped(f.Paragraphs())
+}
+
+// EscapedWithoutAction is Escaped with the last paragraph left off, for a
+// surface that renders the ACTION as a value.
+//
+// It exists so the quoting rule — which paragraph is somebody else's
+// sentence and therefore escaped WHOLE — is decided in one place for
+// both surfaces. A second copy of that decision is how the two drift,
+// and the one that drifts is the one nobody is reading that day.
+func (f *Failure) EscapedWithoutAction() []string {
+	return f.escaped(f.ParagraphsWithoutAction())
+}
+
+func (f *Failure) escaped(parts []string) []string {
+	if len(parts) == 0 {
+		return nil
+	}
 	quoted := -1
 	if f.Detail != "" {
 		if f.What != "" {
@@ -242,17 +363,14 @@ func (u *UI) renderFailure(f *Failure) string {
 	}
 	rendered := make([]string, 0, len(parts))
 	for i, part := range parts {
-		switch {
-		case i == 0 && f.What != "":
-			rendered = append(rendered, u.styled(sanitizeLines(part)))
-		case i == quoted:
+		if i == quoted {
 			// WHOLE, newline included. See the field.
 			rendered = append(rendered, Sanitize(part))
-		default:
-			rendered = append(rendered, sanitizeLines(part))
+			continue
 		}
+		rendered = append(rendered, SanitizeLines(part))
 	}
-	return strings.Join(rendered, "\n\n") + "\n"
+	return rendered
 }
 
 // Paragraphs is the failure's parts in the order they are shown, empties
@@ -271,8 +389,26 @@ func (f *Failure) Paragraphs() []string {
 	if f == nil {
 		return nil
 	}
+	return f.paragraphs(true)
+}
+
+// ParagraphsWithoutAction is the prose with the last paragraph left off,
+// for a surface that renders the ACTION as a value instead of as this
+// program's sentence about a terminal.
+func (f *Failure) ParagraphsWithoutAction() []string {
+	if f == nil {
+		return nil
+	}
+	return f.paragraphs(false)
+}
+
+func (f *Failure) paragraphs(withAction bool) []string {
 	parts := make([]string, 0, 4)
-	for _, part := range []string{f.What, f.Detail, f.Why, f.Next} {
+	tail := f.NextText
+	if !withAction {
+		tail = ""
+	}
+	for _, part := range []string{f.What, f.Detail, f.Why, tail} {
 		if part != "" {
 			parts = append(parts, part)
 		}
@@ -288,7 +424,8 @@ const (
 	internalWhat = "Something went wrong inside curious."
 
 	internalWhy = "This is a fault in curious rather than a problem with your project,\n" +
-		"so there is nothing here for you to fix."
+		"so there is nothing here for you to fix. The detail is behind " +
+		debugEnvVar + "."
 
 	internalDebugWhy = "This is a fault in curious rather than a problem with your project.\n" +
 		"The detail follows because " + debugEnvVar + " is set:"
@@ -314,7 +451,8 @@ func (u *UI) Internal(err error) {
 	f := &Failure{
 		What: internalWhat,
 		Why:  internalWhy,
-		Next: "Re-run with " + debugEnvVar + "=1 to see the detail, and please\n" +
+		Next: NextGiveUp,
+		NextText: "Re-run with " + debugEnvVar + "=1 to see the detail, and please\n" +
 			"report it with that output.",
 	}
 
@@ -324,7 +462,7 @@ func (u *UI) Internal(err error) {
 			detail = err.Error()
 		}
 		f.Why = internalDebugWhy + "\n\n  " + detail
-		f.Next = "Please report this, with the detail above."
+		f.NextText = "Please report this, with the detail above."
 	}
 
 	u.Fail(f)

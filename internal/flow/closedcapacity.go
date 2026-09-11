@@ -148,7 +148,7 @@ func closedCapacityFailure(serverMessage string, resetsAt, now time.Time) *ui.Fa
 	}
 	return ui.NewFailure(
 		closedHeadline,
-		why,
+		why, ui.NextWait,
 		"Try again "+afterTheReset(resetsAt, now)+". "+uploadedNothing).
 		Quoting(serverMessage)
 }

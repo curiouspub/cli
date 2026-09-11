@@ -45,6 +45,33 @@ type DeployPrompter interface {
 	Confirm(question string, defaultYes bool) (bool, error)
 }
 
+// DeployProgress is where a run says what it is doing WHILE it is doing
+// it, for a caller that is not a terminal.
+//
+// IT IS NOT A SECOND RENDERER. The terminal already learns all of this,
+// as prose, through the prompter — and a caller that is not a terminal
+// would have to parse that prose back into a phase and a line, which is
+// exactly what this project refuses to do everywhere else. What arrives
+// here are the two values the stream carried, in the types the contract
+// declares them in.
+//
+// THE PHASE IS THE CONTRACT'S OWN TYPE rather than a string, so a phase
+// this build predates travels through unchanged and a vocabulary cannot
+// grow a second spelling on the way past.
+//
+// BOTH HALVES, EVERY TIME. A phase event supplies the phase and carries
+// the most recent line with it; a log line supplies the line and carries
+// the phase it arrived under. Either may be empty — a build that has
+// said nothing yet has no last line, and a line that arrives before any
+// phase event has no phase — and an empty half is the honest answer
+// rather than an omission.
+//
+// A REPORT IS MADE ONLY FOR SOMETHING THE READER HAS NOT ALREADY BEEN
+// SHOWN. The event stream replays from the beginning on every
+// reconnection, and a channel that spoke for each replayed event would
+// narrate one build several times over.
+type DeployProgress func(phase wire.Phase, line string)
+
 // DeployDeps is everything Deploy needs from outside itself.
 type DeployDeps struct {
 	// Dir is the directory to deploy, as the user typed it. Empty means
@@ -94,6 +121,18 @@ type DeployDeps struct {
 
 	// Now is the clock. Optional.
 	Now func() time.Time
+
+	// Progress is where the build's phases and output are reported to a
+	// caller that is not a terminal. Optional; without one the run says
+	// nothing anywhere except through Prompt, which is what the command
+	// passes and what every existing row measures.
+	//
+	// IT IS A FIELD ON THE SEQUENCE RATHER THAN A METHOD ON THE PROMPTER,
+	// and the reason is the types. A prompter's two methods take a format
+	// and arguments, so a phase reaching a caller through one arrives as
+	// a sentence with the value inside it — and the caller that needs
+	// this is the one that must not parse sentences.
+	Progress DeployProgress
 
 	// UploadStallTimeout is how long the upload waits for the next byte
 	// before giving up. Optional; without one the upload's own constant
@@ -547,7 +586,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	// renders like any other.
 	startResp, err := authed.DeployStart(ctx, resp.DeployID)
 	if err != nil {
-		return nil, startFailure(err)
+		return nil, carryingDeployID(startFailure(err), resp.DeployID)
 	}
 	deps.Prompt.Step("%s%s.", startNarration, string(startResp.Status))
 
@@ -564,9 +603,10 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		DeployID:      resp.DeployID,
 		StallTimeout:  deps.StreamStallTimeout,
 		ReconnectStep: deps.StreamReconnectStep,
+		Progress:      deps.Progress,
 	})
 	if err != nil {
-		return nil, err
+		return nil, carryingDeployID(err, resp.DeployID)
 	}
 	if status == wire.StatusFailed {
 		// THE ONLY VALUE THIS CLIENT ACTS ON, and it acts on it by
@@ -574,7 +614,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		// build predates — the stream is a narrator rather than an
 		// authority, and what the output validator makes of the build is
 		// a question for the next call rather than for this one.
-		return nil, buildFailedFailure()
+		return nil, carryingDeployID(buildFailedFailure(), resp.DeployID)
 	}
 
 	// 12. THE PUBLISH, AND THE LAST LINE OF THE COMMAND.
@@ -593,7 +633,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		RetryInterval: deps.PublishRetryInterval,
 	})
 	if err != nil {
-		return nil, err
+		return nil, carryingDeployID(err, resp.DeployID)
 	}
 	renderPublished(deps.Prompt, published, now())
 
@@ -733,7 +773,7 @@ func resolveProjectDir(dir string) (string, error) {
 			"curious couldn't work out which directory you mean.",
 			fmt.Sprintf("Resolving %q against the current directory failed: %v.\n\n"+
 				"That usually means the directory this command was started in no "+
-				"longer\nexists.", dir, err),
+				"longer\nexists.", dir, err), ui.NextFreshDeploy,
 			"Change into a directory that exists and run `curious deploy` again.")
 	}
 
@@ -742,20 +782,20 @@ func resolveProjectDir(dir string) (string, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", ui.NewFailure(
 			"There is nothing at "+abs+".",
-			"curious deploys a directory, and that one does not exist.",
+			"curious deploys a directory, and that one does not exist.", ui.NextFreshDeploy,
 			"Check the path and run `curious deploy <dir>` again — or run it with\n"+
 				"no argument at all to deploy the directory you are standing in.")
 	case err != nil:
 		return "", ui.Quoted(
 			"curious couldn't read "+abs+".",
-			err.Error(),
+			err.Error(), ui.NextFreshDeploy,
 			"Check that the path exists and that you can read it, then run\n"+
 				"`curious deploy` again.")
 	case !info.IsDir():
 		return "", ui.NewFailure(
 			abs+" is a file, not a directory.",
 			"curious deploys a project directory — the one holding package.json —\n"+
-				"rather than a single file.",
+				"rather than a single file.", ui.NextFreshDeploy,
 			"Name the directory instead, or run `curious deploy` from inside it.")
 	}
 	return abs, nil
@@ -766,11 +806,11 @@ func resolveProjectDir(dir string) (string, error) {
 // problem with the file comes back as an empty token and a reason, and
 // every one of those is recoverable by logging in again.
 func configFailure(err error) *ui.Failure {
-	return ui.Quoted(
+	return ui.NewFailure(
 		"curious couldn't work out where to keep your login.",
-		err.Error(),
+		"The location comes from CURIOUS_CONFIG.", ui.NextFreshDeploy,
 		"Set CURIOUS_CONFIG to the full path of a config file and run\n"+
-			"`curious deploy` again.")
+			"`curious deploy` again.").Quoting(err.Error())
 }
 
 // unreadableProjectFailure is what a traversal that could not finish
@@ -779,7 +819,7 @@ func configFailure(err error) *ui.Failure {
 func unreadableProjectFailure(err error) *ui.Failure {
 	return ui.Quoted(
 		"curious couldn't read the whole project.",
-		err.Error(),
+		err.Error(), ui.NextFreshDeploy,
 		"Check that every directory in the project is readable, then run\n"+
 			"`curious deploy` again. "+uploadedNothing)
 }
@@ -799,7 +839,7 @@ func endpointUnusableFailure() *ui.Failure {
 		"The endpoint this run was pointed at is not one this client will talk\n"+
 			"to. It has to name a server over https — or a loopback host over http,\n"+
 			"for local development — and carry no username, password, query or\n"+
-			"fragment.",
+			"fragment. The address comes from CURIOUS_API_URL.", ui.NextFreshDeploy,
 		"Check CURIOUS_API_URL, or unset it to use the default, then run\n"+
 			"`curious deploy` again. "+uploadedNothing)
 }
@@ -810,7 +850,38 @@ func endpointUnusableFailure() *ui.Failure {
 func tempDirFailure(err error) *ui.Failure {
 	return ui.Quoted(
 		"curious couldn't make a place to write the archive.",
-		err.Error(),
+		err.Error(), ui.NextFreshDeploy,
 		"Check that the temporary directory exists, is writable and has space,\n"+
 			"then run `curious deploy` again. "+uploadedNothing)
+}
+
+// carryingDeployID attaches the server's record for this deploy to a
+// failure raised after that record existed.
+//
+// # It is the answer to a refusal that ends where the question begins
+//
+// Every step from the start onwards can fail with the deploy already
+// created, and until this existed each of those failures threw the id
+// away. At a terminal that costs nothing — the reader fixes something
+// and runs the command again, and nobody types a base36 id at anything.
+// To an agent it is the whole difference between "your deploy failed"
+// and a fact it can act on, because the one call that says what happened
+// takes an id and there is no way to list deploys.
+//
+// IT SETS THE FIELD AND NEVER THE COPY. What a terminal prints is
+// unchanged, byte for byte: the id is a field on the failure and
+// Paragraphs() does not read it.
+//
+// AN ID ALREADY THERE IS LEFT ALONE. A failure raised deeper in the
+// sequence may know a more specific record than the caller does, and the
+// inner one is the one that was measured.
+func carryingDeployID(err error, id string) error {
+	if id == "" {
+		return err
+	}
+	var failure *ui.Failure
+	if errors.As(err, &failure) && failure.DeployID == "" {
+		failure.DeployID = id
+	}
+	return err
 }

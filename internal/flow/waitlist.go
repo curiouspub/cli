@@ -166,7 +166,7 @@ func offerWaitlist(ctx context.Context, w waitlistDeps, address addressSource, r
 func declinedStop(resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
 		nothingDeployed,
-		capacityUsedUp+" "+uploadedNothing,
+		capacityUsedUp+" "+uploadedNothing, ui.NextWait,
 		"Run `curious deploy` again "+afterTheReset(resetsAt, now)+".")
 }
 
@@ -181,7 +181,7 @@ func noTerminalStop(resetsAt, now time.Time) *ui.Failure {
 		capacityUsedUp+" There is a waitlist for the moment it reopens, and "+
 			"curious had no terminal to offer it on — that happens through a "+
 			"pipe, from a script, or inside a tool that captures output.\n\n"+
-			uploadedNothing,
+			uploadedNothing, ui.NextWait,
 		"Run this in a terminal to join the waitlist, or run `curious deploy` "+
 			"again "+afterTheReset(resetsAt, now)+".")
 }
@@ -213,7 +213,7 @@ func joinedStop(email string, resetsAt, now time.Time) *ui.Failure {
 		fmt.Sprintf("curious will email %s when trial capacity reopens. It is "+
 			"first-come from that moment and nothing is held back for anyone on "+
 			"the list, so the sooner you run it after that, the better.\n\n%s",
-			email, uploadedNothing),
+			email, uploadedNothing), ui.NextWait,
 		"Run `curious deploy` again "+afterTheReset(resetsAt, now)+".")
 }
 
@@ -226,7 +226,7 @@ func joinedStop(email string, resetsAt, now time.Time) *ui.Failure {
 func signupFailedStop(err error, resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
 		"That didn't get you onto the list.",
-		uploadedNothing,
+		uploadedNothing, ui.NextWait,
 		"Email "+supportAddress+" and we'll add you by hand.\nRun `curious deploy` "+
 			"again "+afterTheReset(resetsAt, now)+".").
 		Quoting(serverSaid(err))

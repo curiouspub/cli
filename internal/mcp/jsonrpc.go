@@ -80,6 +80,21 @@ type response struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
+// notification is one outbound message that expects no answer, which the
+// protocol spells as a request object with NO id member.
+//
+// IT IS A SEPARATE TYPE RATHER THAN A response WITH THE ID LEFT OUT, and
+// the reason is the encoding rather than tidiness: response's ID is a
+// json.RawMessage with no omitempty, so an absent one marshals as
+// `"id":null` — which is a REQUEST this server is answering, not a
+// notification, and a client matching replies by id would be handed one
+// it never sent.
+type notification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params"`
+}
+
 // rpcError is a failure of the REQUEST — an unreadable message, an
 // unknown method, an unknown tool, parameters that would not decode. A
 // tool that ran and failed is not one of these; see Result.

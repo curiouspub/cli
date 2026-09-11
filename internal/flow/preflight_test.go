@@ -1121,7 +1121,7 @@ func TestPreflightRenderKeepsASuppliedAction(t *testing.T) {
 	if !errors.As(err, &failure) {
 		t.Fatalf("error = %#v, want a failure", err)
 	}
-	if failure.Next != f.Next {
+	if failure.NextText != f.Next {
 		t.Errorf("Next = %q, want the check's own %q", failure.Next, f.Next)
 	}
 }

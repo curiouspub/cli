@@ -155,8 +155,17 @@ func hexEscape(c byte) string {
 // difference a reader would try to interpret.
 const hexDigits = "0123456789abcdef"
 
-// sanitizeLines is Sanitize for text that is allowed to have LINES in
+// SanitizeLines is Sanitize for text that is allowed to have LINES in
 // it, and it is the form the rendering boundary uses.
+//
+// IT IS EXPORTED BECAUSE THE BOUNDARY IS NOT ONLY A TERMINAL. The
+// agent-facing surface hands a client the same rendered prose — a
+// failure's paragraphs, a run's narration — and that text carries values
+// somebody else chose: a status the server sent, a phase, a path off the
+// user's disk. A client decodes it and a person reads it, so the same
+// escaping applies, and the alternative is a second implementation of
+// "split on the layout, escape the content" that is free to disagree
+// with this one about which bytes are which.
 //
 // WHY A SECOND ENTRY POINT AND NOT A SECOND VOCABULARY. Sanitize escapes
 // the whole C0 set, newline included, which is exactly right for one
@@ -175,7 +184,7 @@ const hexDigits = "0123456789abcdef"
 // run over text that has already been through the same table — the
 // ordinary case rather than the exotic one, since the far end escapes
 // this vocabulary too.
-func sanitizeLines(s string) string {
+func SanitizeLines(s string) string {
 	if !strings.Contains(s, "\n") {
 		return Sanitize(s)
 	}

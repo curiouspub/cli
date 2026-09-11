@@ -88,7 +88,7 @@ func renderers() []aRenderer {
 		}},
 		{"Fail", func(t *testing.T, text string) string {
 			u, out, errOut := testUI("", false, nil)
-			u.Fail(NewFailure(text, text, text))
+			u.Fail(NewFailure(text, text, NextGiveUp, text))
 			return bothStreams(out, errOut)
 		}},
 		{"Internal", func(t *testing.T, text string) string {
@@ -207,7 +207,7 @@ func receiverIsUI(recv *ast.FieldList) bool {
 // method in the table, fed every hostile vocabulary, and nothing a
 // terminal obeys arrives.
 //
-// REQUIRED MUTATION, run 2026-09-09: remove the sanitizeLines call from
+// REQUIRED MUTATION, run 2026-09-09: remove the SanitizeLines call from
 // renderFailure. Reds on Fail for all four inputs, and on nothing else —
 // which is the shape that proves the rows are per-method rather than
 // aggregate. Removing it from Step and Result instead reds those two.
@@ -360,7 +360,7 @@ func renderOnce(t *testing.T, text string) string {
 // This is the row that says the layout survives.
 func TestAFailureKeepsItsParagraphs(t *testing.T) {
 	u, _, errOut := testUI("", false, nil)
-	u.Fail(NewFailure("What.", "First line.\n\nSecond paragraph.", "Do this."))
+	u.Fail(NewFailure("What.", "First line.\n\nSecond paragraph.", NextGiveUp, "Do this."))
 	got := errOut.String()
 	if strings.Contains(got, `\n`) {
 		t.Errorf("a line break was escaped as text: %q", got)
@@ -496,7 +496,7 @@ func TestAQuotedSentenceCannotAddALineOfItsOwn(t *testing.T) {
 	u, _, errOut := testUI("", false, nil)
 	u.Fail(NewFailure(
 		"The build finished, and the server would not take the result.",
-		"Nothing has been deployed.\n\nThe deploy is deploy-1.",
+		"Nothing has been deployed.\n\nThe deploy is deploy-1.", NextFreshDeploy,
 		"Run it again.").Quoting(forged))
 	got := errOut.String()
 
@@ -594,7 +594,7 @@ func TestAParagraphThatMerelyREADSLikeTheQuotationKeepsItsLayout(t *testing.T) {
 	const same = "first\n\nsecond"
 
 	u, _, errOut := testUI("", false, nil)
-	u.Fail(NewFailure("What.", same, "Next.").Quoting(same))
+	u.Fail(NewFailure("What.", same, NextGiveUp, "Next.").Quoting(same))
 	got := errOut.String()
 
 	// The quotation is one line; the Why that reads the same is two
@@ -672,7 +672,7 @@ func TestAValueInThisProgramsProseCannotAddAParagraph(t *testing.T) {
 	why := Written("Nothing has been deployed.\n\nThe deploy is %s.", forged)
 
 	u, _, errOut := testUI("", false, nil)
-	u.Fail(NewFailure("What.", why, "Next."))
+	u.Fail(NewFailure("What.", why, NextGiveUp, "Next."))
 	got := errOut.String()
 
 	// OUR paragraph break survives; the value's does not.

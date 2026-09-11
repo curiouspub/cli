@@ -1285,6 +1285,15 @@ var UploadWedgedStops = Entry{
 // BEFORE the connection is opened — to the first byte arriving, so it
 // covers connection establishment as well as delivery. Nothing paces
 // this fixture, so there is no inter-frame gap to measure.
+// A SECOND ROW TAKES THIS WINDOW, and it is recorded here rather than
+// only at the row, because a reader of this entry would otherwise think
+// it bounds one thing. TestASilentStreamEndsTheReadingRatherThanWaiting
+// covers the status read of a stream that has gone silent: a different
+// caller, the same quantity — the watchdog is armed before the
+// connection is opened, the fixture delivers and then holds, and the
+// instrument named below is the one both readings are wrapped in. The
+// measurement is carried with that reason rather than re-taken, which is
+// what this registry permits and what it forbids doing silently.
 var StreamGoesQuiet = Entry{
 	Name: "StreamGoesQuiet",
 	Row:  "TestAStreamThatStopsTalkingIsReconnected",

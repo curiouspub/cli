@@ -61,22 +61,57 @@
 // tempting repair for a flaky server is to widen the recover by one
 // function.
 //
-// # A PROGRESS SINK THAT DISCARDS, AND WHY IT IS HERE BEFORE IT IS USED
+// # THE FOUR TOOLS, AND WHY THERE IS NO FIFTH
 //
-// A handler is given a context and a Progress alongside its arguments.
-// Neither does anything yet: no tool is registered, nothing cancels the
-// context, and the sink a dispatched call receives is the one that
-// throws reports away.
+// login_start and login_verify get a credential onto this machine;
+// deploy_site runs a whole deploy and answers with the address; and
+// deploy_status reports what a deploy's build log said. They are
+// REGISTERED BY THE COMMAND rather than by this package, so the server
+// stays a protocol and a registry and a test can stand one up with
+// whatever set it needs.
 //
-// STATED PLAINLY BECAUSE THE ALTERNATIVE IS A READER ASSUMING OTHERWISE.
-// A parameter called progress, in a server whose protocol has progress
-// notifications, reads as wired. It is not: turning a report into a
-// notification needs the token a client sent on the call it wants
-// watched, and that is protocol this server does not speak.
+// There is no whoami. It would have to wrap a route the API does not
+// serve, so every call to it would answer an agent with a transport
+// failure — and a model that can see a tool keeps trying it. It appears
+// in no listing, no description and no usage text until that route
+// exists.
 //
-// The seam exists now because the tools that will use it do not exist
-// yet, which is the only moment its cost is zero. Once four tools take
-// this signature, adding a parameter the second of them needs means
-// editing all four — so the parameter is added while there is nothing to
-// edit, and disclosed rather than smuggled.
+// # EVERY TOOL DRIVES THE SEQUENCE THE COMMAND DRIVES
+//
+// The tools resolve their endpoint with the resolver the command uses,
+// read the configuration the command reads, and enter the deploy at the
+// same door. THEY TAKE NO DEPENDENCIES AND THERE IS NO SEAM TO POINT
+// SOMEWHERE ELSE, which is the point: the failure this whole split
+// exists to prevent is a second implementation of the deploy path, and
+// the cheapest way not to have one is to have nowhere to put it.
+//
+// What differs between the two surfaces is the terminal and the answer.
+// The terminal handed to the sequence here refuses every question except
+// the pre-flight one, which it answers yes — warnings are non-blocking
+// on this surface by design, and the findings come back as fields
+// instead. The answer is an OBJECT rather than a sentence and an
+// address: an agent-facing result is not a rendering of the human one,
+// and a caller reading a field is not parsing English out of a paragraph
+// written to be read by a person.
+//
+// # WHAT A DESCRIPTION MAY SAY
+//
+// A tool description is what a model reads to decide how to call
+// something, so a figure in one is a promise. The only figures these may
+// make are the wire contract's own, because those are the numbers the
+// server enforces; quota and expiry are server policy, which changes
+// without a release and which this binary is not told about, so they are
+// described in words and carry no number at all. A guard parses the
+// rendered descriptions and requires every number in them to be one of
+// the contract's.
+//
+// # PROGRESS IS WIRED, AND ONLY WHEN A CLIENT ASKS
+//
+// A handler is given a context and a Progress alongside its arguments. A
+// client that wants to watch a call sends a progress token on it, and
+// every report the tool makes then goes out as a notification quoting
+// that token, before the reply. Without a token the reports go to the
+// sink that discards — which is the ordinary case and costs a tool
+// nothing, because it reports either way and never asks whether anybody
+// is listening.
 package mcp

@@ -49,7 +49,8 @@ var (
 		What: "Something in this project needs a look.",
 		Why: "This is a fixture for the renderer rather than copy about anybody's\n" +
 			"project, and its words are chosen to be unremarkable.",
-		Next: "Compare it against the golden file beside this test.",
+		Next:     NextGiveUp,
+		NextText: "Compare it against the golden file beside this test.",
 	}
 
 	// whatAndNextSample leaves the middle part empty, which is the shape
@@ -58,7 +59,8 @@ var (
 	// fixture that does, the branch that drops one has no golden at all.
 	whatAndNextSample = Failure{
 		What: "A failure that never worked out its middle paragraph.",
-		Next: "The empty part is dropped rather than printed as a blank line, and\n" +
+		Next: NextGiveUp,
+		NextText: "The empty part is dropped rather than printed as a blank line, and\n" +
 			"this golden is what says so.",
 	}
 )
@@ -148,10 +150,19 @@ func TestEveryPublishedFailureNamesAnAction(t *testing.T) {
 		if strings.TrimSpace(f.Why) == "" {
 			t.Errorf("%s has no Why — the reader is not told why", name)
 		}
-		// REQUIRED MUTATION: blank the Next field of any of the three.
-		if strings.TrimSpace(f.Next) == "" {
-			t.Errorf("%s has no Next — it stops the run without naming an action, "+
-				"which is the one part of this shape that is the product", name)
+		// REQUIRED MUTATION: blank the NextText field of any of the three.
+		if strings.TrimSpace(f.NextText) == "" {
+			t.Errorf("%s has no NextText — it stops the run without naming an "+
+				"action, which is the one part of this shape that is the product",
+				name)
+		}
+		// AND THE ACTION AS A VALUE, which is the half the agent surface
+		// reads. A standing failure with no NextAction would render there
+		// as a refusal that suggests nothing, while the terminal beside
+		// it printed a perfectly good sentence.
+		if f.Next == "" || f.Next == NextNone {
+			t.Errorf("%s has no NextAction — its words tell a terminal what to do "+
+				"and its value tells every other surface nothing", name)
 		}
 	}
 }
@@ -355,7 +366,7 @@ func TestExitCode(t *testing.T) {
 			// spelling and the compiler enforces it; this row is the
 			// floor under that.
 			name:       "a Failure a caller constructed renders its own copy",
-			err:        NewFailure("Something specific went wrong.", "Because of this.", "Do that."),
+			err:        NewFailure("Something specific went wrong.", "Because of this.", NextGiveUp, "Do that."),
 			wantCode:   1,
 			wantOnErr:  "Something specific went wrong.",
 			wantAbsent: internalWhat,
@@ -400,7 +411,7 @@ func TestExitCode(t *testing.T) {
 			// render serverClosedFailure unconditionally instead of the
 			// caller's copy. This row reds on the missing copy.
 			name:       "a marked Failure keeps its own copy and still costs the code",
-			err:        ServerClosed(NewFailure("We're full for today.", "Because of this.", "Come back at 12:15.")),
+			err:        ServerClosed(NewFailure("We're full for today.", "Because of this.", NextGiveUp, "Come back at 12:15.")),
 			wantCode:   ExitServerClosed,
 			wantOnErr:  "Come back at 12:15.",
 			wantAbsent: internalWhat,
@@ -410,7 +421,7 @@ func TestExitCode(t *testing.T) {
 			// to an error on its way up, which is the only reason
 			// errors.Is is the right question to ask about it.
 			name:      "a wrapped closed door is still a closed door",
-			err:       fmt.Errorf("verifying the code: %w", ServerClosed(NewFailure("Full.", "Why.", "Next."))),
+			err:       fmt.Errorf("verifying the code: %w", ServerClosed(NewFailure("Full.", "Why.", NextGiveUp, "Next."))),
 			wantCode:  ExitServerClosed,
 			wantOnErr: "Full.",
 		},
@@ -421,7 +432,7 @@ func TestExitCode(t *testing.T) {
 			// are not, and the scope would be described rather than
 			// asserted.
 			name:       "a stop that is not a closed door costs the ordinary code",
-			err:        NewFailure("Too many requests from here.", "Because of this.", "Try later."),
+			err:        NewFailure("Too many requests from here.", "Because of this.", NextGiveUp, "Try later."),
 			wantCode:   1,
 			wantAbsent: internalWhat,
 			wantOnErr:  "Too many requests from here.",

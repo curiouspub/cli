@@ -157,12 +157,13 @@ func (r *storeRefused) Unwrap() error { return r.failure }
 // a quotation rather than joined into this program's prose, so a line
 // break inside it cannot become a paragraph in ours. Empty where there
 // is nothing to quote.
-func uploadFailed(host string, status int, detail, why, next string) error {
+func uploadFailed(host string, status int, detail, why string,
+	action ui.NextAction, next string) error {
 	return &storeRefused{
 		Status: status,
 		failure: ui.NewFailure(
 			"curious couldn't upload the archive to "+host+".",
-			why+uploadLeftBehind,
+			why+uploadLeftBehind, action,
 			next).Quoting(detail),
 	}
 }
@@ -245,7 +246,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 	if err != nil {
 		return uploadFailed(host, 0, err.Error(),
 			"The archive curious packed could not be opened to send it.",
-			"Check that the temporary directory is readable, then run\n"+
+			ui.NextFreshDeploy, "Check that the temporary directory is readable, then run\n"+
 				"`curious deploy` again.")
 	}
 	defer func() { _ = file.Close() }()
@@ -297,7 +298,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 		// this one out of the URL it was handed.
 		return uploadFailed(host, 0, "",
 			"curious could not build the upload request for that address.",
-			"Run `curious deploy` again. If it keeps happening, please report it.")
+			ui.NextFreshDeploy, "Run `curious deploy` again. If it keeps happening, please report it.")
 	}
 	// The EXACT length the create declared. The link was signed with it,
 	// so anything else — including the chunked encoding net/http would
@@ -327,7 +328,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 				fmt.Sprintf("%s: no data was sent for %s. The connection is open but\n"+
 					"nothing is moving across it, so curious stopped rather than wait\n"+
 					"indefinitely.", uploadStalled, stall),
-				"Check your connection and run `curious deploy` again.")
+				ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
 
 		case errors.Is(cause, context.DeadlineExceeded) && !deps.ExpiresAt.IsZero():
 			// The deadline firing IS the window closing. Asking
@@ -335,20 +336,20 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 			// window — exactly what having no ceiling of our own
 			// avoids — and the two could disagree.
 			why, next := expiredCopy()
-			return uploadFailed(host, 0, "", why, next)
+			return uploadFailed(host, 0, "", why, ui.NextFreshDeploy, next)
 
 		case sent.Load() == 0:
 			return uploadFailed(host, 0, "",
 				"curious "+couldNotReach+" "+host+" to send the archive. That usually\n"+
 					"means the connection dropped, or something between here and there\n"+
 					"is blocking it.",
-				"Check your connection and run `curious deploy` again.")
+				ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
 		}
 
 		return uploadFailed(host, 0, "",
 			connectionDropped+". It had reached "+host+" and\n"+
 				"was part way through when the connection failed.",
-			"Check your connection and run `curious deploy` again.")
+			ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -362,18 +363,18 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 				"does not follow a redirect when it is sending your project, because\n"+
 				"the address it was given is the only one the server signed.",
 				resp.StatusCode),
-			"Check that no proxy is rewriting requests, then run\n"+
+			ui.NextFreshDeploy, "Check that no proxy is rewriting requests, then run\n"+
 				"`curious deploy` again.")
 
 	case resp.StatusCode == http.StatusForbidden:
 		why, next := refusalCopy(host, deps.ExpiresAt, deps.Now())
-		return uploadFailed(host, resp.StatusCode, "", why, next)
+		return uploadFailed(host, resp.StatusCode, "", why, ui.NextFreshDeploy, next)
 	}
 
 	return uploadFailed(host, resp.StatusCode, "",
 		fmt.Sprintf("It answered %d, and that is not an answer this client can\n"+
 			"explain.", resp.StatusCode),
-		"Run `curious deploy` again. If it keeps happening, please report it\n"+
+		ui.NextFreshDeploy, "Run `curious deploy` again. If it keeps happening, please report it\n"+
 			"with the number above.")
 }
 
