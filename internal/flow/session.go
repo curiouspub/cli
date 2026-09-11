@@ -2,7 +2,6 @@ package flow
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/curiouspub/cli/internal/api"
 	"github.com/curiouspub/cli/internal/config"
@@ -19,11 +18,44 @@ import (
 // A failure built here would have to guess which surface was asking, and
 // would be wrong for one of them.
 //
-// The reason is carried in the text rather than behind another sentinel,
-// which is the config package's own contract for it: that value is for a
+// It says THAT there is no login and nothing about why. The why, where
+// there is one, rides on the type below — and nothing branches on it,
+// which is the config package's own contract for that value: it is for a
 // person to read, and a caller that must behave differently for
 // different causes branches on a field instead.
 var ErrNoLogin = errors.New("this machine holds no login for the endpoint this run is talking to")
+
+// NoLogin is that sentinel with the configuration's own explanation
+// attached.
+//
+// IT IS A TYPE AND NOT A FORMATTED MESSAGE, and the difference is the
+// only reason it exists. The reason is a thing a caller RENDERS — a
+// surface writes its own headline and puts the explanation under it —
+// and carried inside a sentence the only way back to it is trimming a
+// prefix off text this package owns. That works, until the day somebody
+// rewords the sentinel or changes the separator, and then it silently
+// stops working: the caller renders its headline, drops the half that
+// says what actually happened, and nothing anywhere goes red.
+//
+// errors.Is still finds the sentinel, so a caller that only needs to
+// know THAT there is no login never has to know this type exists.
+type NoLogin struct {
+	// Reason is the configuration's own explanation, written for a
+	// person and passed along as it was written. It is EMPTY on a first
+	// run, where there is nothing to explain and the sentinel already
+	// says everything true — so a caller renders it only when it is
+	// there rather than filling the space.
+	Reason string
+}
+
+func (n *NoLogin) Error() string {
+	if n.Reason == "" {
+		return ErrNoLogin.Error()
+	}
+	return ErrNoLogin.Error() + ": " + n.Reason
+}
+
+func (n *NoLogin) Unwrap() error { return ErrNoLogin }
 
 // StoredLogin is what this machine holds for one endpoint.
 type StoredLogin struct {
@@ -67,10 +99,11 @@ func OpenStoredLogin(endpoint string) (StoredLogin, error) {
 		// THE REASON IS OPTIONAL AND ITS ABSENCE IS MEANINGFUL: nil is a
 		// first run, where there is nothing to explain and the sentinel
 		// already says everything true.
+		missing := &NoLogin{}
 		if cfg.NoTokenReason != nil {
-			return StoredLogin{}, fmt.Errorf("%w: %s", ErrNoLogin, cfg.NoTokenReason.Error())
+			missing.Reason = cfg.NoTokenReason.Error()
 		}
-		return StoredLogin{}, ErrNoLogin
+		return StoredLogin{}, missing
 	}
 	client, err := api.New(endpoint, api.WithToken(cfg.Token))
 	if err != nil {
