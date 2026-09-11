@@ -1360,7 +1360,18 @@ var StreamGoesQuiet = Entry{
 		// was behaving exactly as measured. A RECORD IS PASTED OR IT IS
 		// RETYPED — this file's own rule, and the two numbers that
 		// diverged were four lines apart inside one entry.
-		Darwin: {WorstGap: 10283500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+		//
+		// RETAKEN ON THE GATE'S OWN DARWIN RUNNER, 2026-09-11, after the
+		// transcription above was corrected: four passes, two runs by
+		// two conditions, a thousand runs each. 754.083 µs and
+		// 10.645375 ms under the detector, 614.541 µs and 2.195708 ms
+		// without it. The leg keeps the worse, which is 10.645375 ms —
+		// a shade past the 10.2835 ms the correction restored, and the
+		// third independent confirmation that this leg's raced figure
+		// lives at about ten and a half milliseconds rather than at four.
+		// Five times it is 53.23 ms against a 55 ms window, so the
+		// window still clears the rule and does not move.
+		Darwin: {WorstGap: 10645375 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
 			// BUDGET: 11.010375 ms, the widest this leg's fixture was
 			// seen to go between its two flushes on a pass that was not
 			// itself starved, across fifteen CI readings on 2026-09-11.
@@ -1372,18 +1383,26 @@ var StreamGoesQuiet = Entry{
 			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 0, FlushBudget: 11010375 * time.Nanosecond,
-				Flushes: 2, WorstFixtureGap: 11010375 * time.Nanosecond}},
+				Flushes: 2, WorstFixtureGap: 574667 * time.Nanosecond}},
 		// 2.2355ms under the detector, 2.0315ms without it.
 		//
-		// BUDGET: 2.0896ms, the widest this leg's fixture was seen to go
+		// BUDGET: 2.1332ms, the widest this leg's fixture was seen to go
 		// between its two flushes across fifteen CI readings on
-		// 2026-09-11 (both conditions). The spread is 2.02 ms to 2.09 ms
-		// — tighter than either other leg, and with no tail.
+		// 2026-09-11 and the four-pass retake that followed them. The
+		// spread is 2.02 ms to 2.13 ms — tighter than either other leg,
+		// and with no tail.
+		//
+		// THE RETAKE MOVED IT, BY TWO PER CENT. Fifteen readings put the
+		// widest at 2.0896 ms and the retake's raced pass went 2.1332 ms
+		// — inside three times either figure, so nothing starved, but a
+		// budget defined as the widest gap on valid passes is wrong the
+		// moment a valid pass goes wider. It is raised to what was
+		// observed rather than left at what was observed first.
 		Windows: {WorstGap: 4012500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
-			FlushBudget: 2089600 * time.Nanosecond,
+			FlushBudget: 2133200 * time.Nanosecond,
 			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, FlushBudget: 2089600 * time.Nanosecond,
+				StatedPace: 0, FlushBudget: 2133200 * time.Nanosecond,
 				Flushes: 2, WorstFixtureGap: 1645200}},
 	},
 	SetBy: Darwin,
