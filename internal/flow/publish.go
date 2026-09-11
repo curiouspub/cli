@@ -376,9 +376,17 @@ func publishDeploy(ctx context.Context, deps publishDeps) (*wire.DeployPublishRe
 // log established: it is content a script may consume, so
 // `curious deploy > url.txt` yields the address and nothing else, while
 // the claim, the caveat and the expiry are read by a person on stderr.
-// There is deliberately no structured success object — the
+// Nothing structured is written to that stream — ON THE CLI'S STDOUT the
 // machine-readable surface of a successful run is that one line and the
-// exit code.
+// exit code, and a run that printed an object there would break every
+// redirect the paragraph above is about.
+//
+// That is a claim about this STREAM and not about this package. The
+// sequence hands its caller a flow.Outcome carrying the same facts as
+// fields, for a surface that is not a terminal and has no stdout of its
+// own to redirect. The two do not compete: one is what a shell sees,
+// the other is what a Go caller sees, and neither is parsed out of the
+// other.
 func renderPublished(render publishRenderer, resp *wire.DeployPublishResponse, now time.Time) {
 	closing := publishedHeadline + "\n\n" + propagationCaveat
 	if line, known := expiresLine(resp.ExpiresAt, now); known {
