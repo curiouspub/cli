@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -85,15 +86,28 @@ func sortedEntries() []*timing.Entry {
 //  2. Its Valid count is the run count behind WorstGap. A record whose
 //     Runs disagree with the passes that were allowed to contribute is
 //     a maximum over one population labelled with another's size.
-//  3. It did not starve more often than the rule allows. Past one pass
-//     in five the leg is a STOP with a reason, not a number.
+//  3. Its attempts add up: every attempt either measured the client or
+//     was thrown away and retaken, so Valid plus Starved is Attempts.
+//     THIS ROW USED TO REFUSE A STARVATION RATIO — past one pass in five
+//     the leg was a STOP — and that rule is struck rather than loosened,
+//     because a reading discarded for carrying no information cannot
+//     also be information. A starved pass is retaken now, the rate is a
+//     recorded column, and what this row keeps is the arithmetic that
+//     makes the column's denominator readable.
 //
 // REQUIRED MUTATIONS, RUN ON THE TIP:
 //
 //  1. Drop the Integrity from one measured leg. Reds here alone, naming
 //     the entry and the leg.
-//  2. Set a leg's Starved past a fifth of its passes. Reds here with the
-//     runner-cannot-hold-the-pace wording, and nothing else moves.
+//
+//  2. Add starved attempts to a leg without moving its Attempts — seven
+//     on the keep-alive entry's linux leg, RUN 2026-09-11. Reds here
+//     alone, naming all three numbers:
+//
+//     timing.StreamKeepAlivesAreProofOfLife's linux measurement records
+//     20 attempts, 20 of them valid and 7 starved, and those do not add
+//     up.
+//
 //  3. Remove the threshold from the probe so a starved pass enters the
 //     maximum. Reds on the margin row instead, because the darwin window
 //     inflates past what its own record supports.
@@ -128,14 +142,15 @@ func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
 					"labelled with the size of another.",
 					entry.Name, leg, m.Runs, p.Valid)
 			}
-			if p.Starves() {
-				t.Errorf("timing.%s's %s runner cannot hold the fixture's pace: %d "+
-					"of %d passes starved, worst fixture gap %v against a stated "+
-					"%v.\nThat is a STOP with a reason rather than a measurement. "+
-					"A maximum over the few passes a busy machine did not starve "+
-					"is a number about its quiet moments.",
-					entry.Name, leg, p.Starved, p.Valid+p.Starved,
-					p.WorstFixtureGap, p.StatedPace)
+			if p.Attempts != p.Valid+p.Starved {
+				t.Errorf("timing.%s's %s measurement records %d attempts, %d of them "+
+					"valid and %d starved, and those do not add up.\nAn attempt "+
+					"either measured the client or was thrown away and retaken, so "+
+					"the three are one arithmetic fact. Attempts is the starvation "+
+					"rate's denominator and it is recorded rather than derived, "+
+					"because valid plus starved is only the attempts made while "+
+					"nothing retakes — which stopped being true here.",
+					entry.Name, leg, p.Attempts, p.Valid, p.Starved)
 			}
 			// THE FIXTURE THIS LEG RAN THROUGH, against the one the
 			// entry now states. An entry-level pace checked at the
@@ -194,6 +209,151 @@ func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
 	}
 }
 
+// TestTheStarvedLegBoundIsGoneFromTheTree asserts an ABSENCE, and it
+// exists because the rule it names was struck rather than loosened.
+//
+// The refusal that stood here — a leg in which more than one pass in
+// five starved could not report a number — was not a threshold set too
+// tight. It was a rule counting a reading it had already discarded for
+// carrying no information, and the answer to a short sample is another
+// reading rather than a lower bar. So the method and the constant are
+// gone, and the retake is what replaced them.
+//
+// A STRUCK RULE WITH NOTHING ASSERTING ITS ABSENCE IS A RULE WAITING TO
+// BE RE-DERIVED. The next reader of a noisy leg sees a starvation rate
+// in the record, reaches for the obvious refusal, and writes it back —
+// reasonably, because nothing in the tree says the idea was tried and
+// found to be measuring the wrong thing. This row says so, at the only
+// moment anybody is listening.
+//
+// IT ASKS THE SYNTAX TREE FOR IDENTIFIERS RATHER THAN GREPPING FOR
+// TEXT, which is what lets it name the two things it forbids without
+// matching itself: they are string literals here and would be
+// identifiers there, and this walk never looks inside a literal. The
+// text search would red on its own source, and the usual repair for
+// that — skipping this file — leaves a hole exactly one file wide in
+// the file most likely to be edited next.
+//
+// REQUIRED MUTATION, RUN 2026-09-11: declare either name again in this
+// package — the constant, with a comment, at the end of the registry's
+// own source. Reds here alone:
+//
+//	timing.go names starvedLegBound at …/internal/timing/timing.go:1614:7,
+//	and that identifier was the five that refusal compared against.
+//
+// Nothing else in the package moved, which is the point: an unused
+// constant is invisible to the compiler and to every other row here.
+func TestTheStarvedLegBoundIsGoneFromTheTree(t *testing.T) {
+	struck := map[string]string{
+		"Starves":         "the refusal that stopped a leg past one starved pass in five",
+		"starvedLegBound": "the five that refusal compared against",
+	}
+
+	files := everyGoFile(t, moduleRoot(t))
+	if len(files) == 0 {
+		t.Fatal("this row read no Go source at all, so its silence is about an " +
+			"empty walk rather than about a tree these names are gone from")
+	}
+	fset := token.NewFileSet()
+	for _, path := range files {
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			ident, ok := node.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			was, forbidden := struck[ident.Name]
+			if !forbidden {
+				return true
+			}
+			t.Errorf("%s names %s at %s, and that identifier was %s.\nThat rule is "+
+				"struck rather than softened: a starved pass carries no information "+
+				"about the client, which is why it is excluded from the maximum, and "+
+				"a reading discarded for carrying no information cannot also be "+
+				"evidence against the runner. A starved pass is retaken — see the "+
+				"probe's attempt cap — and how often that happened is a recorded "+
+				"column rather than a refusal.",
+				filepath.Base(path), ident.Name, fset.Position(ident.Pos()), was)
+			return true
+		})
+	}
+}
+
+// TestAStarvationRateIsStarvedOverTheAttemptsSpent is the column's own
+// row, and it is here because the method has a branch the probes will
+// never reach: a record nobody ran.
+//
+// REQUIRED MUTATION, RUN 2026-09-11: divide by Valid instead of by
+// Attempts. Reds on the first case — "starvation rate = 0.3000, want
+// 0.2308" — and reds the probe's own retake row beside it, which is the
+// same arithmetic caught from the other end. The three cases under it
+// stay green, because the early return that answers them asks about
+// Attempts and not about the division below it.
+func TestAStarvationRateIsStarvedOverTheAttemptsSpent(t *testing.T) {
+	// Twenty valid readings that took twenty-six attempts to get.
+	noisy := &timing.PaceIntegrity{Attempts: 26, Valid: 20, Starved: 6}
+	if got, want := noisy.StarvationRate(), 6.0/26.0; got != want {
+		t.Errorf("starvation rate = %.4f, want %.4f — the denominator is the "+
+			"attempts spent, and dividing by the passes that survived reports a "+
+			"fraction of the wrong thing", got, want)
+	}
+
+	// A RECORD NOBODY RAN IS NOT A CLEAN RUNNER. Zero over zero is the
+	// one case that could quietly render as a perfect leg, so it is the
+	// case asserted.
+	for _, tc := range []struct {
+		name string
+		p    *timing.PaceIntegrity
+	}{
+		{"a nil record", nil},
+		{"a record with no attempts", &timing.PaceIntegrity{}},
+		{"a record whose attempts were never filled in",
+			&timing.PaceIntegrity{Valid: 20, Starved: 6}},
+	} {
+		if got := tc.p.StarvationRate(); got != 0 {
+			t.Errorf("%s reported a starvation rate of %.4f", tc.name, got)
+		}
+	}
+}
+
+// everyGoFile is every .go file in the module, test files included.
+//
+// It is a near-duplicate of the walk beside the guards next door, which
+// takes only the _test.go ones, and that is deliberate in the same way
+// the duplicated module-root walk is: two homes for one FACT diverge
+// silently, two homes for one loop do not. The difference matters here —
+// both identifiers this file forbids were declared in ordinary source
+// and used from tests, so a walk over either half alone would be a guard
+// with a blind side in the place the thing actually lived.
+func everyGoFile(t *testing.T, root string) []string {
+	t.Helper()
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", ".claude", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".go") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+	sort.Strings(files)
+	return files
+}
+
 func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 	if len(timing.Registry) == 0 {
 		t.Fatal("the registry is empty, so this row's silence is about nothing " +
@@ -220,7 +380,7 @@ func TestEveryRegisteredWindowIsMeasuredOnEveryLeg(t *testing.T) {
 	// THE POSITIVE CONTROL, and this row needs one badly: while two legs
 	// are pending it fails, and a check that has never been seen to pass
 	// is a check nobody can tell apart from one that always fails.
-	held := &timing.PaceIntegrity{Valid: 20, ThresholdNum: 3, ThresholdDen: 1}
+	held := &timing.PaceIntegrity{Attempts: 20, Valid: 20, ThresholdNum: 3, ThresholdDen: 1}
 	fully := &timing.Entry{
 		Name: "PositiveControl",
 		Measurements: map[timing.Leg]timing.Measurement{
