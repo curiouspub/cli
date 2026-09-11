@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -56,8 +57,10 @@ func purityScenario(t *testing.T) (stdout, stderr string) {
 	t.Helper()
 	s := testServer()
 	s.Register(Tool{
-		Name:    "boom",
-		Handler: func(json.RawMessage) Result { panic("a handler that was written on a Friday") },
+		Name: "boom",
+		Handler: func(context.Context, json.RawMessage, Progress) Result {
+			panic("a handler that was written on a Friday")
+		},
 	})
 
 	return drive(t, s,

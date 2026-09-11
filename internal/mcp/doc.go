@@ -60,4 +60,23 @@
 // somebody else's. There is a guard asserting exactly that, because the
 // tempting repair for a flaky server is to widen the recover by one
 // function.
+//
+// # A PROGRESS SINK THAT DISCARDS, AND WHY IT IS HERE BEFORE IT IS USED
+//
+// A handler is given a context and a Progress alongside its arguments.
+// Neither does anything yet: no tool is registered, nothing cancels the
+// context, and the sink a dispatched call receives is the one that
+// throws reports away.
+//
+// STATED PLAINLY BECAUSE THE ALTERNATIVE IS A READER ASSUMING OTHERWISE.
+// A parameter called progress, in a server whose protocol has progress
+// notifications, reads as wired. It is not: turning a report into a
+// notification needs the token a client sent on the call it wants
+// watched, and that is protocol this server does not speak.
+//
+// The seam exists now because the tools that will use it do not exist
+// yet, which is the only moment its cost is zero. Once four tools take
+// this signature, adding a parameter the second of them needs means
+// editing all four — so the parameter is added while there is nothing to
+// edit, and disclosed rather than smuggled.
 package mcp

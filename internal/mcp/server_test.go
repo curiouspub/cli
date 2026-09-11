@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -44,7 +45,7 @@ func serve(t *testing.T, s *Server, input string) (stdout, stderr string, err er
 	t.Helper()
 	var out, logw bytes.Buffer
 	mustWithin(t, serveDeadline, "Serve", func() {
-		err = s.Serve(strings.NewReader(input), &out, &logw)
+		err = s.Serve(context.Background(), strings.NewReader(input), &out, &logw)
 	})
 	return out.String(), logw.String(), err
 }
@@ -172,7 +173,7 @@ func TestHandshakeCompletesOverAPipePair(t *testing.T) {
 	var logw bytes.Buffer
 	served := make(chan error, 1)
 	go func() {
-		err := testServer().Serve(inR, outW, &logw)
+		err := testServer().Serve(context.Background(), inR, outW, &logw)
 		outW.Close()
 		served <- err
 	}()

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestNothingAClientSentReachesTheOperatorUnescaped(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, logw bytes.Buffer
 			if err := New("curious", "0.0.0").
-				Serve(strings.NewReader(tc.line+"\n"), &out, &logw); err != nil {
+				Serve(context.Background(), strings.NewReader(tc.line+"\n"), &out, &logw); err != nil {
 				t.Fatalf("Serve: %v", err)
 			}
 			said := logw.String()

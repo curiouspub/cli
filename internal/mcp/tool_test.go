@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -16,7 +17,7 @@ func echoTool(name string) Tool {
 		Title:       "Echo",
 		Description: "Return the arguments it was given.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"say":{"type":"string"}}}`),
-		Handler: func(arguments json.RawMessage) Result {
+		Handler: func(_ context.Context, arguments json.RawMessage, _ Progress) Result {
 			return TextResult("echo: %s", string(arguments))
 		},
 	}
@@ -101,8 +102,10 @@ func TestAnUnknownToolIsAStructuredErrorAndAKnownOneIsNot(t *testing.T) {
 func TestAToolThatFailsIsAResultAndNotAProtocolError(t *testing.T) {
 	s := testServer()
 	s.Register(Tool{
-		Name:    "always-fails",
-		Handler: func(json.RawMessage) Result { return ErrorResult("the build did not compile") },
+		Name: "always-fails",
+		Handler: func(context.Context, json.RawMessage, Progress) Result {
+			return ErrorResult("the build did not compile")
+		},
 	})
 
 	stdout, _ := drive(t, s, callMessage("1", "always-fails", `{}`))
@@ -195,7 +198,7 @@ func TestAToolWithNoSchemaIsListedWithTheEmptyObjectSchema(t *testing.T) {
 	s := testServer()
 	s.Register(Tool{
 		Name:    "takes-nothing",
-		Handler: func(json.RawMessage) Result { return TextResult("ok") },
+		Handler: func(context.Context, json.RawMessage, Progress) Result { return TextResult("ok") },
 	})
 
 	stdout, _ := drive(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -249,7 +252,7 @@ func TestOneMessagePerLineEvenWhenARawSchemaIsIndented(t *testing.T) {
     "dir": { "type": "string" }
   }
 }`),
-		Handler: func(json.RawMessage) Result { return TextResult("ok") },
+		Handler: func(context.Context, json.RawMessage, Progress) Result { return TextResult("ok") },
 	})
 
 	stdout, _ := drive(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -286,7 +289,7 @@ func TestRegisteringTheSameNameTwiceIsRefusedAtWiringTime(t *testing.T) {
 		name string
 		tool Tool
 	}{
-		{"no name", Tool{Handler: func(json.RawMessage) Result { return Result{} }}},
+		{"no name", Tool{Handler: func(context.Context, json.RawMessage, Progress) Result { return Result{} }}},
 		{"no handler", Tool{Name: "handlerless"}},
 		{"a duplicate name", echoTool("echo")},
 	} {
