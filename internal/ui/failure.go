@@ -244,12 +244,12 @@ func (u *UI) renderFailure(f *Failure) string {
 	for i, part := range parts {
 		switch {
 		case i == 0 && f.What != "":
-			rendered = append(rendered, u.styled(sanitizeLines(part)))
+			rendered = append(rendered, u.styled(SanitizeLines(part)))
 		case i == quoted:
 			// WHOLE, newline included. See the field.
 			rendered = append(rendered, Sanitize(part))
 		default:
-			rendered = append(rendered, sanitizeLines(part))
+			rendered = append(rendered, SanitizeLines(part))
 		}
 	}
 	return strings.Join(rendered, "\n\n") + "\n"

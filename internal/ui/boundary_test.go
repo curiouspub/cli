@@ -207,7 +207,7 @@ func receiverIsUI(recv *ast.FieldList) bool {
 // method in the table, fed every hostile vocabulary, and nothing a
 // terminal obeys arrives.
 //
-// REQUIRED MUTATION, run 2026-09-09: remove the sanitizeLines call from
+// REQUIRED MUTATION, run 2026-09-09: remove the SanitizeLines call from
 // renderFailure. Reds on Fail for all four inputs, and on nothing else —
 // which is the shape that proves the rows are per-method rather than
 // aggregate. Removing it from Step and Result instead reds those two.

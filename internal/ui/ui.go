@@ -99,7 +99,7 @@ func Writing(out, err io.Writer) *UI {
 // break inside one record is a second record. This does not, and takes
 // a Prose so that the exception can only be reached deliberately.
 func (u *UI) Help(text Prose) {
-	fmt.Fprint(u.out, sanitizeLines(string(text)))
+	fmt.Fprint(u.out, SanitizeLines(string(text)))
 }
 
 // New returns a UI wired to the given streams and this process's
@@ -389,7 +389,7 @@ type Prose string
 // need one. A line that has been printed stays printed.
 func (u *UI) Step(format string, args ...any) {
 	escapeInPlace(args)
-	fmt.Fprintln(u.err, sanitizeLines(fmt.Sprintf(format, args...)))
+	fmt.Fprintln(u.err, SanitizeLines(fmt.Sprintf(format, args...)))
 }
 
 // Result writes machine-consumable output to STDOUT — the other half of
