@@ -77,9 +77,16 @@ import (
 // without producing any evidence. The five-times sizing rule is enforced
 // against the RECORD, deterministically, beside the registry.
 
-// probeRuns is how many consecutive runs stand behind a probe's number.
-// Twenty, because one run is an outcome and a margin is a distribution:
-// the window that failed one run in six passed the run that chose it.
+// probeRuns is how many consecutive VALID runs stand behind a probe's
+// number. Twenty, because one run is an outcome and a margin is a
+// distribution: the window that failed one run in six passed the run
+// that chose it.
+//
+// VALID is the word that moved. It used to be twenty runs, of which the
+// starved ones were dropped — so a noisy machine produced a maximum over
+// fifteen readings while the record said twenty, and past a fifth the
+// leg stopped altogether. Now a starved run is retaken and twenty means
+// twenty. See attemptCap for what bounds the retaking.
 const probeRuns = 20
 
 // probeRunsUnpaced is the run count for a probe whose fixture does not
@@ -158,6 +165,13 @@ const probeRunsUnpaced = 1000
 // message took a Duration, so the block-point arm — whose quantity is a
 // count of BYTES — printed "worst so far 0s". The caller renders its own
 // quantity now.
+//
+// THE FOUR LINES ABOVE ARE WHAT THAT RUN PRINTED, and a paced arm's line
+// now carries one thing more: the attempts it spent. The two counts
+// stopped being the same number when a starved pass began to be retaken
+// — an arm cut at its budget can have made twenty-six attempts and hold
+// nineteen readings — and a line reporting only the second would be
+// describing a cheaper run than the one that happened.
 const probeArmBudget = 4 * time.Minute
 
 // reportIncompleteArm is the one place an unfinished arm is written
@@ -354,6 +368,226 @@ const (
 	marginFloorDen = 2
 )
 
+// gathered is what a probe's run loop brings back: one client gap per
+// ATTEMPT in the order they were attempted, every progress event
+// sampled across all of them, and how many of those attempts measured
+// the client.
+//
+// THE GAPS ARE PER ATTEMPT AND NOT PER VALID PASS, because the starved
+// ones are what say how noisy this runner was, and a slice that dropped
+// them on the way out would make the rate below unmeasurable at exactly
+// the moment it becomes interesting.
+type gathered struct {
+	gaps    []time.Duration
+	samples int
+	valid   int
+}
+
+// worst is the largest client gap seen across every attempt, starved
+// ones included. It is what an arm that ran out of budget reports — at
+// that point nothing has been classified, so "the worst so far" is the
+// only honest thing to say about it.
+func (g gathered) worst() time.Duration {
+	var worst time.Duration
+	for _, gap := range g.gaps {
+		if gap > worst {
+			worst = gap
+		}
+	}
+	return worst
+}
+
+// gatherPasses runs attempts until it holds want VALID passes or spends
+// the attempt cap, and that is the whole of the change a starved pass
+// brought with it.
+//
+// # A SHORT SAMPLE IS ANSWERED BY ANOTHER READING
+//
+// The loop this replaced ran exactly twenty times and let the classifier
+// sort the results out afterwards. A starved attempt therefore cost the
+// sample a reading it never got back: nineteen where twenty were asked
+// for, or fifteen, and past a fifth the leg stopped and reported
+// nothing at all. Every other instrument answers a spoiled reading by
+// taking another one, and this one now does too.
+//
+// THE DECISION HAS TO BE MADE INSIDE THE LOOP, which is why this exists
+// as a function rather than as a second pass over two slices: whether to
+// attempt again depends on the attempt that has just finished, so the
+// classification cannot all wait until the runs are over. What still
+// waits is the MAXIMUM — see classifyPasses, which takes it over a
+// subset decided after the fact, and a running maximum cannot be
+// un-taken.
+//
+// fixtureGaps is the fixture's own record, one entry per attempt it has
+// served, in the order it served them. It is read after every attempt
+// and the last entry is the one just finished; a count that has stopped
+// agreeing with the attempts made is refused rather than guessed at,
+// for the same reason classifyPasses refuses it — the pairing is BY
+// POSITION, and where it fails there is no attempt for this gap to
+// belong to.
+func gatherPasses(want int, pace, budget time.Duration,
+	attempt func() (time.Duration, int, error),
+	fixtureGaps func() []time.Duration) (gathered, error) {
+
+	threshold, err := starvationThreshold(pace, budget)
+	if err != nil {
+		return gathered{}, err
+	}
+	cap := attemptCap(want)
+	g := gathered{gaps: make([]time.Duration, 0, cap)}
+	for g.valid < want && len(g.gaps) < cap {
+		gap, samples, err := attempt()
+		g.samples += samples
+		g.gaps = append(g.gaps, gap)
+		if err != nil {
+			return g, err
+		}
+		fixture := fixtureGaps()
+		if len(fixture) != len(g.gaps) {
+			return g, fmt.Errorf("the fixture has recorded %d gaps after %d attempts, "+
+				"so there is no record of the attempt this loop is about to judge. "+
+				"Whether to take another reading depends on the one just finished, "+
+				"and the pairing that answers it is BY POSITION",
+				len(fixture), len(g.gaps))
+		}
+		if !starvedPass(fixture[len(fixture)-1], threshold) {
+			g.valid++
+		}
+	}
+	return g, nil
+}
+
+// starvedPass reports whether one attempt measured the MACHINE rather
+// than the client: its fixture missed its own stated pace by more than
+// the threshold.
+//
+// ONE HOME FOR THE RULE AND TWO PLACES THAT APPLY IT. The run loop asks
+// after every attempt, because it has to decide whether to take another;
+// the classifier asks again across the whole series, because the maximum
+// is a maximum over the passes this rule admitted and the record has to
+// say how many there were. Two applications of one rule is fine; two
+// spellings of it would drift, so the comparison is written once.
+//
+// A FIXTURE WITH NO PACE HAS NOTHING TO MISS, and this says so rather
+// than letting a zero through the arithmetic. It writes its frames and
+// goes silent: every attempt measured the client, nothing is retaken,
+// and a fixture gap of any size there is the quantity being measured
+// rather than a spoiled reading.
+func starvedPass(fixtureGap, threshold time.Duration) bool {
+	// NO ZERO-THRESHOLD BRANCH, AND ITS ABSENCE IS THE RULING. This
+	// function used to answer "false" for a threshold of nought, which
+	// read as leniency and was an EXEMPTION: a fixture that states no
+	// interval could not starve, however long it actually paused. It was
+	// not saying that fixture cannot starve — it was saying its
+	// starvation had no declared threshold to be measured against, and
+	// the two are only the same thing while nobody looks.
+	//
+	// A zero reaching here now is a caller that did not resolve one, and
+	// it is a programming error rather than a reading: taken literally a
+	// zero threshold marks EVERY pass starved. starvationThreshold is
+	// where the resolution lives and where the refusal is raised.
+	return fixtureGap*time.Duration(paceThresholdDen) >
+		threshold*time.Duration(paceThresholdNum)
+}
+
+// starvationThreshold is the quantity one leg's passes are judged
+// against: a fixture's stated interval where it has one, and its
+// MEASURED FLUSH BUDGET where it does not.
+//
+// WHY A WRITE-THEN-SILENT FIXTURE NEEDED ONE. StreamGoesQuiet writes two
+// frames and holds the connection open, so there is no interval to
+// state — and for as long as that meant "no threshold", every pass it
+// took counted whatever the machine did underneath it. On 2026-09-11 a
+// merge-group runner paused that fixture for 35.113375 ms, against a
+// routine 56 µs to 11 ms on the same leg. The pass counted, the client's
+// arrival gap came back 54.251708 ms against a 55 ms window, and the
+// margin floor reported the ROW as passing thin on a reading that was
+// about the machine. It ejected a green pull request from the queue.
+//
+// The budget is measured rather than chosen, per leg, and lives on the
+// Measurement for the reason set out there: an interval is this
+// repository's constant, a budget is what a kind of machine does.
+func starvationThreshold(pace, budget time.Duration) (time.Duration, error) {
+	if pace > 0 {
+		return pace, nil
+	}
+	if budget > 0 {
+		return budget, nil
+	}
+	return 0, fmt.Errorf("this fixture states no pace and its leg records no flush " +
+		"budget, so there is no quantity its starvation could be measured against. " +
+		"That is nobody having looked rather than a fixture that cannot starve, and " +
+		"it is refused here rather than passed on as a threshold of nought — which " +
+		"would not be the lenient reading but the strictest possible one, marking " +
+		"every pass starved and stopping the leg at its attempt cap")
+}
+
+// budgetRecorded is the budget as a RECORD rather than as a threshold:
+// zero when the fixture states a pace, because then the pace is what its
+// passes were judged against and a budget beside it would be a second
+// number nobody used.
+func budgetRecorded(pace, budget time.Duration) time.Duration {
+	if pace > 0 {
+		return 0
+	}
+	return budget
+}
+
+// thresholdPhrase names WHICH quantity a message is talking about, so a
+// reader of a starvation line is never left to infer whether the number
+// beside it is a fixture's own constant or a leg's measured budget.
+func thresholdPhrase(pace, budget time.Duration) string {
+	if pace > 0 {
+		return fmt.Sprintf("stated %v pace", pace)
+	}
+	return fmt.Sprintf("%v flush budget for this leg", budget)
+}
+
+// attemptCap is the total attempts a probe may spend reaching want valid
+// passes, and spending it without reaching them is now the ONLY way
+// starvation stops a leg.
+//
+// # WHAT IT REPLACED, AND WHY THAT HAD TO GO
+//
+// The rule before it was "more than one pass in five starved is a STOP".
+// It fired three times in one working day with no client-margin breach
+// under any of them — 32 ms against a 255 ms window, 1.2 ms against
+// 55 ms — and the same command on the same machine gave five of twenty
+// on one branch, one of twenty on the main line, and zero of twenty on
+// every probe when the worst branch was run a second time. A line drawn
+// at one in five through a distribution that looks like that reds
+// without a defect underneath it, and a gate that reds without a defect
+// is a gate somebody switches off.
+//
+// The cap asks a different question, and it is the question worth
+// asking: not "was this runner noisy" — that is a number now, recorded
+// per leg — but "did it produce the readings this margin needs at all".
+//
+// TWICE WHAT WAS ASKED FOR, so forty against the twenty every paced
+// probe wants. The figure is a budget rather than a measured threshold
+// and it is worth saying so: a runner starving half its attempts still
+// delivers a full sample here, and one starving more than half is
+// spending most of its time being something other than an instrument.
+// Unbounded retaking would be the worse failure — a busy machine turning
+// a bounded arm into one that never finishes, which is the shape the arm
+// budget above exists against, one level down.
+//
+// EVERY FIXTURE GETS THE BUDGET NOW. This function used to hand an
+// unpaced fixture a cap equal to what it asked for, on the reasoning
+// that with no pace there is no starved pass and a retake budget would
+// be machinery with no input. The reasoning was sound and its premise
+// was the exemption starvationThreshold removed: a write-then-silent
+// fixture has a threshold now, so it has starved passes, so it needs
+// somewhere to retake them from.
+func attemptCap(want int) int {
+	return want * retakeBudget
+}
+
+// retakeBudget is the "twice" in attemptCap, in one place so that moving
+// it is one edit and the cap and the message that reports it cannot
+// disagree about what was spent.
+const retakeBudget = 2
+
 // classifyPasses separates the runs that measured the CLIENT from the runs in
 // which the fixture was the thing that stopped, and returns the maximum
 // over the first kind.
@@ -408,8 +642,22 @@ const (
 // and goes silent has no pace to miss, so there is no test to apply and
 // every run counts — recorded as StatedPace zero, so a reader can tell
 // "held its pace" from "had none".
-func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration,
-	pace time.Duration, flushes int) (time.Duration, *timing.PaceIntegrity, error) {
+//
+// WHAT A STARVED PASS COSTS NOW, since this function used to decide it.
+// It is retaken rather than counted — see gatherPasses, which is the
+// loop that hands this one its attempts — so the population here is
+// every ATTEMPT, want is the valid passes that were asked for, and the
+// only starvation stop left is having spent the attempts without
+// reaching them. "More than one in five starved" was a rule about a
+// sample this instrument had no reason to keep, and it is gone rather
+// than loosened.
+func classifyPasses(name string, leg timing.Leg, want int, perRun, fixture []time.Duration,
+	pace, budget time.Duration, flushes int) (time.Duration, *timing.PaceIntegrity, error) {
+
+	threshold, err := starvationThreshold(pace, budget)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%s on %s: %w", name, leg, err)
+	}
 
 	// PAIRING BY POSITION IS AN ASSUMPTION, SO IT IS CHECKED. Runs are
 	// sequential and each opens one connection, so run i is connection
@@ -423,10 +671,20 @@ func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration
 	}
 
 	integrity := &timing.PaceIntegrity{
+		// ATTEMPTS IS THE POPULATION, and it is set from the slice
+		// rather than from want because the two stop being the same
+		// number the moment anything is retaken. It is the starvation
+		// rate's denominator, and a rate over the passes that survived
+		// would report a fraction of the wrong thing.
+		Attempts:     len(perRun),
 		ThresholdNum: paceThresholdNum,
 		ThresholdDen: paceThresholdDen,
 		StatedPace:   pace,
-		Flushes:      flushes,
+		// RECORDED BESIDE THE PACE, not instead of it, so the record says
+		// which of the two the threshold came from. Exactly one is
+		// non-zero.
+		FlushBudget: budgetRecorded(pace, budget),
+		Flushes:     flushes,
 	}
 	var worst time.Duration
 	// THE ADMITTED PASSES' OWN GAPS ARE KEPT, not just the largest. A
@@ -439,8 +697,7 @@ func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration
 		if fixture[i] > integrity.WorstFixtureGap {
 			integrity.WorstFixtureGap = fixture[i]
 		}
-		if pace > 0 && fixture[i]*time.Duration(paceThresholdDen) >
-			pace*time.Duration(paceThresholdNum) {
+		if starvedPass(fixture[i], threshold) {
 			integrity.Starved++
 			continue
 		}
@@ -462,20 +719,35 @@ func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration
 		integrity.ValidGapMedian = sorted[(len(sorted)-1)/2]
 	}
 	if integrity.Valid == 0 {
-		return 0, nil, fmt.Errorf("%s on %s: every one of %d passes starved — the "+
-			"fixture never held its stated %v pace, worst %v. There is no "+
+		return 0, nil, fmt.Errorf("%s on %s: every one of %d attempts starved — the "+
+			"fixture never came within %d/%d of its %s, worst %v. There is no "+
 			"measurement here to report",
-			name, leg, len(perRun), pace, integrity.WorstFixtureGap)
+			name, leg, len(perRun), paceThresholdNum, paceThresholdDen,
+			thresholdPhrase(pace, budget), integrity.WorstFixtureGap)
 	}
-	if integrity.Starves() {
+	// THE ONE STARVATION STOP LEFT, and it fires at the cap rather than
+	// at a ratio. Reaching it means this runner spent every attempt it
+	// was given and still could not produce the readings the margin
+	// needs — which is a statement about whether there is a measurement
+	// here, not about how much work it took to get one. A leg that took
+	// thirty-nine attempts to reach twenty valid passes is noisy and is
+	// recorded as noisy; it is not stopped.
+	//
+	// IT NAMES BOTH NUMBERS RATHER THAN A RATIO. "A third of the
+	// attempts starved" sends a reader to argue with a threshold; "10
+	// valid in 40" says what was asked for, what arrived, and what it
+	// cost, and the next question — is this machine busy or is the
+	// fixture wrong — is answerable from the two.
+	if integrity.Valid < want {
 		return 0, nil, fmt.Errorf("%s on %s: this runner cannot hold the fixture's "+
-			"pace — %d of %d passes starved, more than the one in five this rule "+
-			"allows, worst fixture gap %v against a stated %v.\nA runner that "+
-			"mostly starves the fixture is not a measuring instrument, and a "+
-			"maximum over the few passes it did not starve is a number about the "+
-			"quiet moments of a busy machine",
-			name, leg, integrity.Starved, len(perRun),
-			integrity.WorstFixtureGap, pace)
+			"pace: %d valid in %d. It spent every attempt it is given and did not "+
+			"reach the %d valid passes this margin stands on, worst fixture gap %v "+
+			"against a %s.\nA starved pass is retaken rather than counted, so "+
+			"this is not a noisy runner being refused — it is a runner that could "+
+			"not produce the readings at all, and a maximum over the few passes it "+
+			"managed is a number about the quiet moments of a busy machine",
+			name, leg, integrity.Valid, len(perRun), want,
+			integrity.WorstFixtureGap, thresholdPhrase(pace, budget))
 	}
 	return worst, integrity, nil
 }
@@ -511,26 +783,44 @@ func integrityLiteral(p *timing.PaceIntegrity) string {
 	if p == nil {
 		return ""
 	}
-	return fmt.Sprintf(", Integrity: &timing.PaceIntegrity{Valid: %d, Starved: %d, "+
-		"ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, Flushes: %d, "+
+	return fmt.Sprintf(", Integrity: &timing.PaceIntegrity{Attempts: %d, Valid: %d, "+
+		"Starved: %d, ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, Flushes: %d, "+
 		"WorstFixtureGap: %d, ValidGapMin: %d, ValidGapMedian: %d, ValidGapMax: %d}",
-		p.Valid, p.Starved, p.ThresholdNum, p.ThresholdDen,
+		p.Attempts, p.Valid, p.Starved, p.ThresholdNum, p.ThresholdDen,
 		p.StatedPace, p.Flushes, p.WorstFixtureGap,
 		p.ValidGapMin, p.ValidGapMedian, p.ValidGapMax)
 }
 
 // integrityNote renders what a pass says about its own instrument.
+//
+// THE STARVATION RATE IS PRINTED HERE BECAUSE IT IS NO LONGER A RED.
+// While starvation stopped a leg, the only way anybody saw the number
+// was a failure, so the quantity existed in the memory of whoever was
+// interrupted and nowhere else. It is a column now — every run of every
+// paced probe says how noisy the machine was while it produced its
+// number, whether or not anybody is looking that day.
 func integrityNote(p *timing.PaceIntegrity) string {
 	if p.StatedPace == 0 {
-		return fmt.Sprintf(" the fixture has no pace to hold, so no pass is "+
-			"excluded; its own widest gap was %v", p.WorstFixtureGap)
+		// A WRITE-THEN-SILENT FIXTURE, JUDGED AGAINST ITS BUDGET. This
+		// branch used to say the fixture had no pace to hold and that
+		// every attempt therefore counted; it now reports the same
+		// arithmetic every other row gets, against the measured budget
+		// instead of a stated interval.
+		return fmt.Sprintf(" the fixture stayed inside its %v flush budget on %d "+
+			"passes out of %d attempts (%d went past %d/%d of it and were retaken, "+
+			"a starvation rate of %.2f); its own widest gap was %v",
+			p.FlushBudget, p.Valid, p.Attempts, p.Starved,
+			paceThresholdNum, paceThresholdDen, p.StarvationRate(),
+			p.WorstFixtureGap)
 	}
 	lo, mid, hi := p.Ratios()
-	return fmt.Sprintf(" the fixture held its %v pace on %d of %d passes (%d starved "+
-		"past %d/%d of it); its own widest gap was %v, and the admitted passes ran "+
-		"%.2f/%.2f/%.2f times the pace (min/median/max)",
-		p.StatedPace, p.Valid, p.Valid+p.Starved, p.Starved,
-		paceThresholdNum, paceThresholdDen, p.WorstFixtureGap, lo, mid, hi)
+	return fmt.Sprintf(" the fixture held its %v pace on %d passes out of %d attempts "+
+		"(%d starved past %d/%d of it and were retaken, a starvation rate of %.2f); "+
+		"its own widest gap was %v, and the admitted passes ran %.2f/%.2f/%.2f times "+
+		"the pace (min/median/max)",
+		p.StatedPace, p.Valid, p.Attempts, p.Starved,
+		paceThresholdNum, paceThresholdDen, p.StarvationRate(),
+		p.WorstFixtureGap, lo, mid, hi)
 }
 
 // paceThresholdNum over paceThresholdDen is the multiple of its stated
@@ -703,43 +993,33 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
 	defer cancel()
 
-	// EVERY RUN'S GAP IS KEPT. The maximum is taken over a subset and
-	// which subset is decided after the runs are over; a running maximum
-	// cannot be un-taken. See classifyPasses.
-	perRun := make([]time.Duration, 0, probeRuns)
-	var samples int
-	completed := 0
+	// EVERY ATTEMPT'S GAP IS KEPT, the retaken ones included. The
+	// maximum is taken over a subset and which subset is decided after
+	// the runs are over; a running maximum cannot be un-taken. See
+	// gatherPasses for the loop and classifyPasses for the subset.
 	started := time.Now()
-	for run := 0; run < probeRuns; run++ {
-		gap, n, err := oneUploadRun(ctx, store.url, path, pacing.bodySize, transport)
-		transport.CloseIdleConnections()
-		samples += n
-		perRun = append(perRun, gap)
-		if err != nil {
-			// THE BUDGET EXPIRING IS THE RESULT; anything else is a
-			// broken instrument, and the two are told apart rather than
-			// folded together.
-			if ctx.Err() == nil {
-				t.Fatalf("the probe upload failed on run %d of %d: %v", run+1, probeRuns, err)
-			}
-			break
-		}
-		completed++
+	taken, err := gatherPasses(probeRuns, pacing.pause, 0,
+		func() (time.Duration, int, error) {
+			gap, n, err := oneUploadRun(ctx, store.url, path, pacing.bodySize, transport)
+			transport.CloseIdleConnections()
+			return gap, n, err
+		},
+		store.widestDrainPerRequest)
+	// THE BUDGET EXPIRING IS THE RESULT; anything else is a broken
+	// instrument, and the two are told apart rather than folded
+	// together.
+	if err != nil && ctx.Err() == nil {
+		t.Fatalf("the probe upload failed on attempt %d: %v", len(taken.gaps), err)
 	}
-	if samples == 0 {
+	if taken.samples == 0 {
 		t.Fatal("the probe recorded no gap at all, so its silence is about an " +
 			"instrument that stopped working rather than about a fast machine")
 	}
 	pinsWereApplied(t, client, store.pin)
-	if completed < probeRuns {
-		worstSoFar := time.Duration(0)
-		for _, g := range perRun {
-			if g > worstSoFar {
-				worstSoFar = g
-			}
-		}
-		reportIncompleteArm(t, entry.Name, completed, probeRuns,
-			fmt.Sprintf("worst gap so far %v", worstSoFar), time.Since(started))
+	if err != nil {
+		reportIncompleteArm(t, entry.Name, taken.valid, probeRuns,
+			fmt.Sprintf("worst gap so far %v over %d attempts", taken.worst(), len(taken.gaps)),
+			time.Since(started))
 		return
 	}
 
@@ -749,8 +1029,8 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	// a run in which the STORE missed its own pace measured the store,
 	// not the client, for the same reason a starved stream fixture
 	// measures the runner.
-	worst, integrity, err := classifyPasses(entry.Name, probeLeg(),
-		perRun, store.widestDrainPerRequest(), pacing.pause, 0)
+	worst, integrity, err := classifyPasses(entry.Name, probeLeg(), probeRuns,
+		taken.gaps, store.widestDrainPerRequest(), pacing.pause, 0, 0)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -758,8 +1038,8 @@ func TestProbeTheUploadStallGap(t *testing.T) {
 	report(t, entry, integrity.Valid, worst, observedPin(client, store.pin), integrity,
 		fmt.Sprintf(" (%d gaps sampled, store pacing %d KiB every %v over a "+
 			"%d-byte body, %d of it paced;%s)",
-			samples, pacing.chunk>>10, pacing.pause, pacing.bodySize, pacing.pacedBytes,
-			integrityNote(integrity)))
+			taken.samples, pacing.chunk>>10, pacing.pause, pacing.bodySize,
+			pacing.pacedBytes, integrityNote(integrity)))
 }
 
 // oneUploadRun PUTs the body once and returns the worst interval between
@@ -1074,40 +1354,35 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), probeArmBudget)
 			defer cancel()
 
-			// EVERY RUN'S GAP IS KEPT, not just the running maximum,
-			// because the maximum is now taken over a SUBSET and which
+			// EVERY ATTEMPT'S GAP IS KEPT, not just the running maximum,
+			// because the maximum is taken over a SUBSET and which
 			// subset is decided after the runs are over. A running
 			// maximum cannot be un-taken.
-			perRun := make([]time.Duration, 0, tc.runs)
-			var samples int
-			completed := 0
+			//
+			// THE WRITE-THEN-SILENT CASE PASSES THROUGH THIS UNCHANGED,
+			// and it is the same call rather than a branch — but for the
+			// opposite reason it used to be. It was "its fixture has no
+			// pace to miss, so no attempt is ever starved"; that was the
+			// exemption. Its fixture is now judged against the measured
+			// flush budget this leg records, so its attempts starve and
+			// retake like every other row's, through this one path.
 			started := time.Now()
-			for run := 0; run < tc.runs; run++ {
-				gap, n, err := oneStreamRun(ctx, srv.URL)
-				samples += n
-				perRun = append(perRun, gap)
-				if err != nil {
-					if ctx.Err() == nil {
-						t.Fatalf("the probe stream failed on run %d of %d: %v",
-							run+1, tc.runs, err)
-					}
-					break
-				}
-				completed++
+			budget := tc.entry.Measurements[probeLeg()].FlushBudget
+			taken, err := gatherPasses(tc.runs, tc.script.pace, budget,
+				func() (time.Duration, int, error) { return oneStreamRun(ctx, srv.URL) },
+				script.widestPerConnection)
+			if err != nil && ctx.Err() == nil {
+				t.Fatalf("the probe stream failed on attempt %d: %v", len(taken.gaps), err)
 			}
-			if samples == 0 {
+			if taken.samples == 0 {
 				t.Fatal("the probe recorded no arrival at all, so its silence is " +
 					"about an instrument that stopped working")
 			}
-			if completed < tc.runs {
-				worstSoFar := time.Duration(0)
-				for _, g := range perRun {
-					if g > worstSoFar {
-						worstSoFar = g
-					}
-				}
-				reportIncompleteArm(t, tc.entry.Name, completed, tc.runs,
-					fmt.Sprintf("worst gap so far %v", worstSoFar), time.Since(started))
+			if err != nil {
+				reportIncompleteArm(t, tc.entry.Name, taken.valid, tc.runs,
+					fmt.Sprintf("worst gap so far %v over %d attempts",
+						taken.worst(), len(taken.gaps)),
+					time.Since(started))
 				return
 			}
 
@@ -1117,12 +1392,13 @@ func TestProbeTheStreamStallGaps(t *testing.T) {
 			// the window, saying they measured the machine rather than
 			// the client; this is the same test, applied by the
 			// instrument to itself.
-			worst, integrity, err := classifyPasses(tc.entry.Name, probeLeg(),
-				perRun, script.widestPerConnection(), tc.script.pace, len(tc.script.frames))
+			worst, integrity, err := classifyPasses(tc.entry.Name, probeLeg(), tc.runs,
+				taken.gaps, script.widestPerConnection(), tc.script.pace, budget,
+				len(tc.script.frames))
 			if err != nil {
 				t.Fatalf("%v", err)
 			}
-			extra := fmt.Sprintf(" (%d arrivals sampled;%s)", samples,
+			extra := fmt.Sprintf(" (%d arrivals sampled;%s)", taken.samples,
 				integrityNote(integrity))
 			// NIL PIN, and that is the two mechanisms held apart rather
 			// than an omission. Nothing buffers on this client's behalf
@@ -1241,9 +1517,15 @@ func oneStreamRun(ctx context.Context, base string) (time.Duration, int, error) 
 //     without waiting for a runner.
 //  2. Drop the length check. The "pairing" row reds; without it a
 //     shorter fixture slice silently classifies the wrong runs.
-//  3. Make Starves compare against the wrong total. The "one in five"
-//     row reds and the "one in six is allowed" row reds with it, which
-//     is the boundary being asserted from both sides.
+//
+// A THIRD ONE USED TO LIVE HERE, and what happened to it is worth more
+// than what it proved. It mutated the one-in-five bound, and the rows it
+// reddened asserted that boundary from both sides — a leg starving one
+// pass in five passed, one in four was refused. Both rows are gone with
+// the rule: a starved pass is retaken now, so a leg starving one in four
+// reaches its twenty readings and is recorded as having taken
+// twenty-six attempts to do it. See TestAStarvedPassIsRetakenRatherThanCounted,
+// which is where that boundary's replacement is asserted.
 func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 	const pace = 20 * time.Millisecond
 	ms := func(n ...int) []time.Duration {
@@ -1255,16 +1537,17 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 	}
 
 	t.Run("a fixture that held its pace excludes nothing", func(t *testing.T) {
-		worst, p, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 25), ms(22, 25, 21), pace, 0)
+		worst, p, err := classifyPasses("Entry", timing.Darwin, 3,
+			ms(30, 40, 25), ms(22, 25, 21), pace, 0, 0)
 		if err != nil {
 			t.Fatalf("three ordinary passes were refused: %v", err)
 		}
 		if worst != 40*time.Millisecond {
 			t.Errorf("worst = %v, want 40ms — the maximum over every pass", worst)
 		}
-		if p.Valid != 3 || p.Starved != 0 {
-			t.Errorf("valid/starved = %d/%d, want 3/0", p.Valid, p.Starved)
+		if p.Attempts != 3 || p.Valid != 3 || p.Starved != 0 {
+			t.Errorf("attempts/valid/starved = %d/%d/%d, want 3/3/0",
+				p.Attempts, p.Valid, p.Starved)
 		}
 		if p.WorstFixtureGap != 25*time.Millisecond {
 			t.Errorf("worst fixture gap = %v, want 25ms", p.WorstFixtureGap)
@@ -1276,18 +1559,20 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 		// only arrangement that proves anything: if the excluded pass
 		// were not the maximum, dropping it would change nothing and
 		// the row would pass with the rule removed.
-		worst, p, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace, 0)
+		worst, p, err := classifyPasses("Entry", timing.Darwin, 4,
+			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace, 0, 0)
 		if err != nil {
-			t.Fatalf("one starved pass in five was refused: %v", err)
+			t.Fatalf("five attempts producing the four valid passes asked for "+
+				"were refused: %v", err)
 		}
 		if worst != 40*time.Millisecond {
 			t.Errorf("worst = %v, want 40ms — the 900ms pass measured a fixture "+
 				"that had stopped, and a window five times it would be a margin "+
 				"over this machine rather than over the client", worst)
 		}
-		if p.Valid != 4 || p.Starved != 1 {
-			t.Errorf("valid/starved = %d/%d, want 4/1", p.Valid, p.Starved)
+		if p.Attempts != 5 || p.Valid != 4 || p.Starved != 1 {
+			t.Errorf("attempts/valid/starved = %d/%d/%d, want 5/4/1",
+				p.Attempts, p.Valid, p.Starved)
 		}
 		// The excluded pass is still VISIBLE. Dropping it quietly would
 		// hide how far this runner was from being an instrument.
@@ -1297,26 +1582,26 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 		}
 	})
 
-	t.Run("one pass in five is allowed and one in four is not", func(t *testing.T) {
-		// Five passes, one starved: exactly the bound, and it passes.
-		if _, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 900, 25, 35), ms(22, 25, 890, 21, 24), pace, 0); err != nil {
-			t.Errorf("one starved pass in five is the bound and must be allowed: %v", err)
-		}
-		// Four passes, one starved: past it.
-		_, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 900, 25, 35), ms(22, 890, 21, 24), pace, 0)
-		if err == nil {
-			t.Fatal("one starved pass in four is past the bound and was accepted")
-		}
-		if !strings.Contains(err.Error(), "cannot hold the fixture's pace") {
-			t.Errorf("the refusal does not say what is wrong with the runner:\n%v", err)
-		}
-	})
+	t.Run("attempts spent without the passes asked for is the one stop left",
+		func(t *testing.T) {
+			// Four attempts, one starved, and four valid passes wanted:
+			// the attempts are spent and the sample is short.
+			_, _, err := classifyPasses("Entry", timing.Darwin, 4,
+				ms(30, 900, 25, 35), ms(22, 890, 21, 24), pace, 0, 0)
+			if err == nil {
+				t.Fatal("three valid passes out of four attempts answered a demand " +
+					"for four")
+			}
+			// BOTH NUMBERS, not a ratio. What the refusal has to hand a
+			// reader is what was asked for and what arrived.
+			if !strings.Contains(err.Error(), "cannot hold the fixture's pace: 3 valid in 4") {
+				t.Errorf("the refusal does not name what arrived and what it cost:\n%v", err)
+			}
+		})
 
 	t.Run("every pass starved is not a thinner sample", func(t *testing.T) {
-		_, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(900, 800), ms(890, 790), pace, 0)
+		_, _, err := classifyPasses("Entry", timing.Darwin, 2,
+			ms(900, 800), ms(890, 790), pace, 0, 0)
 		if err == nil {
 			t.Fatal("a pass set in which the fixture never held its pace produced a " +
 				"measurement")
@@ -1326,26 +1611,340 @@ func TestAStarvedPassIsNotAMeasurement(t *testing.T) {
 		}
 	})
 
-	t.Run("a fixture with no pace has nothing to miss", func(t *testing.T) {
-		worst, p, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 900, 25), ms(22, 890, 21), 0, 0)
+	t.Run("a write-then-silent fixture is judged against its budget", func(t *testing.T) {
+		// THE EXEMPTION THIS ROW USED TO ASSERT. It read "a fixture with
+		// no pace has nothing to miss" and wanted 900ms back — the
+		// starved run's own gap, admitted as the leg's maximum because
+		// no threshold existed to exclude it. That is the defect in
+		// miniature: the same shape that let a 35.113375 ms machine
+		// pause become a 54.251708 ms client margin on the gate.
+		const budget = 11 * time.Millisecond
+		worst, p, err := classifyPasses("Entry", timing.Darwin, 2,
+			ms(30, 900, 25), ms(22, 890, 21), 0, budget, 0)
 		if err != nil {
-			t.Fatalf("an unpaced fixture was refused: %v", err)
+			t.Fatalf("a write-then-silent fixture was refused: %v", err)
 		}
-		if worst != 900*time.Millisecond {
-			t.Errorf("worst = %v, want 900ms — with no pace there is no test to "+
-				"apply and no pass to exclude", worst)
+		if worst != 30*time.Millisecond {
+			t.Errorf("worst = %v, want 30ms — the maximum over the passes whose "+
+				"fixture stayed inside three times its budget, with the 890ms "+
+				"pass excluded", worst)
 		}
-		if p.Starved != 0 || p.StatedPace != 0 {
-			t.Errorf("starved/pace = %d/%v, want 0/0", p.Starved, p.StatedPace)
+		if p.Starved != 1 || p.Valid != 2 {
+			t.Errorf("starved/valid = %d/%d, want 1/2", p.Starved, p.Valid)
+		}
+		if p.StatedPace != 0 || p.FlushBudget != budget {
+			t.Errorf("pace/budget = %v/%v, want 0/%v — the record says which of "+
+				"the two the threshold came from", p.StatedPace, p.FlushBudget, budget)
+		}
+	})
+
+	t.Run("a fixture with neither a pace nor a budget is refused", func(t *testing.T) {
+		// NOT A LENIENT READING, THE STRICTEST POSSIBLE ONE. A threshold
+		// of nought marks every pass starved, so passing a zero through
+		// would not restore the old exemption — it would stop the leg at
+		// its cap with no readings at all. The refusal says so rather
+		// than letting either behaviour happen by arithmetic.
+		_, _, err := classifyPasses("Entry", timing.Darwin, 2,
+			ms(30, 900, 25), ms(22, 890, 21), 0, 0, 0)
+		if err == nil {
+			t.Fatal("a fixture stating no pace, on a leg recording no flush " +
+				"budget, was classified anyway — against a threshold of nought")
+		}
+		if !strings.Contains(err.Error(), "nobody having looked") {
+			t.Errorf("the refusal does not say that this is an absent measurement "+
+				"rather than a fixture that cannot starve:\n%v", err)
 		}
 	})
 
 	t.Run("the pairing is checked rather than assumed", func(t *testing.T) {
-		_, _, err := classifyPasses("Entry", timing.Darwin,
-			ms(30, 40, 25), ms(22, 25), pace, 0)
+		_, _, err := classifyPasses("Entry", timing.Darwin, 3,
+			ms(30, 40, 25), ms(22, 25), pace, 0, 0)
 		if err == nil {
 			t.Fatal("three runs were classified against two fixture records")
+		}
+		if !strings.Contains(err.Error(), "BY POSITION") {
+			t.Errorf("the refusal does not name the assumption that failed:\n%v", err)
+		}
+	})
+}
+
+// pacedRunner is a probe's two halves faked: an attempt that always
+// succeeds, and a fixture that starves on a FIXED CADENCE.
+//
+// # A ROW WHOSE OUTCOME DEPENDS ON THE HOST'S SCHEDULER IS NOT A ROW
+//
+// The behaviour under test is what happens when a machine starves the
+// fixture, and a machine starves it when it feels like it. A row that
+// ran the real probe and hoped would be green on the days it proved
+// nothing, and the whole subject of this change is a suite that reds on
+// a distribution rather than on a defect — proving it with a stochastic
+// row would be the same mistake one level up. So the cadence is a
+// function of the attempt number: three valid then one starved is
+// exactly three valid then one starved, every run, on every leg.
+//
+// THE STARVED ATTEMPTS CARRY THE LARGEST CLIENT GAP, which is the only
+// arrangement that proves anything about the maximum. If the thrown-away
+// attempts were not the biggest numbers in the set, dropping them would
+// change nothing and the rows below would pass with the rule removed.
+type pacedRunner struct {
+	pace time.Duration
+	// starves decides, from the one-based attempt number, whether this
+	// attempt's fixture missed its pace. It is a predicate rather than a
+	// count so that one in four and three in four are the same fake.
+	starves func(attempt int) bool
+
+	attempts int
+	fixture  []time.Duration
+}
+
+// attempt is what gatherPasses calls, in the shape the real per-run
+// functions have: a client gap, the progress events behind it, and what
+// went wrong.
+func (r *pacedRunner) attempt() (time.Duration, int, error) {
+	r.attempts++
+	if r.starves != nil && r.starves(r.attempts) {
+		// Far past the threshold on the fixture side, and the largest
+		// client gap in the set on the other.
+		r.fixture = append(r.fixture, 45*r.pace)
+		return 900 * time.Millisecond, 1, nil
+	}
+	// Comfortably inside the threshold: the ordinary passes on real
+	// hardware sit near 1.1 times the stated pace.
+	r.fixture = append(r.fixture, r.pace+r.pace/10)
+	return 40 * time.Millisecond, 1, nil
+}
+
+// gaps is the fixture's own record, in the shape the real stores and
+// scripts hand back: a copy, one entry per attempt served.
+func (r *pacedRunner) gaps() []time.Duration {
+	return append([]time.Duration(nil), r.fixture...)
+}
+
+// TestAStarvedPassIsRetakenRatherThanCounted drives the run loop the
+// probes share, because what it decides — whether a spoiled reading
+// costs the sample a reading — cannot be exercised by waiting for a
+// runner to starve.
+//
+// It is the boundary the one-in-five bound used to hold, asserted from
+// both sides of its replacement: a runner starving one attempt in four
+// is noisy and produces a full sample, and a runner starving three in
+// four spends everything it is given and produces a stop naming both
+// numbers.
+//
+// REQUIRED MUTATIONS, RUN ON THE TIP 2026-09-11:
+//
+//  1. THE RETAKE REMOVED — gatherPasses counts attempts where it counts
+//     valid passes, so the loop stops at twenty attempts rather than at
+//     twenty readings that measured something:
+//
+//     the loop spent 20 attempts, want 26
+//     the loop gathered 15 valid passes, want 20
+//     … cannot hold the fixture's pace: 15 valid in 20
+//
+//     A maximum over three quarters of the sample it asked for, and a
+//     STOP on a runner the same row shows is perfectly capable of
+//     producing twenty readings. That is the mutation that proves this
+//     change is the RETAKE and not a looser threshold, and the threshold
+//     is untouched on both sides of it. The three-in-four row reds with
+//     it, unpredicted and correctly: it is a claim about the same loop.
+//
+//  2. The cap moved — attemptCap returning want*3. The three-in-four row
+//     reds alone, with "15 valid in 60" where it wants "10 valid in 40".
+//
+//     AND THE ROW'S OWN CAP ASSERTION STAYED GREEN THROUGH IT, which is
+//     the part worth keeping. That line compares the attempts spent
+//     against attemptCap, so it moved with the mutation and could not
+//     see it: a check derived from the thing it checks agrees with it by
+//     construction. What caught this was the two numbers written out
+//     longhand in the stop's text, ten and forty, which is the same
+//     reason the refusal names both rather than a ratio.
+func TestAStarvedPassIsRetakenRatherThanCounted(t *testing.T) {
+	const pace = 20 * time.Millisecond
+
+	t.Run("one attempt in four starved still reaches twenty valid passes",
+		func(t *testing.T) {
+			// Three valid, then one starved, repeating.
+			runner := &pacedRunner{pace: pace,
+				starves: func(attempt int) bool { return attempt%4 == 0 }}
+
+			taken, err := gatherPasses(probeRuns, pace, 0, runner.attempt, runner.gaps)
+			if err != nil {
+				t.Fatalf("a runner starving one attempt in four was refused: %v", err)
+			}
+			// TWENTY-SIX, and the number is written out rather than
+			// computed here. Six of the first twenty-six attempts starve
+			// and twenty do not, so the twentieth valid reading lands on
+			// the twenty-sixth attempt — inside a cap of forty, which is
+			// the whole claim.
+			if len(taken.gaps) != 26 {
+				t.Errorf("the loop spent %d attempts, want 26: three valid then one "+
+					"starved reaches twenty valid readings on the twenty-sixth",
+					len(taken.gaps))
+			}
+			if taken.valid != probeRuns {
+				t.Errorf("the loop gathered %d valid passes, want %d — a starved "+
+					"attempt is retaken, so it does not cost the sample a reading",
+					taken.valid, probeRuns)
+			}
+
+			worst, p, err := classifyPasses("Entry", timing.Darwin, probeRuns,
+				taken.gaps, runner.gaps(), pace, 0, 0)
+			if err != nil {
+				t.Fatalf("twenty valid passes in twenty-six attempts were refused: %v", err)
+			}
+			if p.Attempts != 26 || p.Valid != 20 || p.Starved != 6 {
+				t.Errorf("attempts/valid/starved = %d/%d/%d, want 26/20/6",
+					p.Attempts, p.Valid, p.Starved)
+			}
+			if worst != 40*time.Millisecond {
+				t.Errorf("worst = %v, want 40ms — the six thrown-away attempts each "+
+					"carried 900ms, and a window five times that would be a margin "+
+					"over this machine rather than over the client", worst)
+			}
+			// THE DENOMINATOR IS THE ATTEMPTS AND NOT THE PASSES, which
+			// is the assertion this row exists for as much as the count.
+			// The two agreed while nothing retook: six starved out of a
+			// fixed twenty is 0.30 and six out of twenty-six attempts is
+			// 0.23, and only the second is a statement about how often
+			// this runner failed to be an instrument.
+			if got, want := p.StarvationRate(), 6.0/26.0; got != want {
+				t.Errorf("starvation rate = %.4f, want %.4f", got, want)
+			}
+			if p.StarvationRate() == 6.0/float64(probeRuns) {
+				t.Error("the starvation rate divided by the passes asked for rather " +
+					"than the attempts spent, which is a fraction of the wrong thing " +
+					"the moment anything is retaken")
+			}
+		})
+
+	t.Run("three attempts in four starved stops at the cap", func(t *testing.T) {
+		// One valid in every four attempts.
+		runner := &pacedRunner{pace: pace,
+			starves: func(attempt int) bool { return attempt%4 != 1 }}
+
+		taken, err := gatherPasses(probeRuns, pace, 0, runner.attempt, runner.gaps)
+		if err != nil {
+			t.Fatalf("the loop failed rather than spending its attempts: %v", err)
+		}
+		if len(taken.gaps) != attemptCap(probeRuns) {
+			t.Errorf("the loop spent %d attempts against a cap of %d",
+				len(taken.gaps), attemptCap(probeRuns))
+		}
+		if taken.valid != 10 {
+			t.Errorf("the loop gathered %d valid passes in forty attempts, want 10",
+				taken.valid)
+		}
+
+		_, _, err = classifyPasses("Entry", timing.Darwin, probeRuns,
+			taken.gaps, runner.gaps(), pace, 0, 0)
+		if err == nil {
+			t.Fatal("ten valid readings answered a demand for twenty")
+		}
+		// THE STOP NAMES BOTH NUMBERS RATHER THAN A RATIO, so a reader
+		// gets what was asked for, what arrived and what it cost without
+		// having to know the cap.
+		if !strings.Contains(err.Error(), "cannot hold the fixture's pace: 10 valid in 40") {
+			t.Errorf("the stop does not say what arrived and what it cost:\n%v", err)
+		}
+	})
+
+	t.Run("a write-then-silent fixture retakes and spends like any other",
+		func(t *testing.T) {
+			// THE OPPOSITE OF WHAT THIS ROW USED TO ASSERT, and the
+			// inversion is the ruling. It read "an unpaced fixture
+			// retakes nothing and spends nothing" and wanted five
+			// attempts for five runs with every fixture gap far past any
+			// threshold — because there was no threshold. There is one
+			// now: the leg's measured flush budget, so these attempts
+			// starve, are retaken, and spend the cap like every other
+			// row's.
+			runner := &pacedRunner{pace: pace, starves: func(int) bool { return true }}
+
+			const want = 5
+			const budget = 11 * time.Millisecond
+			taken, err := gatherPasses(want, 0, budget, runner.attempt, runner.gaps)
+			if err != nil {
+				t.Fatalf("a write-then-silent fixture was refused: %v", err)
+			}
+			if len(taken.gaps) != attemptCap(want) {
+				t.Errorf("%d attempts against a cap of %d — a fixture starving "+
+					"every attempt must spend the budget rather than stopping at "+
+					"what it asked for", len(taken.gaps), attemptCap(want))
+			}
+			if taken.valid != 0 {
+				t.Errorf("%d valid passes, want 0 — every fixture gap here is past "+
+					"three times the budget", taken.valid)
+			}
+			if cap := attemptCap(want); cap != want*retakeBudget {
+				t.Errorf("a write-then-silent probe was given a retake budget of %d "+
+					"against %d runs asked for", cap, want)
+			}
+		})
+
+	t.Run("the excursion that ejected this branch is starved", func(t *testing.T) {
+		// THE REAL NUMBERS, FROM THE RUN THAT CAUSED THIS RULING.
+		// 2026-09-11, merge-group CI, macOS: StreamGoesQuiet's fixture
+		// paused 35.113375 ms against a leg whose routine widest is
+		// 56 µs to 11.010375 ms, and the client's arrival gap came back
+		// 54.251708 ms against a 55 ms window. The pass counted, and the
+		// margin floor reported the ROW as passing on a margin it did
+		// not have.
+		const (
+			excursionFixture = 35113375 * time.Nanosecond
+			excursionGap     = 54251708 * time.Nanosecond
+			ordinaryFixture  = 10053541 * time.Nanosecond
+			ordinaryGap      = 10675125 * time.Nanosecond
+		)
+		entry := timing.StreamGoesQuiet
+		budget := entry.Measurements[timing.Darwin].FlushBudget
+		if budget == 0 {
+			t.Fatal("the darwin leg records no flush budget, so this row is " +
+				"asserting against nothing")
+		}
+
+		worst, p, err := classifyPasses(entry.Name, timing.Darwin, 1,
+			[]time.Duration{ordinaryGap, excursionGap},
+			[]time.Duration{ordinaryFixture, excursionFixture},
+			0, budget, 0)
+		if err != nil {
+			t.Fatalf("the two real passes were refused: %v", err)
+		}
+		if p.Starved != 1 || p.Valid != 1 {
+			t.Errorf("starved/valid = %d/%d, want 1/1 — the 35.113375ms fixture "+
+				"pause is %.2f× the %v budget and the threshold is %d/%d",
+				p.Starved, p.Valid, float64(excursionFixture)/float64(budget),
+				budget, paceThresholdNum, paceThresholdDen)
+		}
+		if worst != ordinaryGap {
+			t.Errorf("worst = %v, want %v — the excursion's own gap must not be "+
+				"the leg's maximum", worst, ordinaryGap)
+		}
+
+		// AND THE CONSEQUENCE, ASSERTED RATHER THAN DESCRIBED. The
+		// margin floor errors when a measurement times marginFloorNum
+		// exceeds the window times marginFloorDen. The excluded reading
+		// clears it; the excursion does not, which is exactly the red
+		// that ejected a green pull request from the merge queue.
+		if worst*marginFloorNum > entry.Window*marginFloorDen {
+			t.Errorf("the admitted maximum %v is inside the margin floor's band "+
+				"against a %v window, so excluding the excursion did not buy the "+
+				"row its margin back", worst, entry.Window)
+		}
+		if excursionGap*marginFloorNum <= entry.Window*marginFloorDen {
+			t.Errorf("the excursion's %v would NOT have tripped the margin floor "+
+				"against a %v window, so this row is not about the failure it "+
+				"names", excursionGap, entry.Window)
+		}
+	})
+
+	t.Run("a fixture record that has stopped pairing is refused", func(t *testing.T) {
+		// The fixture records nothing at all, so there is no record of
+		// the attempt the loop is about to judge.
+		silent := func() []time.Duration { return nil }
+		runner := &pacedRunner{pace: pace}
+		_, err := gatherPasses(probeRuns, pace, 0, runner.attempt, silent)
+		if err == nil {
+			t.Fatal("the loop judged an attempt the fixture has no record of")
 		}
 		if !strings.Contains(err.Error(), "BY POSITION") {
 			t.Errorf("the refusal does not name the assumption that failed:\n%v", err)
