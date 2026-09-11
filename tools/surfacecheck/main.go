@@ -269,6 +269,17 @@ func examine(r repo, rules Rules, req request, commits commitRange) ([]Finding, 
 }
 
 // report prints what was found and decides the exit code.
+// editableSurfaceAmong reports whether any finding sits on a surface a
+// person can change without producing a new event.
+func editableSurfaceAmong(findings []Finding) bool {
+	for _, f := range findings {
+		if f.Subject == subjectPullRequestTitle || f.Subject == subjectPullRequestBody {
+			return true
+		}
+	}
+	return false
+}
+
 func report(stdout io.Writer, findings []Finding, narrowings []Narrowing) int {
 	if describe(stdout, findings, narrowings) {
 		return exitFindings
@@ -323,6 +334,25 @@ func describe(stdout io.Writer, findings []Finding, narrowings []Narrowing) bool
 		fmt.Fprintln(stdout, "\nThese surfaces are as world-readable as the files beside "+
 			"them. State the conclusion and the reasoning without the private artefact "+
 			"either came from; a published message cannot be unpublished by a later one.")
+	}
+	if editableSurfaceAmong(findings) {
+		// THE RECOVERY, and it is here because it is counter-intuitive.
+		// The obvious move after correcting a pull request's body is to
+		// re-run this job, and that can never go green: the surfaces
+		// above come from the event payload, and a re-run replays the
+		// event it was created from. Somebody who does not know that
+		// reads the identical finding at the identical line and
+		// concludes the fix did not work.
+		//
+		// Reading the live text instead would be the wrong repair. This
+		// check answers "what went out", not "what is showing now", and
+		// the sentence above is the reason: a published message cannot
+		// be unpublished by a later one. So the payload is correct and
+		// the recovery is the thing that needed saying.
+		fmt.Fprintln(stdout, "\nA pull request's title and body come from the event that "+
+			"triggered this run — they are what was published — so re-running this job "+
+			"replays the same event and reports the same finding: correct the text and "+
+			"push, because a new event is the only path to green.")
 	}
 
 	return len(findings) > 0 || len(narrowings) > 0

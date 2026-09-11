@@ -201,3 +201,58 @@ func TestTheSelfTestSaysHowToRepairItself(t *testing.T) {
 		t.Fatalf("the self-test failed against this repository's real vocabulary: %v", err)
 	}
 }
+
+// TestTheRecoveryLineAppearsOnlyWhereTheRecoveryIsCounterIntuitive
+// asserts the payload-sourced recovery advice, and asserts its ABSENCE
+// everywhere else.
+//
+// The absence half is the load-bearing one. Printed on every failure the
+// line would be noise on the common case — a commit message, fixed by
+// the push that fixes everything else — and advice that appears when it
+// does not apply is advice a reader learns to skip, which costs exactly
+// the case it was written for.
+//
+// Why the line exists: the surfaces a pull request contributes come from
+// the event payload, so a re-run replays the event it was created from
+// and reports the identical finding at the identical line. Somebody who
+// has just corrected the body reads that as the fix having failed. This
+// was measured on a real run before the line was written.
+func TestTheRecoveryLineAppearsOnlyWhereTheRecoveryIsCounterIntuitive(t *testing.T) {
+	rules := realRules(t)
+	phrase, _ := aCitedPhrase(t, rules)
+	text := "as " + phrase + " says\n"
+
+	// One phrase, scanned under three subjects, so the only thing that
+	// differs between the three reports is WHICH SURFACE it was on.
+	const marker = "the only path to green"
+
+	for _, tc := range []struct {
+		subject string
+		want    bool
+		why     string
+	}{
+		{subjectPullRequestBody, true,
+			"a body is edited in place, so its author will re-run and read the same finding"},
+		{subjectPullRequestTitle, true,
+			"a title is edited in place for the same reason"},
+		{"commit abcdef0", false,
+			"a commit message is corrected by a push, which produces the new event anyway"},
+		{"branch name", false,
+			"a branch is renamed by a push, same as a commit"},
+	} {
+		t.Run(tc.subject, func(t *testing.T) {
+			findings := rules.Scan(tc.subject, text)
+			if len(findings) == 0 {
+				t.Fatalf("the fixture phrase %q produced no finding on %q, so this row "+
+					"would pass without rendering anything", phrase, tc.subject)
+			}
+			var out strings.Builder
+			report(&out, findings, nil)
+			got := strings.Contains(out.String(), marker)
+			if got != tc.want {
+				t.Errorf("recovery line present = %v, want %v, on %q — %s\n%s",
+					got, tc.want, tc.subject, tc.why, out.String())
+			}
+		})
+	}
+}
