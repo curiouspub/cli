@@ -45,6 +45,33 @@ type DeployPrompter interface {
 	Confirm(question string, defaultYes bool) (bool, error)
 }
 
+// DeployProgress is where a run says what it is doing WHILE it is doing
+// it, for a caller that is not a terminal.
+//
+// IT IS NOT A SECOND RENDERER. The terminal already learns all of this,
+// as prose, through the prompter — and a caller that is not a terminal
+// would have to parse that prose back into a phase and a line, which is
+// exactly what this project refuses to do everywhere else. What arrives
+// here are the two values the stream carried, in the types the contract
+// declares them in.
+//
+// THE PHASE IS THE CONTRACT'S OWN TYPE rather than a string, so a phase
+// this build predates travels through unchanged and a vocabulary cannot
+// grow a second spelling on the way past.
+//
+// BOTH HALVES, EVERY TIME. A phase event supplies the phase and carries
+// the most recent line with it; a log line supplies the line and carries
+// the phase it arrived under. Either may be empty — a build that has
+// said nothing yet has no last line, and a line that arrives before any
+// phase event has no phase — and an empty half is the honest answer
+// rather than an omission.
+//
+// A REPORT IS MADE ONLY FOR SOMETHING THE READER HAS NOT ALREADY BEEN
+// SHOWN. The event stream replays from the beginning on every
+// reconnection, and a channel that spoke for each replayed event would
+// narrate one build several times over.
+type DeployProgress func(phase wire.Phase, line string)
+
 // DeployDeps is everything Deploy needs from outside itself.
 type DeployDeps struct {
 	// Dir is the directory to deploy, as the user typed it. Empty means
@@ -94,6 +121,18 @@ type DeployDeps struct {
 
 	// Now is the clock. Optional.
 	Now func() time.Time
+
+	// Progress is where the build's phases and output are reported to a
+	// caller that is not a terminal. Optional; without one the run says
+	// nothing anywhere except through Prompt, which is what the command
+	// passes and what every existing row measures.
+	//
+	// IT IS A FIELD ON THE SEQUENCE RATHER THAN A METHOD ON THE PROMPTER,
+	// and the reason is the types. A prompter's two methods take a format
+	// and arguments, so a phase reaching a caller through one arrives as
+	// a sentence with the value inside it — and the caller that needs
+	// this is the one that must not parse sentences.
+	Progress DeployProgress
 
 	// UploadStallTimeout is how long the upload waits for the next byte
 	// before giving up. Optional; without one the upload's own constant
@@ -564,6 +603,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		DeployID:      resp.DeployID,
 		StallTimeout:  deps.StreamStallTimeout,
 		ReconnectStep: deps.StreamReconnectStep,
+		Progress:      deps.Progress,
 	})
 	if err != nil {
 		return nil, err

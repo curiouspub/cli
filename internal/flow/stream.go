@@ -149,6 +149,29 @@ type streamRenderer interface {
 	Result(format string, args ...any)
 }
 
+// streamRun is what the rendering carries ACROSS reconnections: how much
+// the reader has already been shown, and the two most recent things the
+// stream said.
+//
+// IT IS ONE STRUCT RATHER THAN THREE POINTERS because all three answer
+// the same question — "where had this got to" — and a reconnection has
+// to restore every one of them or restore none. Passed separately they
+// drifted apart the moment a fourth was needed: the phase was carried and
+// the line was not, so a progress report after a reconnection could name
+// a phase with no output beside it.
+//
+// lastLine IS THE BUILD'S OWN OUTPUT, including the diagnostics the
+// server writes into the same log. That is not a widening — the
+// diagnostic goes to stdout with the rest of the log precisely because it
+// IS part of it, and a report that named the phase and the last ordinary
+// line while a diagnostic sat between them would be describing a quieter
+// run than the one that happened.
+type streamRun struct {
+	shown     int
+	lastPhase wire.Phase
+	lastLine  string
+}
+
 // streamDeps is everything the stream needs from outside itself.
 type streamDeps struct {
 	// Events opens a fresh connection to the build log. It is a function
@@ -176,6 +199,11 @@ type streamDeps struct {
 	// same reason. It changes the SPACING and never the shape: the
 	// attempt count and the linear schedule are the shipped ones.
 	ReconnectStep time.Duration
+
+	// Progress is where this step says what the build is doing, for a
+	// caller that is not a terminal. Never nil below: streamBuild
+	// defaults it, for the reason its own type gives.
+	Progress DeployProgress
 }
 
 // streamBuild reads the build log to its end, rendering as it goes, and
@@ -214,11 +242,20 @@ type streamDeps struct {
 func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error) {
 	deps.Render.Step("%s", streamOpening)
 
-	shown := 0
-	// lastPhase survives across reconnections on purpose: it is what
-	// tells a replayed phase from a new one at the moment the tally has
-	// just caught up.
-	var lastPhase wire.Phase
+	// THE SINK IS DEFAULTED ONCE, HERE, rather than checked at each of
+	// the three places a report is made. deps is a value, so this cannot
+	// reach back into the caller's struct; what it buys is that every
+	// report below is an unconditional call, which is the check this
+	// default exists to remove.
+	if deps.Progress == nil {
+		deps.Progress = func(wire.Phase, string) {}
+	}
+
+	// run survives across reconnections on purpose: the tally is what
+	// stops a replay being shown twice, and the last phase is what tells
+	// a replayed phase from a new one at the moment that tally has just
+	// caught up.
+	var run streamRun
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
@@ -232,7 +269,7 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error
 			}
 		}
 
-		status, finished, err := readStream(ctx, deps, &shown, &lastPhase)
+		status, finished, err := readStream(ctx, deps, &run)
 		if finished {
 			return status, nil
 		}
@@ -287,7 +324,7 @@ func streamReconnectDelay(attempt int, step time.Duration) time.Duration {
 // end of input, a connection that stopped talking — is a connection to be
 // picked up again, and err says which so the caller can tell a refusal
 // apart from a broken pipe.
-func readStream(ctx context.Context, deps streamDeps, shown *int, lastPhase *wire.Phase) (status wire.DeployStatus, finished bool, err error) {
+func readStream(ctx context.Context, deps streamDeps, run *streamRun) (status wire.DeployStatus, finished bool, err error) {
 	reqCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -342,64 +379,88 @@ func readStream(ctx context.Context, deps streamDeps, shown *int, lastPhase *wir
 	}})
 
 	seen := 0
+	readErr := scanEvents(reader, func(name, data string) bool {
+		st, terminal := renderEvent(deps, name, data, &seen, run)
+		if terminal {
+			status, finished = st, true
+		}
+		return terminal
+	})
+	if finished {
+		return status, true, nil
+	}
+	// A PARTIAL FINAL LINE CANNOT COMPLETE AN EVENT — dispatch needs the
+	// blank line that follows it — so there is nothing to salvage, and
+	// the ending is reported with its cause so the caller can tell a
+	// stall from an ordinary end of input.
+	if cause := context.Cause(reqCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return "", false, cause
+	}
+	return "", false, readErr
+}
+
+// scanEvents reads event-stream frames off r and hands each dispatched
+// event to deliver, stopping when deliver says so or when the reader
+// does. It returns the read error that ended the scan, and nil when
+// deliver stopped it.
+//
+// IT IS A SEPARATE FUNCTION BECAUSE THIS STREAM HAS TWO READERS, and the
+// alternative is two parsers. One renders a build to a terminal as it
+// arrives; the other reads the same stream to collect what it said, for
+// a caller that has no terminal and wants the facts rather than the
+// narration. Those differ in what they do with an event and in nothing
+// else — the framing, the field names, the blank-line dispatch and the
+// comment frames are the protocol's and are the same for both — so the
+// protocol lives here once and each reader supplies its own deliver.
+//
+// LF AND CRLF ONLY, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT. The
+// event-stream format also admits a bare CR as a line terminator, and
+// says a leading byte-order mark is stripped; this parser does neither,
+// so a CR-only stream would never dispatch an event and a BOM would
+// spoil the first field name.
+//
+// Neither is reachable. This client talks to one service — the address
+// guard sees to that — and its relay writes LF. Writing a general parser
+// for the two forms would mean carrying, and keeping correct, code that
+// nothing in this system can exercise: a row for it would have to
+// fabricate a server that does not exist, and would then be the only
+// thing keeping the code honest.
+//
+// The trade is stated so it can be revisited on a fact rather than a
+// worry. WHAT WOULD CHANGE IT: this client being pointed at a second
+// implementation of the protocol, or the relay changing what it writes.
+// Both are visible events, and the symptom of getting it wrong is loud —
+// no event ever dispatches, so the stream ends without `done` and
+// whatever was waiting for it says so, rather than anything silently
+// going missing.
+func scanEvents(r *bufio.Reader, deliver func(name, data string) (stop bool)) error {
 	var eventName string
 	var data []byte
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, readErr := r.ReadString('\n')
 		if readErr != nil {
-			// A PARTIAL FINAL LINE CANNOT COMPLETE AN EVENT — dispatch
-			// needs the blank line that follows it — so there is nothing
-			// to salvage, and the ending is reported with its cause so
-			// the caller can tell a stall from an ordinary end of input.
-			if cause := context.Cause(reqCtx); cause != nil && !errors.Is(cause, context.Canceled) {
-				return "", false, cause
-			}
-			return "", false, readErr
+			return readErr
 		}
 		line = strings.TrimSuffix(line, "\n")
 		line = strings.TrimSuffix(line, "\r")
-		// LF AND CRLF ONLY, AND THAT IS A DECISION RATHER THAN AN
-		// OVERSIGHT. The event-stream format also admits a bare CR as a
-		// line terminator, and says a leading byte-order mark is
-		// stripped; this parser does neither, so a CR-only stream would
-		// never dispatch an event and a BOM would spoil the first field
-		// name.
-		//
-		// Neither is reachable. This client talks to one service — the
-		// address guard sees to that — and its relay writes LF. Writing
-		// a general parser for the two forms would mean carrying, and
-		// keeping correct, code that nothing in this system can
-		// exercise: a row for it would have to fabricate a server that
-		// does not exist, and would then be the only thing keeping the
-		// code honest.
-		//
-		// The trade is stated so it can be revisited on a fact rather
-		// than a worry. WHAT WOULD CHANGE IT: this client being pointed
-		// at a second implementation of the protocol, or the relay
-		// changing what it writes. Both are visible events, and the
-		// symptom of getting it wrong is loud — no event ever
-		// dispatches, so the stream ends without `done` and the
-		// reconnect budget runs out with a message saying so, rather
-		// than anything silently going missing.
 
 		switch {
 		case line == "":
 			if eventName == "" && len(data) == 0 {
 				continue
 			}
-			status, terminal := renderEvent(deps.Render, eventName,
-				strings.TrimSuffix(string(data), "\n"), &seen, shown, lastPhase)
+			stop := deliver(eventName, strings.TrimSuffix(string(data), "\n"))
 			eventName, data = "", nil
-			if terminal {
-				return status, true, nil
+			if stop {
+				return nil
 			}
 			continue
 
 		case strings.HasPrefix(line, ":"):
-			// A COMMENT FRAME: the keep-alive. It is consumed as evidence
-			// the connection is alive — the watchdog was pushed back
-			// above, which is the whole of its job — and it is never
-			// rendered.
+			// A COMMENT FRAME: the keep-alive. Where a caller watches for
+			// silence it has already been counted as evidence the
+			// connection is alive, which is the whole of its job, and it
+			// is never an event.
 			continue
 		}
 
@@ -425,10 +486,23 @@ func readStream(ctx context.Context, deps streamDeps, shown *int, lastPhase *wir
 // the stream.
 //
 // seen counts the persisted events THIS connection has delivered and
-// shown counts the ones already put in front of the reader, so an event
-// whose number is not past what has been shown is a replay of something
-// the reader has seen and is skipped.
-func renderEvent(render streamRenderer, name, data string, seen, shown *int, lastPhase *wire.Phase) (wire.DeployStatus, bool) {
+// run.shown counts the ones already put in front of the reader, so an
+// event whose number is not past what has been shown is a replay of
+// something the reader has seen and is skipped.
+//
+// A REPORT IS MADE WHERE THE RENDERING IS, AND NOWHERE ELSE — after the
+// replay test rather than before it. A progress channel that spoke on
+// every event would narrate the whole build again on every reconnection,
+// which is the exact failure the tally exists to prevent, arriving on the
+// one surface that has no scrollback for a reader to notice it in.
+//
+// EACH REPORT CARRIES BOTH HALVES, whichever event produced it. "Where is
+// this and what was the last thing it said" is one question, and an
+// answer with one half missing is one the caller has to remember the
+// other half of — which is the caller keeping this function's state for
+// it.
+func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) (wire.DeployStatus, bool) {
+	render := deps.Render
 	switch wire.EventType(name) {
 	case wire.EventLog:
 		// COUNTED BEFORE IT IS DECODED, and the order is load bearing. The
@@ -444,14 +518,15 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// shown is ASSIGNED from seen rather than incremented, so the next
 		// event that does render absorbs it.
 		*seen++
-		if *seen <= *shown {
+		if *seen <= run.shown {
 			return "", false
 		}
 		var ev wire.LogEvent
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return "", false
 		}
-		*shown = *seen
+		run.shown = *seen
+		run.lastLine = ev.Line
 		// THE BUILD'S OWN OUTPUT, ESCAPED. Sanitize is what stands
 		// between a project that prints an escape sequence into its own
 		// build log and the reader's terminal, scrollback and pasted bug
@@ -459,6 +534,7 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// format, so a percent sign in somebody's output stays a percent
 		// sign.
 		render.Result("%s", ev.Line)
+		deps.Progress(run.lastPhase, ev.Line)
 		return "", false
 
 	case wire.EventError:
@@ -466,19 +542,22 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// persisted too, and the tally is about what the replay will
 		// contain rather than about what this client managed to read.
 		*seen++
-		if *seen <= *shown {
+		if *seen <= run.shown {
 			return "", false
 		}
 		var ev wire.Error
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return "", false
 		}
-		*shown = *seen
+		run.shown = *seen
 		// IT GOES TO STDOUT WITH THE REST OF THE LOG, because that is
 		// what it is: the server writes it into the same log the build
 		// output goes into, and a reader collecting stdout would
 		// otherwise be missing the line that explains the rest.
-		render.Result("%s", errorLine(ev))
+		line := errorLine(ev)
+		run.lastLine = line
+		render.Result("%s", line)
+		deps.Progress(run.lastPhase, line)
 		return "", false
 
 	case wire.EventPhase:
@@ -490,7 +569,7 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// is suppressed while a replay is still catching up so a
 		// reconnection does not narrate the build's history a second
 		// time.
-		if *seen < *shown {
+		if *seen < run.shown {
 			return "", false
 		}
 		// AND THE TALLY ALONE IS NOT ENOUGH AT THE BOUNDARY. A cut
@@ -507,11 +586,12 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		// because a counter of its own would be wrong on the other
 		// replay shape: the evicted path carries no phase events at all,
 		// so a phase tally would still be zero when a new phase arrived.
-		if ev.Phase == *lastPhase {
+		if ev.Phase == run.lastPhase {
 			return "", false
 		}
-		*lastPhase = ev.Phase
+		run.lastPhase = ev.Phase
 		render.Step("%s%s.", phaseNarration, string(ev.Phase))
+		deps.Progress(ev.Phase, run.lastLine)
 		return "", false
 
 	case wire.EventDone:
@@ -519,6 +599,11 @@ func renderEvent(render streamRenderer, name, data string, seen, shown *int, las
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return "", false
 		}
+		// NO REPORT FOR THE TERMINAL EVENT, deliberately. Progress
+		// narrates a run that is still going; this one says it is over,
+		// and the caller learns that from the value returned here — which
+		// arrives before any notification could, and carries the status
+		// rather than a phase that does not exist.
 		render.Step("%s%s.", finishedNarration, string(ev.Status))
 		return ev.Status, true
 	}
