@@ -227,12 +227,20 @@ func runMCP(args []string, u *ui.UI, stdin io.Reader, stdout, stderr io.Writer) 
 		return code
 	}
 
+	// THE TOOLS ARE REGISTERED HERE AND THE SERVER KNOWS NONE OF THEM.
+	// Which callables this binary exposes is a wiring decision, and this
+	// is the file that makes wiring decisions — the server is a protocol
+	// and a registry, and a server that reached for its own tool set
+	// would be one no test could stand up without them.
+	server := mcp.New("curious", version)
+	mcp.RegisterTools(server)
+
 	// THE RAW STREAMS GO TO THE SERVER because one of them is a protocol
 	// and the other is what the server renders its own diagnostics to —
 	// through a boundary of its own, built inside Serve. This is the one
 	// place in the program a stream is handed on rather than written to,
 	// and what receives it is held to the same rule.
-	if err := mcp.New("curious", version).Serve(context.Background(), stdin, stdout, stderr); err != nil {
+	if err := server.Serve(context.Background(), stdin, stdout, stderr); err != nil {
 		u.Step("curious mcp: %s", err.Error())
 		return 1
 	}

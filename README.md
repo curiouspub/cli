@@ -19,9 +19,13 @@ The platform is not yet open. What exists here today:
 
 - **`pkg/wire`** — the `/v1` wire contract (types only, stdlib-only,
   importable as `github.com/curiouspub/cli/pkg/wire`).
-- **`curious mcp`** — the stdio MCP server, as transport and dispatch:
-  it completes a handshake, lists tools and calls them. It registers no
-  tools yet, so a client that connects today finds an empty list. Written
+- **`curious mcp`** — the stdio MCP server, so an agent deploys the same
+  way a person does. It serves four tools: `login_start` and
+  `login_verify` get a login onto the machine, `deploy_site` runs the
+  whole deploy and answers with the address, and `deploy_status` reports
+  what a deploy's build log said. They drive the same sequence
+  `curious deploy` drives rather than a copy of it, and a client that
+  asks to watch a call is sent progress as the build goes. Written
   against the standard library alone — no SDK, no new dependency.
 - **`curious deploy`** — it checks your project, logs you in if it has
   to, packs the archive, uploads it, starts the build, streams the build
@@ -36,11 +40,6 @@ The platform is not yet open. What exists here today:
   The last line does not tell you the site is live: an address takes a
   little while to start answering everywhere, so the tool says the
   deploy was published and tells you what to do if you get there first.
-
-What lands here next:
-
-- **The MCP tools** — the same flow through `curious mcp`, so Claude
-  Code, Claude Desktop, and other MCP clients can deploy for you.
 
 The trial opens in small daily batches. Get the launch note:
 [hello -a- curious.pub]

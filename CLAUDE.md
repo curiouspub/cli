@@ -117,16 +117,34 @@ The finished product is one binary with two faces:
 **What exists in the tree right now is smaller than that, and this
 section says so on purpose.** Today `curious` dispatches `version`, a
 `deploy` that runs the whole sequence and ends with the site's address,
-and an
-`mcp` server that is **transport and dispatch with NO TOOLS REGISTERED**
-— a client connects, completes a handshake and receives an empty tool
-list, because the callables an agent would actually use land in a later
-change. A repository describing unbuilt features in the present tense has
-told its reader something false, and this one is read by strangers
-deciding whether to trust it. **The reverse is no smaller an error**: a
-line still saying the upload is unbuilt, the day after it ships, is the
-same defect running backwards, so this paragraph moves in the commit that
-moves the code.
+and an `mcp` server that serves **four tools** — `login_start`,
+`login_verify`, `deploy_site` and `deploy_status` — over the same
+sequence the command runs. A repository describing unbuilt features in
+the present tense has told its reader something false, and this one is
+read by strangers deciding whether to trust it. **The reverse is no
+smaller an error**: a line still saying the tools are unbuilt, the day
+after they ship, is the same defect running backwards, so this paragraph
+moves in the commit that moves the code.
+
+**There is no `whoami`, and its absence is a decision rather than a
+gap.** It would have to wrap a route the API does not serve, so every
+call to it would answer an agent with a transport failure — and a model
+that can see a tool keeps trying it. There is no endpoint that answers a
+deploy's current state either, which is why `deploy_status` reads the
+build log and reports `"not yet reported"` until that log says how the
+deploy ended: **a live tail is not a state read**, and the honest shape
+admits it rather than promoting the last phase to a status. The two
+vocabularies share spellings, so that guess would look right until the
+day it was not.
+
+**A tool description may state a number only when the number is one the
+wire contract holds.** The size and count limits are the server's own
+and are read from `pkg/wire`; quota and expiry are server POLICY, which
+moves without a release and which this binary is never told, so they are
+described in words. A description stating a limit the server does not
+enforce is worse than one stating none, because a caller acts on it —
+and a guard parses the rendered descriptions and requires every figure in
+them to be one of the contract's.
 
 `deploy` resolves the directory, reads any stored login, walks the
 project once, runs the pre-flight checks and the local limits over that
