@@ -284,6 +284,170 @@ func routeFor(code wire.ErrorCode) (verifyRoute, bool) {
 	return route, stated
 }
 
+// LoginRefusal is what one login call's failure means to a caller that
+// cannot ask a question and try again in place.
+//
+// # Why the two exported calls hand back this rather than an error
+//
+// A login has exactly one recoverable failure and a handful of terminal
+// ones, and the difference decides what a caller DOES: the wrong or
+// expired code is answered by asking for another code, and everything
+// else is answered by stopping and showing what happened. Returned as a
+// bare error those two are one value, and the only way back to the
+// distinction is matching on a message — which is what this program
+// refuses to do with prose everywhere else.
+//
+// ONLY ONE OF Said AND Failure IS EVER MEANINGFUL, and which one is
+// decided by Recoverable. That is the shape classify already had
+// internally; this is it exported, because the decision it encodes is
+// the thing both surfaces have to share.
+type LoginRefusal struct {
+	// Recoverable reports whether the same step, given different input,
+	// can still end in a stored token.
+	Recoverable bool
+
+	// Said is what the FAR END said, verbatim, and it is the only thing
+	// that knows which of the several reasons a code can be refused
+	// actually happened — the server answers one byte-identical refusal
+	// for a wrong code, an expired one, a lost race, a cooldown and an
+	// unknown identity. Set only on a recoverable refusal, and empty
+	// when the failure was a transport one with no envelope behind it.
+	Said string
+
+	// Failure is this program's own copy for a refusal that ends the
+	// run, ready to render. Set only when Recoverable is false.
+	Failure error
+
+	// Code is the error code the server sent, or empty when there was no
+	// envelope at all. It is carried because a caller counting
+	// CONSECUTIVE wrong codes has to be able to tell a wrong code from a
+	// dropped connection, and the message cannot answer that.
+	Code wire.ErrorCode
+}
+
+// refusalFor turns one failed call into the two things a caller needs:
+// what to do, and what to say.
+func refusalFor(ctx context.Context, err error, deps LoginDeps, email string, now time.Time) *LoginRefusal {
+	route, message, stop := classify(ctx, err, deps, email, now)
+	refusal := &LoginRefusal{
+		Recoverable: route == routeRecover,
+		Said:        message,
+		Failure:     stop,
+	}
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		refusal.Code = apiErr.Code
+	}
+	return refusal
+}
+
+// LoginStart asks the server to send a login code to email, and reports
+// what happened if it would not.
+//
+// IT IS THE FIRST STEP OF Login BELOW, LIFTED OUT WHOLE, and that is the
+// point of it existing rather than a convenience. An agent logging in
+// has the same two steps to take and no terminal to take them at, so it
+// cannot run the machine — and the alternative to this is a second
+// implementation of which refusals stop a login and what each one says,
+// in a package that would have no way to notice the day the first one
+// changed.
+//
+// A success PROMISES NOTHING ABOUT AN EMAIL. The endpoint answers
+// identically whether it sent a code, declined, was over a send budget
+// or was in a cooldown, so what a nil return means is that the request
+// was accepted — which is all either surface may tell anybody.
+func LoginStart(ctx context.Context, deps LoginDeps, email string) *LoginRefusal {
+	if err := checkEndpoint(deps.Endpoint); err != nil {
+		return &LoginRefusal{Failure: err}
+	}
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
+	if _, err := deps.Auth.AuthStart(ctx, wire.AuthStartRequest{Email: email}); err != nil {
+		return refusalFor(ctx, err, deps, email, now())
+	}
+	return nil
+}
+
+// VerifyRequest is what one code submission carries. It is a struct
+// rather than three arguments because the third is a CONSENT, and a bare
+// bool at a call site is the shape somebody sets to true without
+// noticing what they have agreed to on a person's behalf.
+type VerifyRequest struct {
+	Email string
+	Code  string
+
+	// MarketingOptIn records whether the person at the keyboard asked
+	// for product news. It defaults to false, it changes nothing about a
+	// deploy, and it must never be set without having asked them.
+	MarketingOptIn bool
+}
+
+// LoginVerify submits a code and STORES THE TOKEN, returning nil only
+// when a token has been written.
+//
+// THE STORE IS PART OF THIS STEP rather than the caller's to remember,
+// which is the same reason Login itself returns nil only for a stored
+// token: a verify that succeeded and was never recorded leaves a
+// credential in memory, a user who believes they are logged in, and a
+// next run that asks for their address again. One caller forgetting is
+// all it takes, and there are two callers now.
+//
+// The token never leaves this function. It is not returned, not logged,
+// and not rendered — every surface's answer to "did this work" is the
+// absence of a refusal.
+func LoginVerify(ctx context.Context, deps LoginDeps, req VerifyRequest) *LoginRefusal {
+	if err := checkEndpoint(deps.Endpoint); err != nil {
+		return &LoginRefusal{Failure: err}
+	}
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	resp, err := deps.Auth.AuthVerify(ctx, wire.AuthVerifyRequest{
+		Email:          req.Email,
+		Code:           req.Code,
+		MarketingOptIn: req.MarketingOptIn,
+	})
+	if err != nil {
+		return refusalFor(ctx, err, deps, req.Email, now())
+	}
+
+	save := deps.Save
+	if save == nil {
+		save = defaultTokenWriter
+	}
+	if err := save(ui.Secret(resp.Token), deps.Endpoint); err != nil {
+		// NOT RECOVERABLE, and not because trying again is hopeless —
+		// logging in again is free. It is that nothing about the CODE
+		// went wrong, so the retry loop, which exists to collect another
+		// code, is the wrong place to send anybody.
+		return &LoginRefusal{Failure: writeFailure(err)}
+	}
+	return nil
+}
+
+// checkEndpoint refuses an endpoint that cannot be compared with the one
+// recorded beside a stored token, before anybody is asked anything and
+// before any call is made.
+//
+// ONE HOME FOR THE CHECK, three doors into it. A run that cannot end in
+// a stored token is worth refusing at its first instruction rather than
+// after somebody has typed a code and spent one of the attempts the
+// server allows.
+//
+// The value is not echoed. It is checked with the same canonicaliser the
+// store compares with, which also refuses one carrying a username or
+// password — so everything downstream may name it.
+func checkEndpoint(endpoint string) error {
+	if _, err := api.CanonicalKey(endpoint); err != nil {
+		return ErrEndpointUnusable
+	}
+	return nil
+}
+
 // loginState is one position in the machine. The states are named
 // because the rule this flow exists to keep is a statement about EDGES —
 // "wrong or expired code never restarts the flow" — and an edge cannot
@@ -317,25 +481,12 @@ const (
 // The address is asked for once. After that the only ways out are a
 // stored token, a stop, or the person cancelling.
 func Login(ctx context.Context, deps LoginDeps) error {
-	// The endpoint is checked BEFORE anybody is asked anything. An
-	// endpoint the writer will refuse is worth refusing now rather than
-	// after somebody has typed a code and spent one of the attempts the
-	// server allows on a run that cannot end in a saved token.
-	//
-	// The value is not echoed. It is checked with the same
-	// canonicaliser the store compares with, which also refuses one
-	// carrying a username or password — so everything below may name it.
-	if _, err := api.CanonicalKey(deps.Endpoint); err != nil {
-		return ErrEndpointUnusable
-	}
-
-	now := deps.Now
-	if now == nil {
-		now = time.Now
-	}
-	save := deps.Save
-	if save == nil {
-		save = defaultTokenWriter
+	// The endpoint is checked BEFORE anybody is asked anything, at the
+	// one home that check has. The two steps below check it again on
+	// their own account, because each is reachable without this machine;
+	// reaching them from here it has already passed.
+	if err := checkEndpoint(deps.Endpoint); err != nil {
+		return err
 	}
 
 	p := deps.Prompt
@@ -343,7 +494,6 @@ func Login(ctx context.Context, deps LoginDeps) error {
 	var (
 		email string
 		code  string
-		token ui.Secret
 
 		optIn        bool
 		consentAsked bool
@@ -379,14 +529,12 @@ func Login(ctx context.Context, deps LoginDeps) error {
 			state = stateStart
 
 		case stateStart:
-			_, err := deps.Auth.AuthStart(ctx, wire.AuthStartRequest{Email: email})
-			if err != nil {
-				route, message, stop := classify(ctx, err, deps, email, now())
-				if route == routeStop {
-					return stop
+			if refusal := LoginStart(ctx, deps, email); refusal != nil {
+				if !refusal.Recoverable {
+					return refusal.Failure
 				}
-				lastMessage = message
-				consecutiveRefusals = trackRefusal(err, consecutiveRefusals)
+				lastMessage = refusal.Said
+				consecutiveRefusals = trackRefusal(refusal, consecutiveRefusals)
 				state = stateRecover
 				continue
 			}
@@ -425,22 +573,20 @@ func Login(ctx context.Context, deps LoginDeps) error {
 			state = stateVerify
 
 		case stateVerify:
-			resp, err := deps.Auth.AuthVerify(ctx, wire.AuthVerifyRequest{
+			refusal := LoginVerify(ctx, deps, VerifyRequest{
 				Email:          email,
 				Code:           code,
 				MarketingOptIn: optIn,
 			})
-			if err == nil {
-				token = ui.Secret(resp.Token)
+			if refusal == nil {
 				state = stateSave
 				continue
 			}
-			route, message, stop := classify(ctx, err, deps, email, now())
-			if route == routeStop {
-				return stop
+			if !refusal.Recoverable {
+				return refusal.Failure
 			}
-			lastMessage = message
-			consecutiveRefusals = trackRefusal(err, consecutiveRefusals)
+			lastMessage = refusal.Said
+			consecutiveRefusals = trackRefusal(refusal, consecutiveRefusals)
 			state = stateRecover
 
 		case stateRecover:
@@ -471,9 +617,18 @@ func Login(ctx context.Context, deps LoginDeps) error {
 			}
 
 		case stateSave:
-			if err := save(token, deps.Endpoint); err != nil {
-				return writeFailure(err)
-			}
+			// THE TOKEN IS ALREADY STORED, and this state is what is left
+			// of the step rather than a state that lost its job. Writing
+			// the token belongs to the verify — a call that succeeded and
+			// did not record it leaves a credential in memory and a next
+			// run asking for the address again — so the only thing that
+			// is this machine's here is telling the person.
+			//
+			// It stays a named state because the machine's rule is about
+			// EDGES, and an edge needs an end to point at: this is the
+			// one ending that is a success, and collapsing it into the
+			// verify would leave the success with no name.
+			//
 			// One line. No token, no masked token, and no expiry claim
 			// this client cannot verify.
 			p.Step("You're logged in as %s.", email)
@@ -484,10 +639,10 @@ func Login(ctx context.Context, deps LoginDeps) error {
 
 // trackRefusal advances the consecutive-refusal count. A refusal that is
 // not the generic auth failure resets it, because the hint it earns is
-// about wrong codes and nothing else.
-func trackRefusal(err error, consecutive int) int {
-	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && apiErr.Code == wire.CodeUnauthorized {
+// about wrong codes and nothing else — and a refusal with no envelope
+// behind it carries no code, so a dropped connection resets it too.
+func trackRefusal(refusal *LoginRefusal, consecutive int) int {
+	if refusal.Code == wire.CodeUnauthorized {
 		return consecutive + 1
 	}
 	return 0
