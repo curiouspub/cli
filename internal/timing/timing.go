@@ -1298,10 +1298,35 @@ var StreamGoesQuiet = Entry{
 		// of ten between the two conditions, and the detector is the one
 		// this window is sized against because it is the worse of two
 		// the gate actually runs.
-		Darwin: {WorstGap: 4121458 * time.Nanosecond, Runs: 7000, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 7000, Valid: 7000, Starved: 0,
+		//
+		// THE STORED NUMBER SAID 4.121458 ms OVER 7,000 RUNS AND BOTH
+		// HALVES OF THAT WERE WRONG. The window three fields up is
+		// derived from 10.2835 ms — "five times darwin's 10.2835 ms is
+		// 51.42 ms, and this is the next round number above it" — and the
+		// comment immediately above this line states the same figure as
+		// what was measured, twice. A 7,000-run pass reporting a maximum
+		// two and a half times SMALLER than the 1,000-run pass beside it
+		// is not a reading, it is a transcription: more runs cannot find
+		// a smaller maximum. Fifteen CI readings taken 2026-09-11 settle
+		// it — nine of them sit between 10.34 ms and 10.95 ms, which is
+		// the figure the comment always carried.
+		//
+		// It is corrected here to the number its own derivation uses, and
+		// the cost of the error was not theoretical: at 4.121458 ms the
+		// margin floor reported every ordinary run as 2.5× a stale
+		// record and shouted "the RECORD is what is stale" on a row that
+		// was behaving exactly as measured. A RECORD IS PASTED OR IT IS
+		// RETYPED — this file's own rule, and the two numbers that
+		// diverged were four lines apart inside one entry.
+		//
+		// The fixture gap moves with it: 157.916 µs came off the same
+		// suspect pass, and this leg's fixture was seen at 10.04 ms to
+		// 11.010375 ms across those fifteen readings.
+		Darwin: {WorstGap: 10283500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, Flushes: 2, WorstFixtureGap: 157916}},
+				StatedPace: 0, Flushes: 2,
+				WorstFixtureGap: 11010375 * time.Nanosecond}},
 		// 2.2355ms under the detector, 2.0315ms without it.
 		Windows: {WorstGap: 4012500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
