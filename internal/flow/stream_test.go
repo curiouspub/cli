@@ -1046,7 +1046,7 @@ func TestEveryControlByteReachesTheRendererUnchanged(t *testing.T) {
 		}
 	}
 	// The address is the last thing printed, and it is not build output.
-	if n := len(handed); n > 0 && handed[n-1] == publishedURL(run.script.publishSubdomain) {
+	if n := len(handed); n > 0 && handed[n-1] == PublishedURL(run.script.publishSubdomain) {
 		handed = handed[:n-1]
 	}
 	if len(handed) != len(sent) {

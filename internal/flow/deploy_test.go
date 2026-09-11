@@ -1183,7 +1183,7 @@ const defaultPublishSubdomain = "quick-koala-4f2a"
 func buildLogOutput(t *testing.T, run *deployRun) string {
 	t.Helper()
 	printed := run.prompt.results.String()
-	want := publishedURL(run.script.publishSubdomain) + "\n"
+	want := PublishedURL(run.script.publishSubdomain) + "\n"
 	if !strings.HasSuffix(printed, want) {
 		t.Fatalf("stdout does not end with the address %q:\n%q", want, printed)
 	}
