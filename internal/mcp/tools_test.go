@@ -85,6 +85,11 @@ func (s *deployScript) ordered() []string {
 func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	// EVERY ARM MATCHES BY TAIL, never by a whole path. This package is
+	// forbidden from spelling a route and a guard says so, because a
+	// fixture is where a second copy of one lands first — and this arm
+	// was the second copy, caught by that guard on the run after it was
+	// written.
 	case s.refuseAuth != nil && strings.Contains(path, "/auth/"):
 		s.note("auth refused")
 		w.Header().Set("Content-Type", "application/json")
@@ -100,7 +105,7 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Code: s.refuseAuth.code, Message: s.refuseAuth.message,
 		}})
 
-	case r.Method == http.MethodGet && path == "/v1/capacity":
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/capacity"):
 		s.note("capacity")
 		writeJSON(w, wire.CapacityResponse{
 			Open:         !s.capacityShut,
