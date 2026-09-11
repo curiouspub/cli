@@ -168,6 +168,44 @@ func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
 						entry.Pace.Flushes, entry.Pace.Interval)
 				}
 			}
+			// NO UNPACED FIXTURES — the entry half of the rule, and it
+			// is here rather than only in the probe because the probe
+			// refuses at RUN time and this refuses at READ time. A
+			// write-then-silent fixture states no interval, so the
+			// quantity its starvation is measured against is this leg's
+			// measured flush budget; absent, there is no threshold and
+			// every pass it takes counts whatever the machine did
+			// underneath it. That exemption cost a green pull request
+			// its place in the merge queue on 2026-09-11.
+			if entry.Pace != nil && entry.Pace.Interval == 0 && m.FlushBudget <= 0 {
+				t.Errorf("timing.%s writes its frames and goes silent, and its %s "+
+					"measurement records no flush budget.\nA fixture that states "+
+					"no interval still pauses, and with no budget there is nothing "+
+					"its pause is long against — so a machine that stopped the far "+
+					"end enters this record as the CLIENT's margin. Measure the "+
+					"widest gap between its flushes on this leg and record it.",
+					entry.Name, leg)
+			}
+			// THE THRESHOLD TRAVELS WITH THE NUMBER, on this side too.
+			if p.FlushBudget != m.FlushBudget {
+				t.Errorf("timing.%s's %s measurement records a flush budget of %v "+
+					"and its integrity record was taken against %v. A maximum "+
+					"means nothing without the rule that admitted the passes "+
+					"behind it, and these two are that rule written twice.",
+					entry.Name, leg, m.FlushBudget, p.FlushBudget)
+			}
+			// EXACTLY ONE OF THE TWO, because a record carrying both
+			// does not say which the 3× was applied to, and a record
+			// carrying neither was judged against a threshold of nought.
+			if (p.StatedPace > 0) == (p.FlushBudget > 0) {
+				t.Errorf("timing.%s's %s integrity record states a pace of %v and a "+
+					"flush budget of %v.\nExactly one of these is the quantity its "+
+					"passes were judged against: a fixture either paces itself or "+
+					"writes and goes silent. Both leaves a reader guessing which "+
+					"number the threshold multiplied; neither means it multiplied "+
+					"nought, which marks every pass starved.",
+					entry.Name, leg, p.StatedPace, p.FlushBudget)
+			}
 			// THE DISTRIBUTION IS PRESENT AND ORDERED. A paced leg
 			// whose admitted passes left no spread behind is a record
 			// that kept its endpoint and dropped the shape, which is

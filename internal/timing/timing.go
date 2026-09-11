@@ -414,6 +414,32 @@ type Measurement struct {
 	// on it.
 	Integrity *PaceIntegrity
 
+	// FlushBudget is what a WRITE-THEN-SILENT fixture's own widest gap
+	// between flushes is allowed to be on this leg before the pass that
+	// produced it is called starved. It is the threshold the 3× rule is
+	// applied to for a fixture that states no interval, and it is what
+	// makes "no unpaced fixtures" true: every row now declares the
+	// quantity its starvation is measured against, and none is exempt.
+	//
+	// IT IS ON THE MEASUREMENT AND NOT ON THE FixturePace, which is the
+	// opposite of where the interval lives, and the reason is the reason
+	// given there in the other direction. An interval is this
+	// repository's own constant — the same number on all three legs by
+	// construction, so three copies would be three chances to disagree.
+	// A flush budget is not a constant anybody chose: it is how long
+	// THIS KIND OF MACHINE takes to get a goroutine back on a core, which
+	// differs per leg by an order of magnitude and is therefore measured
+	// per leg, dated, and retaken like any other reading here. It sits
+	// beside WorstGap because it comes off the same passes.
+	//
+	// ZERO MEANS THIS FIXTURE STATES AN INTERVAL and the interval is the
+	// threshold. Zero on a fixture whose Pace.Interval is ALSO zero is
+	// nobody having looked, and the guard beside this package refuses it
+	// rather than letting it through as a threshold of nought — which
+	// would not be a lenient rule but the strictest possible one, marking
+	// every pass starved and stopping the leg at its cap.
+	FlushBudget time.Duration
+
 	// BlockPoint is the bytes the client handed over before it stopped
 	// making progress at all. WRITE SIDE ONLY: on the read side nothing
 	// is buffering on this client's behalf, so there is no such number
@@ -572,11 +598,20 @@ type PaceIntegrity struct {
 	// fixture it was measured through are one fact, and the fact is per
 	// leg because the measurement is.
 	//
-	// Zero pace means the fixture has no pace to miss — it writes and
-	// goes silent — and there is no integrity test to apply, which is a
-	// different thing from passing one.
+	// Zero pace means the fixture STATES no interval — it writes and goes
+	// silent — and the threshold its passes were judged against is the
+	// FlushBudget below rather than this field. It no longer means
+	// "there is no integrity test to apply": that exemption was the hole
+	// this pairing closed.
 	StatedPace time.Duration
-	Flushes    int
+
+	// FlushBudget is the threshold a write-then-silent fixture's passes
+	// were judged against, recorded beside the pace so a reader of this
+	// record can tell WHICH of the two the 3× was applied to without
+	// going back to the entry. Exactly one of StatedPace and FlushBudget
+	// is non-zero on a well-formed record, and the guard says so.
+	FlushBudget time.Duration
+	Flushes     int
 
 	// WorstFixtureGap is the widest gap the fixture left, across ALL
 	// ATTEMPTS including the ones that were thrown away. It is the
@@ -1290,10 +1325,17 @@ var StreamGoesQuiet = Entry{
 	// twenty runs could not see it.
 	Measurements: map[Leg]Measurement{
 		// 746.761µs under the detector, 468.614µs without it.
+		//
+		// BUDGET: 203.517µs, the widest this leg's fixture was seen to
+		// go between its two flushes across fifteen CI readings on
+		// 2026-09-11 (both conditions). The spread is 140µs to 204µs
+		// with nothing outside it — this leg has no tail.
 		Linux: {WorstGap: 807557 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+			FlushBudget: 203517 * time.Nanosecond,
 			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, Flushes: 2, WorstFixtureGap: 53951}},
+				StatedPace: 0, FlushBudget: 203517 * time.Nanosecond,
+				Flushes: 2, WorstFixtureGap: 53951}},
 		// 10.2835ms under the detector, 1.033458ms without it — a factor
 		// of ten between the two conditions, and the detector is the one
 		// this window is sized against because it is the worse of two
@@ -1314,24 +1356,35 @@ var StreamGoesQuiet = Entry{
 		// It is corrected here to the number its own derivation uses, and
 		// the cost of the error was not theoretical: at 4.121458 ms the
 		// margin floor reported every ordinary run as 2.5× a stale
-		// record and shouted "the RECORD is what is stale" on a row that
+		// record, and shouted "the RECORD is what is stale" on a row that
 		// was behaving exactly as measured. A RECORD IS PASTED OR IT IS
 		// RETYPED — this file's own rule, and the two numbers that
 		// diverged were four lines apart inside one entry.
-		//
-		// The fixture gap moves with it: 157.916 µs came off the same
-		// suspect pass, and this leg's fixture was seen at 10.04 ms to
-		// 11.010375 ms across those fifteen readings.
 		Darwin: {WorstGap: 10283500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+			// BUDGET: 11.010375 ms, the widest this leg's fixture was
+			// seen to go between its two flushes on a pass that was not
+			// itself starved, across fifteen CI readings on 2026-09-11.
+			// Nine of the fifteen cluster at 10.04–10.07 ms, which is a
+			// scheduling quantum rather than noise; one sat at 11.01 ms
+			// and one — excluded, and the reason this budget exists — at
+			// 35.113375 ms.
+			FlushBudget: 11010375 * time.Nanosecond,
 			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, Flushes: 2,
-				WorstFixtureGap: 11010375 * time.Nanosecond}},
+				StatedPace: 0, FlushBudget: 11010375 * time.Nanosecond,
+				Flushes: 2, WorstFixtureGap: 11010375 * time.Nanosecond}},
 		// 2.2355ms under the detector, 2.0315ms without it.
+		//
+		// BUDGET: 2.0896ms, the widest this leg's fixture was seen to go
+		// between its two flushes across fifteen CI readings on
+		// 2026-09-11 (both conditions). The spread is 2.02 ms to 2.09 ms
+		// — tighter than either other leg, and with no tail.
 		Windows: {WorstGap: 4012500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
+			FlushBudget: 2089600 * time.Nanosecond,
 			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, Flushes: 2, WorstFixtureGap: 1645200}},
+				StatedPace: 0, FlushBudget: 2089600 * time.Nanosecond,
+				Flushes: 2, WorstFixtureGap: 1645200}},
 	},
 	SetBy: Darwin,
 }
