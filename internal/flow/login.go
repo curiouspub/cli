@@ -740,7 +740,8 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		return ui.NewFailure(
 			"That server does not answer the login endpoint.",
 			fmt.Sprintf("curious called %s and the route was not there. That usually "+
-				"means\nthe address is wrong rather than that the server is broken.",
+				"means\nthe address is wrong rather than that the server is broken.\n"+
+				"The address comes from CURIOUS_API_URL.",
 				deps.Endpoint), ui.NextGiveUp,
 			"Check CURIOUS_API_URL, or unset it to use the default.")
 	}

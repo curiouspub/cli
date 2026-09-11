@@ -424,7 +424,8 @@ const (
 	internalWhat = "Something went wrong inside curious."
 
 	internalWhy = "This is a fault in curious rather than a problem with your project,\n" +
-		"so there is nothing here for you to fix."
+		"so there is nothing here for you to fix. The detail is behind " +
+		debugEnvVar + "."
 
 	internalDebugWhy = "This is a fault in curious rather than a problem with your project.\n" +
 		"The detail follows because " + debugEnvVar + " is set:"
@@ -461,7 +462,7 @@ func (u *UI) Internal(err error) {
 			detail = err.Error()
 		}
 		f.Why = internalDebugWhy + "\n\n  " + detail
-		f.Next = "Please report this, with the detail above."
+		f.NextText = "Please report this, with the detail above."
 	}
 
 	u.Fail(f)

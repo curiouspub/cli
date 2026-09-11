@@ -806,11 +806,11 @@ func resolveProjectDir(dir string) (string, error) {
 // problem with the file comes back as an empty token and a reason, and
 // every one of those is recoverable by logging in again.
 func configFailure(err error) *ui.Failure {
-	return ui.Quoted(
+	return ui.NewFailure(
 		"curious couldn't work out where to keep your login.",
-		err.Error(), ui.NextFreshDeploy,
+		"The location comes from CURIOUS_CONFIG.", ui.NextFreshDeploy,
 		"Set CURIOUS_CONFIG to the full path of a config file and run\n"+
-			"`curious deploy` again.")
+			"`curious deploy` again.").Quoting(err.Error())
 }
 
 // unreadableProjectFailure is what a traversal that could not finish
