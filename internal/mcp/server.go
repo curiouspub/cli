@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,6 +140,21 @@ func (s *Server) Register(t Tool) {
 // where every diagnostic goes. A function handed both cannot reach for
 // the process's own streams and so cannot write a log line into the
 // protocol by forgetting which one it was holding.
+//
+// THE CONTEXT IS TAKEN HERE AND HANDED TO EVERY TOOL CALL, rather than
+// being minted further down where it is needed. A context created inside
+// the dispatcher is one nothing outside this package can ever cancel,
+// and handing a handler that value while calling it "your call's
+// context" is a parameter that lies about what it is. Taken as an
+// argument it is whatever the entry point decided — today the process's
+// own, and the day a run learns to stop on a signal or on the client's
+// cancellation, a real one, with nothing in this file to change.
+//
+// IT DOES NOT END THE READ LOOP. The loop ends when the client closes
+// the pipe, which is the protocol's own shutdown and the only one this
+// server has ever had. Making a cancelled context stop the reader as
+// well would be a second way out with different tidy-up, and there is no
+// caller asking for one.
 // notes is the diagnostic half of the connection.
 //
 // EVERYTHING THIS SERVER SAYS ABOUT A CLIENT IS ABOUT SOMETHING THE
@@ -164,7 +180,7 @@ func newNotes(w io.Writer) notes {
 
 func (n notes) say(format string, args ...any) { n.render.Step(format, args...) }
 
-func (s *Server) Serve(in io.Reader, out, logw io.Writer) error {
+func (s *Server) Serve(ctx context.Context, in io.Reader, out, logw io.Writer) error {
 	diagnostics := newNotes(logw)
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, initialMessageBytes), maxMessageBytes)
@@ -179,7 +195,7 @@ func (s *Server) Serve(in io.Reader, out, logw io.Writer) error {
 			continue
 		}
 
-		reply, answer := s.handle(line, diagnostics)
+		reply, answer := s.handle(ctx, line, diagnostics)
 		if !answer {
 			continue
 		}
@@ -200,7 +216,7 @@ func (s *Server) Serve(in io.Reader, out, logw io.Writer) error {
 
 // handle turns one inbound line into the reply that should go back, and
 // reports whether there is a reply at all.
-func (s *Server) handle(line []byte, logw notes) (response, bool) {
+func (s *Server) handle(ctx context.Context, line []byte, logw notes) (response, bool) {
 	// THE TWO WAYS AN INBOUND MESSAGE CAN BE UNREADABLE ARE DIFFERENT
 	// FAULTS AND GET DIFFERENT CODES, which is worth the extra call
 	// because the codes are the only thing a client can act on. Bytes
@@ -256,7 +272,7 @@ func (s *Server) handle(line []byte, logw notes) (response, bool) {
 		return resultReply(req.ID, s.listTools()), true
 
 	case methodToolsCall:
-		result, rpcErr := s.callTool(req.Params, logw)
+		result, rpcErr := s.callTool(ctx, req.Params, logw)
 		if rpcErr != nil {
 			return errorReply(req.ID, rpcErr.Code, rpcErr.Message), true
 		}
@@ -422,7 +438,7 @@ type callParams struct {
 // faults in the request and are answered as protocol errors, and
 // everything from the tool itself — including a total failure — comes
 // back as a result the client can read.
-func (s *Server) callTool(params json.RawMessage, logw notes) (Result, *rpcError) {
+func (s *Server) callTool(ctx context.Context, params json.RawMessage, logw notes) (Result, *rpcError) {
 	var p callParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return Result{}, &rpcError{Code: codeInvalidParams, Message: "the tool call parameters were not readable"}
@@ -436,5 +452,13 @@ func (s *Server) callTool(params json.RawMessage, logw notes) (Result, *rpcError
 		return Result{}, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("unknown tool %q", p.Name)}
 	}
 
-	return invoke(tool, p.Arguments, logw), nil
+	// NOBODY IS LISTENING YET, AND THAT IS SAID HERE RATHER THAN LEFT TO
+	// A NIL. Reporting a tool's progress to a client means a notification
+	// with the token the client sent on the call it wants watched, which
+	// is protocol this server does not speak today; the sink that turns
+	// a report into one belongs to the change that has a tool to report
+	// from. This is the line that change edits, and until it does, the
+	// honest value is the sink that discards — not a field nothing ever
+	// writes, which would be a seam pointing at nothing.
+	return invoke(ctx, tool, p.Arguments, noProgress{}, logw), nil
 }

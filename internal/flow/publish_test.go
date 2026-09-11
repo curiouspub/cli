@@ -123,7 +123,7 @@ func lastNonEmptyLine(s string) string {
 // produce a working-looking address, and only two values that differ
 // make it visible.
 //
-// REQUIRED MUTATION, run 2026-09-09: render publishedURL of a fixed
+// REQUIRED MUTATION, run 2026-09-09: render PublishedURL of a fixed
 // label rather than the response's. It reds on ONE of the two subtests
 // and not the other, which is the correction worth keeping: the fixed
 // label matches the first row's, so that row stays green and only
@@ -198,7 +198,7 @@ func TestTheRunEndsWithTheCaveatAndThenTheAddress(t *testing.T) {
 	closing := transcript[len(transcript)-2]
 	address := transcript[len(transcript)-1]
 
-	if want := "printed: " + publishedURL(defaultPublishSubdomain); address != want {
+	if want := "printed: " + PublishedURL(defaultPublishSubdomain); address != want {
 		t.Fatalf("the last thing the run printed is %q, want %q", address, want)
 	}
 	if !strings.HasPrefix(closing, "said: ") {
@@ -271,7 +271,7 @@ func TestAnExpiryTheServerDidNotSendIsNotInvented(t *testing.T) {
 	if narrated := run.prompt.out.String(); strings.Contains(narrated, expiresPrefix) {
 		t.Errorf("the run invented an expiry the server never sent:\n%s", narrated)
 	}
-	if got := lastNonEmptyLine(run.prompt.results.String()); got != publishedURL(defaultPublishSubdomain) {
+	if got := lastNonEmptyLine(run.prompt.results.String()); got != PublishedURL(defaultPublishSubdomain) {
 		t.Errorf("the run printed %q, want the address", got)
 	}
 }
@@ -296,7 +296,7 @@ func TestTheAddressIsOnStdoutAndTheNarrationIsNot(t *testing.T) {
 	defer handoff.Release()
 
 	printed, narrated := run.prompt.results.String(), run.prompt.out.String()
-	address := publishedURL(defaultPublishSubdomain)
+	address := PublishedURL(defaultPublishSubdomain)
 
 	if !strings.Contains(printed, address) {
 		t.Errorf("the address never reached stdout:\n%s", printed)
@@ -362,7 +362,7 @@ func TestNothingRequestsTheAddressThisRunPrints(t *testing.T) {
 	}
 	defer handoff.Release()
 
-	address, err := url.Parse(publishedURL(defaultPublishSubdomain))
+	address, err := url.Parse(PublishedURL(defaultPublishSubdomain))
 	if err != nil {
 		t.Fatalf("parsing the composed address: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestNothingRequestsTheAddressThisRunPrints(t *testing.T) {
 	// in the record. Without it, replacing the recorder with a no-op
 	// leaves the loop above green over a list it never grew.
 	before := len(sentRequests(run.journal.all()))
-	probe, err := http.NewRequest(http.MethodGet, publishedURL("control-probe"), nil)
+	probe, err := http.NewRequest(http.MethodGet, PublishedURL("control-probe"), nil)
 	if err != nil {
 		t.Fatalf("building the control request: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestAnUnknownFieldInThePublishResponseIsIgnored(t *testing.T) {
 	}
 	defer handoff.Release()
 
-	if got := lastNonEmptyLine(run.prompt.results.String()); got != publishedURL("quick-koala-4f2a") {
+	if got := lastNonEmptyLine(run.prompt.results.String()); got != PublishedURL("quick-koala-4f2a") {
 		t.Errorf("the run printed %q, want the address", got)
 	}
 }
@@ -779,7 +779,7 @@ func TestADeployThatIsNotReadyYetIsAskedAgain(t *testing.T) {
 		t.Errorf("the run said it was waiting %d times, want exactly 1:\n%s",
 			got, narrated)
 	}
-	if got := lastNonEmptyLine(run.prompt.results.String()); got != publishedURL(defaultPublishSubdomain) {
+	if got := lastNonEmptyLine(run.prompt.results.String()); got != PublishedURL(defaultPublishSubdomain) {
 		t.Errorf("the run printed %q, want the address", got)
 	}
 }
@@ -1123,7 +1123,7 @@ func TestALabelThatIsNotOneIsRefusedRatherThanPrinted(t *testing.T) {
 		}
 		defer handoff.Release()
 		if got := lastNonEmptyLine(ok.prompt.results.String()); got !=
-			publishedURL(defaultPublishSubdomain) {
+			PublishedURL(defaultPublishSubdomain) {
 			t.Errorf("the address stopped being printed: %q", got)
 		}
 	})

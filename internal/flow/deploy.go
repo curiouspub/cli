@@ -178,9 +178,69 @@ func uploadTransport(deps DeployDeps, client *api.Client) *http.Transport {
 	return client.Transport()
 }
 
+// Outcome is what a completed run PRODUCED, as a value rather than as
+// something printed.
+//
+// IT IS A GO SURFACE AND NOT A CHANGE TO THE COMMAND. The CLI still
+// writes the address to stdout and everything it says about the address
+// to stderr, and that is asserted byte for byte by the transcript row
+// next door rather than left to this sentence. What this adds is a
+// caller that is not a terminal: an agent-facing surface renders these
+// same facts as fields, and the alternative — parsing them back out of
+// the prose a person reads — is exactly what this project refuses to do
+// with prose everywhere else.
+//
+// IT IS A FIELD ON Handoff RATHER THAN A SECOND RETURN VALUE, and the
+// reason is what the two spellings would each claim. Deploy returns a
+// Handoff on success and nil on every failure, so an Outcome returned
+// beside it would be nil in exactly the same cases and never in any
+// other: two results whose presence is ONE fact, in a signature that
+// says you can have either without the other. And a caller wanting the
+// outcome holds the Handoff regardless, because it has an archive to
+// release. So there is no call this shape makes awkward, and the
+// command's own call site does not move at all.
+//
+// DeployID LIVES HERE AND NOWHERE ELSE. It was a field of Handoff, with
+// no reader; it is one home rather than two, which is the whole of why
+// it moved instead of being copied.
+//
+// EVERY FINDING, NOT THE ADVISORIES. What a warning costs — whether it
+// stops a run, whether it is worth asking about, whether it is worth
+// showing at all — is a decision the surface rendering it makes, and
+// this package is where those decisions live rather than a second set of
+// checks. Filtering here would make this type the third opinion on a
+// question two renderers already answer differently on purpose: the
+// terminal asks about a warning and an agent cannot be asked. So the
+// report's own list is handed over whole, in report order, as the fresh
+// slice Findings already returns per call.
+//
+// NOTHING IS COMPUTED. ExpiresAt is the instant the server sent, carried
+// as it arrived; the zero value means the server sent none, which is a
+// thing it is entitled to do and not a reason to invent one.
+type Outcome struct {
+	// DeployID is the record the server created for this archive, and
+	// the handle every later call in the sequence names. NOTHING
+	// PERSISTS IT: it belongs to this run, and a create whose upload
+	// never starts leaves a record the server discards on its own.
+	DeployID string
+
+	// Subdomain is the LABEL the publish returned — the left-hand part
+	// alone, with no domain and no scheme. The server holds the label
+	// and has no representation of the base domain, so the address is
+	// composed from this by PublishedURL and never assembled twice.
+	Subdomain string
+
+	// ExpiresAt is when the server says this deploy stops answering.
+	// Zero when the server sent nothing.
+	ExpiresAt time.Time
+
+	// Preflight is the validated report's findings, in report order.
+	Preflight []check.Finding
+}
+
 // Handoff is what a completed run leaves in the caller's hands: the
-// archive to release, what was measured on the way, and the deploy the
-// server recorded.
+// archive to release, what was measured on the way, and what the run
+// produced.
 //
 // IT IS AN INTERNAL TYPE RATHER THAN A WIRE ONE, because it is a
 // different thing rather than a nicer spelling of one. The wire request
@@ -212,11 +272,9 @@ type Handoff struct {
 	// Client is the API client carrying this run's bearer token.
 	Client *api.Client
 
-	// DeployID is the record the server created for this archive, and
-	// the handle every later call in the sequence names. NOTHING
-	// PERSISTS IT: it belongs to this run, and a create whose upload
-	// never starts leaves a record the server discards on its own.
-	DeployID string
+	// Outcome is what the run produced. See the type above for why it
+	// lives here rather than beside this one.
+	Outcome Outcome
 
 	release func()
 }
@@ -546,8 +604,30 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		Bytes:       prepared.Archive.Size,
 		Entries:     prepared.Archive.Entries,
 		Client:      authed,
-		DeployID:    resp.DeployID,
-		release:     release,
+		// THE FACTS ARE THE ONES ALREADY IN HAND, and the two sources
+		// are deliberately the two that answered: the label and the
+		// expiry come from the publish's own response, the deploy id
+		// from the create's. Neither is re-derived and nothing is asked
+		// a second time — a second answer to a question already answered
+		// is free to disagree with the first.
+		//
+		// THE REPORT IS THE SUPERSEDED ONE — the variable, not a copy
+		// taken before the pack. The report a person consented to was
+		// built before anything was packed, and the packed-size check
+		// has run for real since; superseding is what makes the article
+		// true of a run that got this far, and reading the variable is
+		// what keeps this from being a second, staler answer. What
+		// travels here is the findings half of it, so on a successful
+		// run the difference is usually invisible from outside — which
+		// is a reason to take the right one without thinking about it,
+		// not a reason to think the choice does not matter.
+		Outcome: Outcome{
+			DeployID:  resp.DeployID,
+			Subdomain: published.Subdomain,
+			ExpiresAt: published.ExpiresAt,
+			Preflight: report.Findings(),
+		},
+		release: release,
 	}, nil
 }
 

@@ -232,7 +232,7 @@ func runMCP(args []string, u *ui.UI, stdin io.Reader, stdout, stderr io.Writer) 
 	// through a boundary of its own, built inside Serve. This is the one
 	// place in the program a stream is handed on rather than written to,
 	// and what receives it is held to the same rule.
-	if err := mcp.New("curious", version).Serve(stdin, stdout, stderr); err != nil {
+	if err := mcp.New("curious", version).Serve(context.Background(), stdin, stdout, stderr); err != nil {
 		u.Step("curious mcp: %s", err.Error())
 		return 1
 	}

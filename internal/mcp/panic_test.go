@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -41,7 +42,7 @@ func TestAPanickingToolIsContainedAndTheSameSessionKeepsServing(t *testing.T) {
 	s := testServer()
 	s.Register(Tool{
 		Name: "boom",
-		Handler: func(json.RawMessage) Result {
+		Handler: func(context.Context, json.RawMessage, Progress) Result {
 			panic("a handler panicking while holding a-value-that-must-not-reach-the-client")
 		},
 	})
@@ -60,7 +61,7 @@ func TestAPanickingToolIsContainedAndTheSameSessionKeepsServing(t *testing.T) {
 	var logw bytes.Buffer
 	served := make(chan error, 1)
 	go func() {
-		err := s.Serve(inR, outW, &logw)
+		err := s.Serve(context.Background(), inR, outW, &logw)
 		outW.Close()
 		served <- err
 	}()

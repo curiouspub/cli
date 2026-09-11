@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curiouspub/cli/internal/check"
 	"github.com/curiouspub/cli/internal/config"
 	"github.com/curiouspub/cli/internal/pack"
 	"github.com/curiouspub/cli/internal/ui"
@@ -1182,7 +1183,7 @@ const defaultPublishSubdomain = "quick-koala-4f2a"
 func buildLogOutput(t *testing.T, run *deployRun) string {
 	t.Helper()
 	printed := run.prompt.results.String()
-	want := publishedURL(run.script.publishSubdomain) + "\n"
+	want := PublishedURL(run.script.publishSubdomain) + "\n"
 	if !strings.HasSuffix(printed, want) {
 		t.Fatalf("stdout does not end with the address %q:\n%q", want, printed)
 	}
@@ -1913,6 +1914,93 @@ func TestTheHandoffIsTheFormedRequest(t *testing.T) {
 	if req := (wire.DeployCreateRequest{Bytes: handoff.Bytes}); req.Bytes != info.Size() {
 		t.Errorf("the wire request would declare %d bytes, want %d", req.Bytes, info.Size())
 	}
+}
+
+// TestTheOutcomeIsWhatTheServerSaidAndWhatThePreFlightFound is the row
+// that makes the structured result observable at all. Everything in it
+// is a fact some OTHER call already produced, so every field here is a
+// wire that can be soldered to the wrong terminal and still look right.
+//
+// THE THREE SERVER VALUES ARE ALL SCRIPTED AWAY FROM THEIR DEFAULTS, and
+// they are three different shapes on purpose. A deploy id echoed into
+// the subdomain composes a working-looking address; an expiry taken from
+// the create rather than the publish renders a plausible date; a
+// subdomain read back off the create is a label that exists. Defaults
+// would let every one of those pass, because the harness's defaults are
+// the values a wrong wire would most likely reach for.
+//
+// THE FINDINGS ARE PROVED BY A PROJECT THAT HAS ONE. A clean project
+// produces an empty list, and an empty list is what a field wired to
+// nothing also produces — the two are indistinguishable from outside, so
+// the fixture is the one carrying hard-coded development URLs and the
+// row asks for that finding by id. It also reads the finding's own
+// content rather than only its id, because a stub bearing the right id
+// is the shape a "helpfully" summarised list would take.
+//
+// THE WARNING IS AGREED TO RATHER THAN ABSENT. That is the case worth
+// covering: a run that stopped at the prompt never reaches this type at
+// all, so the interesting question is whether a finding somebody said
+// "continue" to still travels — which is precisely what an agent-facing
+// surface needs and what the terminal's own path throws away.
+//
+// REQUIRED MUTATION, run 2026-09-11, four of them, one per field. See
+// the commit message for what each reddened.
+func TestTheOutcomeIsWhatTheServerSaidAndWhatThePreFlightFound(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "localhost-hits"))
+	run.storedToken("stored-token", run.srv.URL)
+	// Continue past the development-URL warning.
+	run.prompt.confirms = []answer{yes()}
+
+	const (
+		wantDeployID  = "dpl-0f1e2d3c"
+		wantSubdomain = "brisk-otter-91cd"
+	)
+	wantExpiry := fixedNowLocal.Add(48 * time.Hour)
+	run.script.deployID = wantDeployID
+	run.script.publishSubdomain = wantSubdomain
+	run.script.publishExpiresAt = wantExpiry
+
+	handoff, err := run.run()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+	defer handoff.Release()
+
+	got := handoff.Outcome
+	if got.DeployID != wantDeployID {
+		t.Errorf("DeployID = %q, want the id the create answered with, %q", got.DeployID, wantDeployID)
+	}
+	if got.Subdomain != wantSubdomain {
+		t.Errorf("Subdomain = %q, want the label the publish answered with, %q", got.Subdomain, wantSubdomain)
+	}
+	if !got.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("ExpiresAt = %v, want the instant the publish answered with, %v", got.ExpiresAt, wantExpiry)
+	}
+
+	// THE LABEL IS A LABEL AND NOT AN ADDRESS. The composer is the one
+	// place a scheme and a domain are applied, so a Subdomain carrying
+	// either has already made a second composition site somewhere.
+	if strings.Contains(got.Subdomain, siteBaseDomain) || strings.Contains(got.Subdomain, "/") {
+		t.Errorf("Subdomain = %q, want the bare label the server sent", got.Subdomain)
+	}
+
+	localhost, found := findingWithID(got.Preflight, check.IDLocalhost)
+	if !found {
+		t.Fatalf("the warning the run was asked about is not in the outcome's findings: %+v", got.Preflight)
+	}
+	if localhost.Message == "" || len(localhost.Paths) == 0 {
+		t.Errorf("the finding travelled as a stub rather than as itself: %+v", localhost)
+	}
+}
+
+// findingWithID picks one finding out of a report's list by its check id.
+func findingWithID(findings []check.Finding, id string) (check.Finding, bool) {
+	for _, f := range findings {
+		if f.CheckID == id {
+			return f, true
+		}
+	}
+	return check.Finding{}, false
 }
 
 // TestASuccessfulRunSaysWhatItPackedAndHowItEnded. A command that packs

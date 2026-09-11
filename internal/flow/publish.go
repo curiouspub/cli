@@ -120,8 +120,23 @@ const (
 // entirely from a zone that has no name.
 const expiresLayout = "Mon 2 Jan 2006, 15:04 MST (-07:00)"
 
-// publishedURL composes the address a published deploy answers at, out
+// PublishedURL composes the address a published deploy answers at, out
 // of the LABEL the server sent and the domain compiled in above.
+//
+// THE FUNCTION IS THE EXPORT AND THE CONSTANT IS NOT, which is the whole
+// shape of this being exported at all. A second surface needs the same
+// address from the same label, and there are two ways to give it one:
+// hand out the domain, or hand out the composition. The first puts a
+// copy of the domain in every package that ever prints an address and
+// leaves each of them to remember the dot, the scheme and the escaping —
+// and the three arguments below are exactly the kind of reasoning that
+// does not survive being retyped. The second keeps one site where all of
+// it happens, so a caller cannot get any of it wrong without deleting a
+// call.
+//
+// The consequence is checkable rather than merely intended: no package
+// outside this one can spell the domain at all, and a guard asserts that
+// the agent-facing surface does not.
 //
 // IT IS BUILT THROUGH net/url RATHER THAN BY CONCATENATION, and that is
 // not a style choice. Written as a "https://" literal joined to the
@@ -149,7 +164,7 @@ const expiresLayout = "Mon 2 Jan 2006, 15:04 MST (-07:00)"
 // That is why nothing downstream escapes it a second time: there is no
 // byte left for a terminal to obey, and a call that cannot fire is an
 // assertion with no reachable path to failure.
-func publishedURL(subdomain string) string {
+func PublishedURL(subdomain string) string {
 	u := url.URL{Scheme: "https", Host: subdomain + "." + siteBaseDomain}
 	return u.String()
 }
@@ -376,16 +391,24 @@ func publishDeploy(ctx context.Context, deps publishDeps) (*wire.DeployPublishRe
 // log established: it is content a script may consume, so
 // `curious deploy > url.txt` yields the address and nothing else, while
 // the claim, the caveat and the expiry are read by a person on stderr.
-// There is deliberately no structured success object — the
+// Nothing structured is written to that stream — ON THE CLI'S STDOUT the
 // machine-readable surface of a successful run is that one line and the
-// exit code.
+// exit code, and a run that printed an object there would break every
+// redirect the paragraph above is about.
+//
+// That is a claim about this STREAM and not about this package. The
+// sequence hands its caller a flow.Outcome carrying the same facts as
+// fields, for a surface that is not a terminal and has no stdout of its
+// own to redirect. The two do not compete: one is what a shell sees,
+// the other is what a Go caller sees, and neither is parsed out of the
+// other.
 func renderPublished(render publishRenderer, resp *wire.DeployPublishResponse, now time.Time) {
 	closing := publishedHeadline + "\n\n" + propagationCaveat
 	if line, known := expiresLine(resp.ExpiresAt, now); known {
 		closing += "\n\n" + line
 	}
 	render.Step("%s", ui.Prose(closing))
-	render.Result("%s", publishedURL(resp.Subdomain))
+	render.Result("%s", PublishedURL(resp.Subdomain))
 }
 
 // expiresLine renders the expiry BOTH WAYS and reports whether there was

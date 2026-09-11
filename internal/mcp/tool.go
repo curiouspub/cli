@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
 
 	"github.com/curiouspub/cli/internal/ui"
+	"github.com/curiouspub/cli/pkg/wire"
 )
 
 // Handler runs one tool call and returns what the client should see.
@@ -22,7 +24,64 @@ import (
 //
 // Arguments arrive as raw bytes so that each tool decodes into its own
 // shape and reports its own bad input, in its own words.
-type Handler func(arguments json.RawMessage) Result
+//
+// THE CONTEXT AND THE SINK ARE HERE NOW BECAUSE NOW IS WHEN THEY ARE
+// FREE. This server has no tools registered, so the signature has no
+// callers to break; the tools that land on it will do work that takes
+// minutes and that a client is entitled to watch and to stop. Deferring
+// the two parameters means changing a signature every tool depends on in
+// order to add a channel the second of them needs, and a signature
+// changed under its implementations is how the cheapest version of a
+// change becomes the most expensive one.
+//
+// PROGRESS IS NEVER NIL. See Progress for why the default is a sink that
+// does nothing rather than an absent one.
+type Handler func(ctx context.Context, args json.RawMessage, progress Progress) Result
+
+// Progress is where a tool says what it is doing WHILE it is doing it.
+//
+// THE SHAPE COMES FROM THE STREAM THAT WILL FEED IT. A deploy's build log
+// arrives as two kinds of event: a phase, which is the server naming the
+// step it has reached, and a log line, which is whatever the package
+// manager and the site builder printed. A notification carrying both
+// answers the question an agent actually has — where is this, and what
+// was the last thing it said — and neither half answers it alone. So the
+// method takes exactly those two and nothing else.
+//
+// THE PHASE IS THE CONTRACT'S OWN TYPE rather than a string. The value
+// arriving here is the value the wire carried, and widening a contract
+// enum on the way past would be a second vocabulary for one fact, free to
+// grow a spelling the server never sends.
+//
+// IT IS AN INTERFACE AND NOT A CHANNEL OR A CALLBACK FIELD. A channel
+// would make every tool responsible for a goroutine and for not blocking
+// when nobody is draining it; a func field would have to be nil-checked
+// at each call site inside the tool, which is the check this type exists
+// to remove.
+//
+// WHAT IT IS NOT, stated because the name invites the assumption: this
+// is the SINK, not the protocol. Turning a report into an MCP progress
+// notification — the token the client sent, the message shape, the rate
+// — belongs to the change that has a tool to send one from. What exists
+// here is the seam, and the only sink this package has today is the one
+// that does nothing.
+type Progress interface {
+	// Report notes that the call has reached phase, carrying the most
+	// recent line of output. Either may be empty when the tool has
+	// nothing to say about that half.
+	Report(phase wire.Phase, line string)
+}
+
+// noProgress is the sink a call gets when nobody is listening, and it is
+// A VALUE RATHER THAN A NIL INTERFACE for one reason: a tool must never
+// have to ask. A nil Progress would put `if progress != nil` at every
+// site inside every tool that reports anything, each one a place to
+// forget — and forgetting it is a panic in somebody's deploy rather than
+// a missing line in a log. The cost of always having a sink is one
+// method call that returns immediately.
+type noProgress struct{}
+
+func (noProgress) Report(wire.Phase, string) {}
 
 // Tool is one callable this server exposes.
 //
@@ -124,7 +183,15 @@ const schemaForNoArguments = `{"type":"object"}`
 // model and then usually by a person in a transcript. The operator gets
 // the value and the stack on the diagnostic stream; the client is told
 // which tool failed and that the server is still up.
-func invoke(t Tool, arguments json.RawMessage, logw notes) (result Result) {
+// THE SINK IS DEFAULTED HERE, at the single place a handler is called,
+// rather than at each of the places a call can be started from. There is
+// one of those today and there will be more — a dispatched tools/call, a
+// direct invocation from a test — and a default applied per caller is a
+// default one caller forgets.
+func invoke(ctx context.Context, t Tool, arguments json.RawMessage, progress Progress, logw notes) (result Result) {
+	if progress == nil {
+		progress = noProgress{}
+	}
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -137,5 +204,5 @@ func invoke(t Tool, arguments json.RawMessage, logw notes) (result Result) {
 		result = ErrorResult("The %s tool failed unexpectedly and nothing it was doing was finished. "+
 			"The server is still running, so you can try the call again.", t.Name)
 	}()
-	return t.Handler(arguments)
+	return t.Handler(ctx, arguments, progress)
 }

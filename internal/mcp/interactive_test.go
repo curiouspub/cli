@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -81,7 +82,7 @@ func TestAToolThatWouldPromptReachesTheNoTerminalSentinel(t *testing.T) {
 	s := testServer()
 	s.Register(Tool{
 		Name: "would-prompt",
-		Handler: func(json.RawMessage) Result {
+		Handler: func(context.Context, json.RawMessage, Progress) Result {
 			_, asked = ui.New(os.Stdin, os.Stdout, os.Stderr).Confirm("Continue anyway?", true)
 			if errors.Is(asked, ui.ErrNotInteractive) {
 				return ErrorResult("There was nobody to ask, so nothing was assumed.")
