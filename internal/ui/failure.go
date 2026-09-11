@@ -223,15 +223,49 @@ func (u *UI) renderFailure(f *Failure) string {
 	// what this used to look like. Styling is applied after, so the two
 	// escape sequences this program emits on purpose are the only ones
 	// that reach the stream.
-	parts := f.Paragraphs()
-	if len(parts) == 0 {
+	rendered := f.Escaped()
+	if len(rendered) == 0 {
 		return ""
 	}
-	// BY POSITION, NOT BY VALUE. Asking whether a paragraph EQUALS the
-	// quotation gets the right answer for the quotation and the wrong one
-	// for anything that happens to read the same: a Why identical to a
-	// Detail was escaped whole and lost its layout. Paragraphs drops
-	// empties, so the quotation's index is computed the same way.
+	// THE STYLING IS APPLIED AFTER THE ESCAPING, so the two escape
+	// sequences this program emits on purpose are the only ones that
+	// reach the stream. Escaped hands back a fresh slice, so writing
+	// into it cannot reach the failure.
+	if f.What != "" {
+		rendered[0] = u.styled(rendered[0])
+	}
+	return strings.Join(rendered, "\n\n") + "\n"
+}
+
+// Escaped is the failure's parts, in the order they are shown, with
+// every one of them through the escape table.
+//
+// IT IS EXPORTED BECAUSE A TERMINAL IS NOT THE ONLY PLACE A FAILURE IS
+// SHOWN. The agent-facing surface renders the same copy to a client that
+// decodes it and a person who reads it, and a caller that joined
+// Paragraphs itself would be handing a reader bytes that have been
+// through nothing — which is the escaping boundary skipped at the one
+// surface whose output is also kept in a model's context.
+//
+// THE QUOTATION IS ESCAPED WHOLE AND EVERYTHING ELSE PER LINE, which is
+// the rule that cannot be moved outside this package: a Why is
+// paragraphs and its line breaks are this program's, and a quotation has
+// none — every byte of it is content, including a newline. Escaped per
+// line, a server sentence carrying a blank line adds a paragraph that
+// reads as ours, written by the far end. A caller holding only
+// Paragraphs cannot apply that rule at all, because the slice does not
+// say which part is the quotation.
+//
+// BY POSITION, NOT BY VALUE. Asking whether a paragraph EQUALS the
+// quotation gets the right answer for the quotation and the wrong one
+// for anything that happens to read the same: a Why identical to a
+// Detail was escaped whole and lost its layout. Paragraphs drops
+// empties, so the quotation's index is computed the same way.
+func (f *Failure) Escaped() []string {
+	parts := f.Paragraphs()
+	if len(parts) == 0 {
+		return nil
+	}
 	quoted := -1
 	if f.Detail != "" {
 		if f.What != "" {
@@ -242,17 +276,14 @@ func (u *UI) renderFailure(f *Failure) string {
 	}
 	rendered := make([]string, 0, len(parts))
 	for i, part := range parts {
-		switch {
-		case i == 0 && f.What != "":
-			rendered = append(rendered, u.styled(SanitizeLines(part)))
-		case i == quoted:
+		if i == quoted {
 			// WHOLE, newline included. See the field.
 			rendered = append(rendered, Sanitize(part))
-		default:
-			rendered = append(rendered, SanitizeLines(part))
+			continue
 		}
+		rendered = append(rendered, SanitizeLines(part))
 	}
-	return strings.Join(rendered, "\n\n") + "\n"
+	return rendered
 }
 
 // Paragraphs is the failure's parts in the order they are shown, empties

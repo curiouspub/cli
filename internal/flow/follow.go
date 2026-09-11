@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"time"
 
 	"github.com/curiouspub/cli/pkg/wire"
 )
@@ -81,6 +82,14 @@ type StreamReport struct {
 // StreamReportDeps is everything ReadDeployStream needs from outside
 // itself.
 type StreamReportDeps struct {
+	// StallTimeout is how long the reading waits for the next byte
+	// before deciding the connection has stopped talking. Zero means the
+	// build log's own window, which is what production passes; it is
+	// injected for the reason every other window in this package is, so
+	// a row can prove both halves of the rule in milliseconds instead of
+	// in minutes.
+	StallTimeout time.Duration
+
 	// Events opens the connection. It is a function rather than a client
 	// for the reason the build log's own is: what a caller wants opened
 	// is one deploy's stream, and the id belongs to whoever is asking
@@ -99,6 +108,33 @@ type StreamReportDeps struct {
 // happens to a dispatched event: that one renders as it goes and this
 // one collects. Two parsers for one stream is how two halves of a client
 // come to disagree about what the server sent.
+//
+// # It bounds a SILENCE, because nothing else does
+//
+// The connection this opens carries no deadline of its own — a total one
+// cannot express "is this making progress", and a build may legitimately
+// take as long as it takes. What it does have is a far end that sends a
+// keep-alive on a published interval, so a silence longer than several
+// of those is a connection that has stopped talking.
+//
+// THAT BOUND IS LOAD-BEARING HERE IN A WAY IT IS NOT FOR THE RENDERER,
+// and the difference is the host. The build log is read by a command
+// that ends when it ends; this is read by a server that dispatches one
+// call at a time on one goroutine, so a read that never returns takes
+// every later call with it — the listing, the ping, every other tool —
+// and the client cannot cancel, because a cancellation is a message that
+// server is no longer reading. A relay that dies without closing its
+// socket produces exactly that, and it is the condition the window
+// exists for.
+//
+// The window is the build log's own. That is not a constant carried here
+// because it looked similar: it is the SAME quantity at the same site —
+// a silence on this stream, against that server's keep-alive — so the
+// argument that chose the number is the argument that applies.
+//
+// A STALL ENDS THE READING RATHER THAN FAILING IT, which is the same
+// answer every other early ending gets here: what the stream did say is
+// reported, and Reported stays false.
 //
 // # It does not reconnect, and it does not de-duplicate
 //
@@ -120,7 +156,19 @@ type StreamReportDeps struct {
 // would throw away the phase and the output the stream did deliver,
 // which is the whole of what a caller can act on.
 func ReadDeployStream(ctx context.Context, deps StreamReportDeps) (StreamReport, error) {
-	body, err := deps.Events(ctx)
+	// THE WATCHDOG IS ARMED BEFORE THE CONNECTION IS OPENED, so a server
+	// that accepts and then never answers is covered by the same rule as
+	// one that goes quiet halfway through.
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stall := deps.StallTimeout
+	if stall <= 0 {
+		stall = streamStallWindow
+	}
+	watchdog := time.AfterFunc(stall, cancel)
+	defer watchdog.Stop()
+
+	body, err := deps.Events(reqCtx)
 	if err != nil {
 		return StreamReport{}, err
 	}
@@ -132,7 +180,14 @@ func ReadDeployStream(ctx context.Context, deps StreamReportDeps) (StreamReport,
 	// answer. scanEvents stops for exactly two reasons — the terminal
 	// event, which sets Reported, or the reader stopping, which does not
 	// — and the second is not a failure of this call: see the doc above.
-	_ = scanEvents(bufio.NewReader(body), func(name, data string) bool {
+	// EVERY READ THAT MOVED BYTES PUSHES THE WATCHDOG BACK, which is why
+	// it is keyed to the connection rather than to the parser on top of
+	// it: bytes are the unit that crosses a socket, and a server writing
+	// one long line slowly is delivering continuously while a
+	// line-counting reader sees nothing.
+	_ = scanEvents(bufio.NewReader(&streamProgress{r: body, seen: func() {
+		watchdog.Reset(stall)
+	}}), func(name, data string) bool {
 		switch wire.EventType(name) {
 		case wire.EventLog:
 			var ev wire.LogEvent
@@ -153,7 +208,14 @@ func ReadDeployStream(ctx context.Context, deps StreamReportDeps) (StreamReport,
 			if json.Unmarshal([]byte(data), &ev) != nil {
 				return false
 			}
-			report.Errors = append(report.Errors, ev)
+			// BOUNDED LIKE THE LOG IS, and for the same reason: a
+			// report is read by something that holds all of it at once,
+			// and a server message is server-sized. A stream that emits
+			// diagnostics and never terminates is read to exhaustion by
+			// design, so an unbounded slice here is this process growing
+			// until it dies — the cap on the log next door with the one
+			// collection beside it left off.
+			report.Errors = appendRecentError(report.Errors, ev)
 
 		case wire.EventDone:
 			var ev wire.DoneEvent
@@ -185,6 +247,14 @@ func ReadDeployStream(ctx context.Context, deps StreamReportDeps) (StreamReport,
 // what a cap usually does and is the point of this function existing. A
 // build log's beginning is a package manager's inventory; its end is
 // what happened.
+func appendRecentError(carried []wire.Error, next wire.Error) []wire.Error {
+	carried = append(carried, next)
+	if len(carried) > recentStreamLines {
+		carried = carried[len(carried)-recentStreamLines:]
+	}
+	return carried
+}
+
 func appendRecent(lines []string, line string) []string {
 	lines = append(lines, line)
 	if len(lines) > recentStreamLines {

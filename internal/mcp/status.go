@@ -67,6 +67,18 @@ type deployStatusResult struct {
 	// so they sit beside the status rather than in place of it, and a
 	// result can carry both.
 	Errors []toolStreamError `json:"errors,omitempty"`
+
+	// Notes are things about the stored login worth telling the caller
+	// that stop nothing — a credential file other accounts can read is
+	// the standing one.
+	//
+	// THEY ARE CARRIED BECAUSE THIS IS THE ONLY PLACE THEY WOULD REACH AN
+	// AGENT-ONLY USER. The terminal shows them on every run and the
+	// deploy tool carries them in its own narration; dropping them here
+	// would mean somebody who only ever talks to this surface is never
+	// told their credential is world-readable, while the field they came
+	// from says a surface that shows them shows them as they are.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // toolStreamError is one diagnostic the build log carried.
@@ -151,6 +163,7 @@ func deployStatusTool() Tool {
 				Phase:  string(report.Phase),
 				Log:    safeLines(report.Log),
 				Errors: streamErrors(report.Errors),
+				Notes:  safeLines(login.Warnings),
 			})
 		},
 	}

@@ -85,7 +85,7 @@ func decodeArguments(raw json.RawMessage, into any) *Result {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
 		r := ErrorResult("The arguments could not be read: %s\n\n"+
-			"Check the tool's input schema and call it again.", err.Error())
+			"Check the tool's input schema and call it again.", ui.Sanitize(err.Error()))
 		return &r
 	}
 	return nil
@@ -115,7 +115,7 @@ func jsonResult(v any) Result {
 		// Unreachable for the shapes below — strings, numbers and
 		// slices of those — and reported rather than swallowed, because
 		// the alternative is a successful call answering with nothing.
-		return ErrorResult("The answer could not be encoded: %s", err.Error())
+		return ErrorResult("The answer could not be encoded: %s", ui.Sanitize(err.Error()))
 	}
 	return TextResult("%s", string(encoded))
 }
@@ -160,7 +160,15 @@ func jsonResult(v any) Result {
 func refusalText(err error) string {
 	var failure *ui.Failure
 	if errors.As(err, &failure) {
-		return strings.Join(failure.Paragraphs(), "\n\n")
+		// THE FAILURE'S OWN ESCAPED RENDERING, not a join of its raw
+		// parts. The quotation inside a failure is a sentence the SERVER
+		// wrote, and it is escaped WHOLE — newline included — precisely
+		// so it cannot add a blank line and a paragraph that reads as
+		// this program's. Joined raw, a server message ending in two
+		// newlines and a sentence would arrive in a model's context as
+		// something curious said. Only the package that owns the parts
+		// knows which one is the quotation.
+		return strings.Join(failure.Escaped(), "\n\n")
 	}
 
 	switch {
@@ -172,8 +180,9 @@ func refusalText(err error) string {
 
 	case errors.Is(err, ui.ErrInterrupted):
 		return "The call was stopped before it finished, so what it was doing did not " +
-			"complete.\n\nNothing here can say how far it got. Call " + toolDeployStatus +
-			" with the deploy id if you have one."
+			"complete.\n\nNothing here can say how far it got, and a deploy that was " +
+			"already under way is the server's to finish or expire. Deploying again makes " +
+			"a NEW deploy rather than resuming this one."
 
 	case errors.Is(err, ui.ErrAborted), errors.Is(err, ui.ErrNoAnswer):
 		// UNREACHABLE AND MAPPED ANYWAY. Both come from a prompt — one
@@ -197,7 +206,10 @@ func refusalText(err error) string {
 		return "curious.pub is not taking this right now.\n\n" +
 			"Nothing was deployed. Try again a little later."
 	}
-	return err.Error()
+	// SOMEBODY ELSE'S TEXT, WHOLE. An error with no copy of its own is
+	// usually a transport failure or a library's message, and a newline
+	// in one is content rather than layout.
+	return ui.Sanitize(err.Error())
 }
 
 // refusal is a call that ran and failed, carrying the shipped copy.

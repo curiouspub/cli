@@ -73,6 +73,29 @@ type StoredLogin struct {
 	Warnings []string
 }
 
+// UnauthenticatedClient builds the client the calls that take no bearer
+// token use, for an endpoint this run resolved.
+//
+// IT EXISTS FOR ITS REFUSAL rather than for its one line of
+// construction. An API address this client will not dial has a message
+// written for it here, and that message echoes NEITHER the value NOR the
+// underlying error — because a base URL can carry a username and a
+// password, and the one refusal that cannot redact is the parse failure,
+// which quotes the entire string it was handed. A caller that built the
+// client itself and returned that error would put a password into
+// whatever it renders to.
+//
+// Every construction of a client in this program now goes through a
+// function that owns that refusal, so there is nowhere left to get it
+// wrong.
+func UnauthenticatedClient(endpoint string) (*api.Client, error) {
+	client, err := api.New(endpoint)
+	if err != nil {
+		return nil, endpointUnusableFailure()
+	}
+	return client, nil
+}
+
 // OpenStoredLogin loads the login this machine holds for endpoint and
 // returns a client ready to spend it.
 //

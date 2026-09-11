@@ -6,6 +6,7 @@ import (
 
 	"github.com/curiouspub/cli/internal/api"
 	"github.com/curiouspub/cli/internal/flow"
+	"github.com/curiouspub/cli/internal/ui"
 )
 
 // loginDeps builds what the two login calls need: the endpoint this run
@@ -15,6 +16,16 @@ import (
 // agent and a person on one machine cannot end up logging in to
 // different places — and a token is stored beside the endpoint that
 // issued it, so they would not even share the result.
+//
+// THE CLIENT IS BUILT THROUGH THE SEQUENCE PACKAGE rather than directly,
+// and that is not indirection for its own sake. An API address this
+// client refuses has a refusal written for it over there — one that
+// names the variable to look at and echoes NEITHER the value NOR the
+// underlying error, because a base URL can carry a username and a
+// password and the parse failure quotes the whole string it was handed.
+// Returned raw, that error reaches a tool's output, and a tool's output
+// is the one this program produces that is also kept in a model's
+// context.
 //
 // There is no prompter and no waitlist offer. Both are terminal things:
 // the offer asks a question and then asks for an address, and there is
@@ -28,7 +39,7 @@ import (
 // panics the day the seam is satisfied by something else.
 func loginDeps() (flow.LoginDeps, *api.Client, error) {
 	base := endpoint()
-	client, err := api.New(base)
+	client, err := flow.UnauthenticatedClient(base)
 	if err != nil {
 		return flow.LoginDeps{}, nil, err
 	}
@@ -89,9 +100,22 @@ func loginStartTool() Tool {
 			// immediately before the login it gates. Skipping it would
 			// cost an email, a person reading it, and a code typed back
 			// to an agent, before anybody learned the door was shut.
+			//
+			// AND IT IS TOLD WHETHER A LOGIN IS ACTUALLY GOING TO SPEND
+			// ONE. The cap counts NEW accounts, and a repeat verify for
+			// an identity that already holds a token reissues rather than
+			// spending a second slot — so a run that already holds a
+			// usable credential costs the day nothing, and refusing it
+			// would be refusing free work. The command enforces that by
+			// only reaching its login when the stored token is missing or
+			// refused; this tool has no such precondition, because an
+			// agent may call it at any time, so it asks the same question
+			// through the same door instead.
+			_, noLogin := flow.OpenStoredLogin(deps.Endpoint)
 			if err := flow.CapacityGate(ctx, flow.CapacityDeps{
-				Prompt: quietPrompter{},
-				API:    client,
+				Prompt:    quietPrompter{},
+				API:       client,
+				HaveToken: noLogin == nil,
 			}); err != nil {
 				return refusal(err)
 			}
@@ -103,7 +127,7 @@ func loginStartTool() Tool {
 				"curious cannot tell whether one was actually sent — the server answers the "+
 				"same either way — so ask the user to check that address, spam folder "+
 				"included, and call %s with the code that arrives.",
-				args.Email, toolLoginVerify)
+				ui.Sanitize(args.Email), toolLoginVerify)
 		},
 	}
 }
@@ -183,7 +207,7 @@ func loginVerifyTool() Tool {
 			}
 			return TextResult("Logged in as %s. The credential is stored on this machine, "+
 				"so %s can be called from now on without logging in again.",
-				args.Email, toolDeploySite)
+				ui.Sanitize(args.Email), toolDeploySite)
 		},
 	}
 }
@@ -204,7 +228,12 @@ func loginRefusal(r *flow.LoginRefusal) Result {
 	// The server's own words, which are the only thing that knows what
 	// happened, and then what to do — which this surface knows and the
 	// server does not.
-	said := r.Said
+	// THE SERVER'S SENTENCE IS ESCAPED WHOLE, newline included. It is
+	// somebody else's text in its entirety, so a line break in it is
+	// content rather than layout — and left alone it could add a
+	// paragraph below in this program's voice, which is exactly what the
+	// two blank lines under it would make it look like.
+	said := ui.Sanitize(r.Said)
 	if said == "" {
 		// A transport failure: no envelope, nothing the server said.
 		said = "The request did not get an answer."

@@ -40,13 +40,27 @@ const recentBuildLines = 60
 // instead, where an agent can act on them. Answering it is therefore the
 // behaviour, not a workaround for the absence of a person.
 //
-// THAT IS A BLUNT INSTRUMENT AND ITS ONE SHARP EDGE IS STATED. There is a
+// THAT IS A BLUNT INSTRUMENT AND ITS SHARP EDGE IS STATED PRECISELY,
+// because an imprecise version of this paragraph was wrong. There is a
 // second question behind a shut account cap — whether to join the
-// waitlist — and this would answer that yes too. It cannot do any harm:
-// the very next thing that path does is ask for an email address, which
-// this refuses, and the sequence then ends with the copy written for a
-// closed door met with nobody to ask. So the offer is never made rather
-// than made on somebody's behalf, and the ending is the right one.
+// waitlist — and this would answer that yes too.
+//
+// It cannot be reached today, and the reason is NOT the one that first
+// suggests itself. The offer takes its address from one of two sources:
+// the capacity gate's, which asks for one, and the login's, which
+// already has the address a person typed and asks nothing. On the second
+// route a yes here would be a signup performed on somebody's behalf with
+// nobody consulted. What stops it is further away and worth naming: that
+// route is reached from the verify step, the verify step is reached only
+// after the address prompt, and this refuses THAT — so the login never
+// gets far enough to have an address to offer.
+//
+// WHICH MEANS THE PROTECTION IS Email AND NOT Confirm, and it lasts
+// exactly as long as this surface supplies no waitlist offer of its own.
+// Wiring one — an obvious next feature — puts a consent question in
+// front of a prompter that says yes to everything. Whoever does that
+// gives this type a way to tell the two questions apart, or gives the
+// offer somewhere else to get its answer.
 //
 // Line and Email REFUSE, which is what makes the paragraph above true
 // and is also how a deploy with no stored login ends: the sequence would

@@ -48,6 +48,26 @@ type deployScript struct {
 
 	// frames is the build log this fixture serves, written out in full.
 	frames []string
+
+	// refuseAuth answers both login endpoints with one error envelope,
+	// so a row can drive the SERVER'S OWN SENTENCE into whatever this
+	// program does with it. It is the only thing here that produces
+	// foreign prose, which is why it exists rather than a row asserting
+	// on a message this file wrote.
+	refuseAuth *scriptedRefusal
+
+	// capacityShut answers the capacity check with a closed door, which
+	// is the only condition under which the gate's verdict is visible
+	// from outside: open, a run that checks and a run that does not look
+	// exactly the same.
+	capacityShut bool
+}
+
+// scriptedRefusal is one error envelope, as the wire carries it.
+type scriptedRefusal struct {
+	status  int
+	code    wire.ErrorCode
+	message string
 }
 
 func (s *deployScript) note(event string) {
@@ -65,6 +85,29 @@ func (s *deployScript) ordered() []string {
 func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case s.refuseAuth != nil && strings.Contains(path, "/auth/"):
+		s.note("auth refused")
+		w.Header().Set("Content-Type", "application/json")
+		if wire.CarriesRetryAfter(s.refuseAuth.code) {
+			// THE CONTRACT PROMISES A TIME FOR THESE CODES, so the
+			// fixture sends one. A server that broke its own promise
+			// would put this row's subject — what the client does with
+			// the MESSAGE — behind a branch about a missing header.
+			w.Header().Set("Retry-After", "60")
+		}
+		w.WriteHeader(s.refuseAuth.status)
+		_ = json.NewEncoder(w).Encode(wire.ErrorResponse{Error: wire.Error{
+			Code: s.refuseAuth.code, Message: s.refuseAuth.message,
+		}})
+
+	case r.Method == http.MethodGet && path == "/v1/capacity":
+		s.note("capacity")
+		writeJSON(w, wire.CapacityResponse{
+			Open:         !s.capacityShut,
+			AccountsLeft: 200,
+			ResetsAt:     fixedExpiry,
+		})
+
 	case r.Method == http.MethodPut && path == s.uploadPath:
 		s.note("upload")
 		w.WriteHeader(http.StatusOK)
@@ -876,6 +919,80 @@ func TestARefusalCarriesWhyThereIsNoUsableLogin(t *testing.T) {
 	if !strings.Contains(said, elsewhere) {
 		t.Errorf("the refusal does not say where the stored login belongs, which is the "+
 			"only half of it a reader can act on:\n%s", said)
+	}
+}
+
+// TestALoginThatCostsNoCapacityIsNotRefusedByTheCapacityGate.
+//
+// The daily cap counts NEW accounts, and a repeat verify for an identity
+// that already holds a token reissues rather than spending a second slot
+// — so a run on a machine that is already logged in costs the day
+// nothing, and refusing it would be refusing free work. The command
+// enforces that by only reaching its login when the stored token is
+// missing or refused; this tool has no such precondition, because an
+// agent may call it whenever it likes, so it has to ask the same
+// question itself.
+//
+// THE FIXTURE SHUTS THE DOOR, which is what makes the two cases
+// distinguishable at all: with capacity open both would pass, and the
+// row would be measuring nothing.
+//
+// REQUIRED MUTATION, run 2026-09-11: pass the gate HaveToken false
+// unconditionally. Reds the logged-in half — the call is refused with
+// the closed-door copy — and the other half stays green, which is the
+// asymmetry that makes this one row rather than two.
+func TestALoginThatCostsNoCapacityIsNotRefusedByTheCapacityGate(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		storeAToken bool
+		wantRefused bool
+	}{
+		{name: "already logged in", storeAToken: true, wantRefused: false},
+		{name: "no login at all", storeAToken: false, wantRefused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := &deployScript{uploadPath: "/object-store/put", capacityShut: true}
+			srv := httptest.NewServer(script)
+			t.Cleanup(srv.Close)
+			t.Setenv("CURIOUS_CONFIG", filepath.Join(t.TempDir(), "curious.json"))
+			t.Setenv("CURIOUS_API_URL", srv.URL)
+
+			if tc.storeAToken {
+				cfg, err := config.Load(srv.URL)
+				if err != nil {
+					t.Fatalf("loading a fresh config: %v", err)
+				}
+				if err := cfg.Save(ui.Secret("stored-token-never-printed"), srv.URL); err != nil {
+					t.Fatalf("storing a token: %v", err)
+				}
+			}
+
+			s := testServer()
+			RegisterTools(s)
+			result := resultOf(t, onlyReply(t, runCall(t, s,
+				callMessage("1", toolLoginStart, `{"email":"someone@example.com"}`))))
+
+			if result.IsError != tc.wantRefused {
+				t.Fatalf("refused=%v, want %v:\n%s", result.IsError, tc.wantRefused,
+					text(t, result))
+			}
+			// THE GATE'S CALL IS ASSERTED, not just its verdict. A tool
+			// that skipped the check entirely would pass the logged-in
+			// half for the wrong reason, and the two are
+			// indistinguishable from the result alone.
+			asked := false
+			for _, call := range script.ordered() {
+				if call == "capacity" {
+					asked = true
+				}
+			}
+			if asked == tc.storeAToken {
+				t.Errorf("the capacity check was %s on a run that %s a login, and the "+
+					"gate is meant to run exactly when a login would spend one",
+					map[bool]string{true: "made", false: "skipped"}[asked],
+					map[bool]string{true: "already holds", false: "holds no"}[tc.storeAToken])
+			}
+		})
 	}
 }
 
