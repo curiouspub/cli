@@ -18,6 +18,22 @@ type named struct {
 	Text    string
 }
 
+// subjectPullRequestTitle and subjectPullRequestBody are the only two
+// surfaces this check reads that a person can EDIT IN PLACE, without
+// producing a new event.
+//
+// Every other surface is fixed by a push: a branch name, a tag, a commit
+// message. These two are not, and that difference is what makes them
+// worth naming — see the recovery line in report, which is addressed to
+// somebody who has just corrected one of them and re-run this job.
+//
+// They are constants because report matches on them, and a subject that
+// is spelled in two places will eventually be spelled two ways.
+const (
+	subjectPullRequestTitle = "pull request title"
+	subjectPullRequestBody  = "pull request body"
+)
+
 // request is one push, pull request or merge-queue entry, reduced to what
 // this check needs.
 type request struct {
@@ -104,8 +120,8 @@ func requestFromEvent(r repo, eventName, refName string, raw []byte) (request, e
 			Head: p.PullRequest.Head.SHA,
 			Named: []named{
 				{Subject: "branch name", Text: p.PullRequest.Head.Ref},
-				{Subject: "pull request title", Text: p.PullRequest.Title},
-				{Subject: "pull request body", Text: p.PullRequest.Body},
+				{Subject: subjectPullRequestTitle, Text: p.PullRequest.Title},
+				{Subject: subjectPullRequestBody, Text: p.PullRequest.Body},
 			},
 		}, nil
 
