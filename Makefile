@@ -7,16 +7,16 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-go test-npm e2e-npm vet fmt lint snapshot surface-check hooks ci
+.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check hooks ci
 
 build:
 	go build -trimpath ./...
 	go build -trimpath -o bin/curious ./cmd/curious
 
 # test grows as suites arrive that go test cannot see on its own (a
-# release-build check, a wrapper package's own test runner) — each lands
-# here as an additional prerequisite so one command still sees the whole
-# repository.
+# release-build check, a wrapper package's own test runner, a pass under
+# the race detector) — each lands here as an additional half, so one
+# command still sees the whole repository.
 #
 # -count=1 disables the test cache, and it is LOAD BEARING rather than a
 # habit. The guards in internal/guard read state Go does not track as an
@@ -45,10 +45,104 @@ build:
 # Making the whole suite verbose would surface the same three lines
 # inside ten thousand, which is a way of hiding them that also annoys
 # everybody.
-test: test-go test-npm
+# EVERY HALF RUNS, AND THE RESULT IS THE AGGREGATE. This was a
+# prerequisite list until the race pass arrived, and a prerequisite list stops at the
+# first failure — which defeats the sentence above it. The moment the
+# stall-window registry reds on a leg nobody has measured yet, which is
+# its designed state, make would stop and the race pass beside it would
+# never run at all. On the leg that is pending, that is exactly the run
+# whose output somebody needs.
+#
+# So the halves are invoked in sequence and the status is collected.
+# THE RACE PASS GOES FIRST for a reason worth stating: the stall windows
+# are margins over a gap the detector widens — threefold on darwin — so
+# the number a pending leg has to report is the one taken under it, and a
+# run that stopped before the race pass would hand an operator the
+# friendlier of two figures with nothing on the line to say which it was.
+test:
+	@status=0; \
+	$(MAKE) test-race || status=1; \
+	$(MAKE) test-go || status=1; \
+	$(MAKE) test-npm || status=1; \
+	exit $$status
 
+# -timeout FOR THE SAME REASON THE RACE PASS CARRIES ONE, and it was
+# learned the same way: the hosted linux runner killed this pass at Go's
+# ten-minute default inside internal/flow, so a leg that has no recorded
+# measurement produced no measurement — which is the one outcome a
+# pending leg must not have. A run that is too slow should say so with
+# its numbers in hand.
+# THE MEASURING PACKAGES ARE NOT IN THIS LIST, and that is not them
+# escaping the gate — test-race below runs them TWICE, in both of the
+# conditions this repository sizes its windows under, and it does so
+# with -v so each pass publishes its numbers. Left in here as well they
+# would run three times, and the third run would be the one whose
+# figures nobody can read.
 test-go:
-	go run ./tools/skipcheck -- -count=1 ./...
+	go run ./tools/skipcheck -- -count=1 -timeout 25m $$(go list ./... | grep -vE '/internal/(flow|timing)$$')
+
+# THE RACE PASS OVER THE STALL-WINDOW MACHINERY, and it is reached from
+# test so that CI gets it without a second entry point: the workflow runs
+# `make ci` and nothing else, so a check that is not reachable from here
+# is a check CI does not run.
+#
+# WHY IT NAMES internal/flow AND NOT ONLY internal/timing. The ruling
+# that produced this target says "the timing package's CI invocation",
+# and internal/timing on its own would catch NOTHING: it is a registry
+# and two AST guards, and it starts no goroutine. The data race that
+# invalidated a whole round of measurements lived one package over — a
+# receive-buffer size written onto the object-store fixture AFTER its
+# listener had started accepting, read by the accept path — so the
+# package that has to be under the detector is the one with the fixture
+# in it. Naming only the registry would be a gate in the shape of the
+# rule with none of its subject.
+#
+# WHAT IT COSTS AND WHAT THAT BUYS. internal/flow is the slowest package
+# here, because five of its rows are timing probes that pace real bytes
+# over loopback; under the detector it is about the same wall time, since
+# the cost is sleeps rather than instructions. The gate therefore runs
+# that package twice. It is worth it: the defect this catches is one that
+# leaves every row GREEN and every number wrong, which is the only kind
+# of defect a test suite cannot report on its own.
+#
+# THE STALL WINDOWS ARE SIZED UNDER THIS CONDITION. A margin has to hold
+# in every condition the gate runs the row in, and the detector is one of
+# them — see internal/timing, where each leg's number names the detector
+# it was taken under.
+#
+# CGO_ENABLED=1 because the race detector needs a C toolchain on most
+# platforms. The file-level export sets it to 0 for every other target,
+# which is deliberate; this is the one place that has to differ, and it
+# differs in the recipe rather than by moving the default.
+# -timeout IS EXPLICIT AND IT IS NOT A ROUND NUMBER PULLED OUT OF THE
+# AIR. Go defaults to ten minutes per test binary, and internal/flow
+# under the detector on a two-core CI runner does not fit: the linux leg
+# panicked at exactly 10m0s inside the upload probe, having produced no
+# measurement at all, which is the worst of both — the money spent and no
+# number back. The package takes about two minutes there without the
+# detector and something over five times that with it.
+# -v BECAUSE THESE TWO PACKAGES MEASURE THINGS. Five of these rows are
+# probes whose whole product is a number, and t.Logf output is invisible
+# without it — so a green run published nothing and the only way to read
+# a leg's measurement was to make its test FAIL. That is backwards: the
+# numbers a live run brings back are the whole reason for spending the
+# run, and a gate that hides them until something breaks is a gate that
+# has to be broken to be read. Measured 2026-09-11, when the macOS
+# runner's own classified figures could not be recovered from a passing
+# job at all.
+#
+# It is on this target alone, not on test-go, because it is these two
+# packages that report measurements and the rest of the suite would
+# only add noise to the same log.
+# BOTH CONDITIONS ARE RUN HERE, and both print. The rule these packages
+# keep is that a leg's number is the WORSE of the two conditions the
+# gate runs it in — and for as long as only the raced pass carried -v,
+# half of that comparison was unreadable: a green run published one
+# figure and the other existed nowhere. A rule about two numbers needs
+# both of them on the log.
+test-race:
+	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
+	go test -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 
 # The wrapper package's own suite. It is a PREREQUISITE OF test rather
 # than a separate command somebody has to know about, because a check

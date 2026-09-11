@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curiouspub/cli/internal/timing"
 	"github.com/curiouspub/cli/pkg/wire"
 )
 
@@ -702,7 +703,7 @@ func TestAPayloadThatWillNotDecodeStillCountsTowardsTheReplay(t *testing.T) {
 // the real window. A mutation that removes half a mechanism measures the
 // other half; both the arming and the reset have to go.
 func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
-	const stall = 100 * time.Millisecond
+	stall := timing.StreamGoesQuiet.Window
 
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
@@ -752,6 +753,63 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 	}
 }
 
+// keepAlivePace and keepAliveBeats are the keep-alive fixture, STATED,
+// and shared by the row and the probe beside it.
+//
+// THE FIXTURE AFFORDS THE WINDOW PLUS ONE WHOLE WINDOW, and that ratio
+// is the constant rather than the duration. Ruled 2026-09-10 after the
+// measured window landed at 525 ms against a fixture affording 600: the
+// row still passed, the assertion below still held, and the margin
+// between them was seventy-five milliseconds. That is not a margin, it
+// is a flake with a schedule — one leg measuring past about 120 ms
+// would have pushed the window past what its own fixture covers, and
+// the first thing anybody would have seen is the row reddening on a
+// runner rather than a number needing a ruling.
+//
+// So the fixture is sized the way the write side's already is. pacingFor
+// in internal/flow builds an upload body to span three and a half
+// windows because a fixture sized at exactly the assertion is one
+// scheduling hiccup from failing it; this is the same rule on the read
+// side, with the ratio written down instead of assumed. Thirty-five
+// beats at fifteen milliseconds is 525 ms of nothing but comment frames,
+// against a 230 ms window: the row's own assertion needs one window, the
+// headroom is the second, and what is left over is the margin over the
+// assertion rather than over the gap. The two are different questions
+// and both are asked below.
+//
+// IT WAS SEVENTY-FIVE, AGAINST A 525 ms WINDOW, and it came back down
+// with the window when the probe learned to classify its own passes.
+// Both numbers were honest at the time and both were sized from a
+// reading in which the runner, not the client, was what stopped.
+//
+// THEY WERE ALREADY CONSTANTS AND THE PROBE HAD ITS OWN COPY OF ONE OF
+// THEM, which is the defect worth naming here rather than the values.
+// The row ran forty beats at fifteen milliseconds and the probe ran
+// twenty at a fifteen written out again in its own file — so the number
+// recorded as this row's margin was measured over a fixture half the
+// length of the row's, and nothing anywhere said so. A probe measures
+// the row's own shape or it answers a different question; that rule has
+// already been paid for once on the write side, where a connection kept
+// warm across runs reported 594 ms against a fresh one's 434.
+const (
+	keepAlivePace  = 15 * time.Millisecond
+	keepAliveBeats = 35
+)
+
+// keepAliveHeadroom is how many windows the fixture must afford: one for
+// the row's assertion, one for the margin over it. See above.
+const keepAliveHeadroom = 2
+
+// keepAliveFrames is that fixture: nothing but keep-alives, then an
+// ending. One builder, so the row and the probe cannot drift.
+func keepAliveFrames() []string {
+	frames := make([]string, 0, keepAliveBeats+1)
+	for i := 0; i < keepAliveBeats; i++ {
+		frames = append(frames, commentFrame())
+	}
+	return append(frames, doneFrame(wire.StatusBuilt))
+}
+
 // TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered is the other half
 // of the pair, and without it the stall rule could be satisfied by a
 // client that gives up on any quiet connection.
@@ -760,12 +818,14 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // connection for most of a slow build. They are consumed as evidence and
 // never shown.
 //
-// THE MARGIN IS MEASURED RATHER THAN ASSUMED, and the fixture reports the
-// quantity the row actually depends on: the widest gap between two of its
-// own flushes. A red is then readable — a gap past the window means this
-// machine paused and the row measured the runner, not the client. Sizing
-// the window against the fixture's own pacing knob alone is how a timing
-// row becomes a flake with a schedule.
+// THE MARGIN IS MEASURED RATHER THAN ASSUMED, and the evidence is in
+// internal/timing rather than in this comment: the window, the quantity
+// it bounds, the reader it was measured through, the worst gap on each
+// leg, the run count and the date. The fixture ALSO reports the widest
+// gap between two of its own flushes, which is a different number and a
+// cheaper one — it says whether this particular run measured the client
+// or the machine. Sizing the window against the fixture's own pacing
+// knob alone is how a timing row becomes a flake with a schedule.
 //
 // REQUIRED MUTATION, run 2026-09-08: count only EVENTS as proof of life,
 // not comment frames. Reds — "a stream carrying nothing but keep-alives
@@ -780,37 +840,51 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 // did not have to have. A row is only as good as the bytes it sends.
 func TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered(t *testing.T) {
 	// THE STREAM MUST STAY QUIET FOR LONGER THAN THE WINDOW, or this row
-	// cannot see anything: forty beats at fifteen milliseconds is 600ms of
-	// nothing but comment frames against a 300ms window, so a client that
-	// did not count them as proof of life would have given up twice over.
+	// cannot see anything: the fixture above is more than two windows of
+	// nothing but comment frames, so a client that did not count them as
+	// proof of life would have given up twice over. The row asserts that
+	// relation below rather than assuming it, because the window now
+	// comes from the registry and could be raised there by a leg this
+	// machine is not.
 	//
 	// THE MARGIN THE OTHER WAY IS MEASURED RATHER THAN COMPUTED FROM THE
-	// PACE. What the client depends on is not the 15ms this row asks for
+	// PACE. What the client depends on is not the pace this row asks for
 	// but the interval it actually gets, which includes whatever the
-	// scheduler and the loopback stack add. Instrumented over 25 runs: the
-	// widest gap is 17.3ms, against a 300ms window — a margin of about
-	// seventeen, on the real quantity rather than on the knob.
-	//
-	// MEASURED ON ONE ENVIRONMENT, macOS on arm64, and carried unmeasured
-	// to the other two legs this project gates on. Scheduling granularity
-	// is a property of the kernel and the runner, so there is no reason the
-	// number transfers — which is why the fixture reports its own widest
-	// gap on every run and refuses rather than flakes when that gap has
-	// eaten the margin.
-	const stall = 300 * time.Millisecond
-	const pace = 15 * time.Millisecond
-	const beats = 40
+	// scheduler and the loopback stack add — and that measurement, per
+	// leg, is in internal/timing. The fixture still reports its own
+	// widest gap on every run, so this row refuses rather than flakes
+	// when that gap has eaten the margin.
+	stall := timing.StreamKeepAlivesAreProofOfLife.Window
 
-	frames := make([]string, 0, beats+1)
-	for i := 0; i < beats; i++ {
-		frames = append(frames, commentFrame())
+	// THE QUIET MUST OUTLAST THE WINDOW TWICE OVER, whatever the
+	// registry currently says the window is: once for what this row
+	// asserts, and once more so the two are not the same number. A
+	// fixture sitting at its own assertion reds the first time a leg is
+	// slower, and the fix somebody reaches for at that point is the
+	// window rather than the fixture — which is the read side following
+	// its own reading all over again.
+	//
+	// IT IS A FATAL RATHER THAN A SILENT RESIZE, and that is the whole
+	// mechanism. The fixture does not grow to meet the window on its
+	// own; a leg that pushes the window past what this fixture affords
+	// stops the row and asks a person to lengthen it deliberately.
+	if quiet := keepAliveBeats * keepAlivePace; quiet < keepAliveHeadroom*stall {
+		t.Fatalf("the fixture is quiet for %v against a %v window, and this row asks "+
+			"for %d windows of quiet — one to assert over and one so the assertion "+
+			"is not sitting on its own boundary.\nRaise keepAliveBeats: %v of quiet "+
+			"needs %d beats at the %v pace. Do not lower the window to fit; it is a "+
+			"measurement.",
+			quiet, stall, keepAliveHeadroom,
+			keepAliveHeadroom*stall,
+			int((keepAliveHeadroom*stall+keepAlivePace-1)/keepAlivePace), keepAlivePace)
 	}
-	frames = append(frames, doneFrame(wire.StatusBuilt))
+
+	frames := keepAliveFrames()
 
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.StreamStallTimeout = stall
-	run.script.eventScripts = []eventScript{{frames: frames, pace: pace}}
+	run.script.eventScripts = []eventScript{{frames: frames, pace: keepAlivePace}}
 
 	handoff, err := run.run()
 	defer handoff.Release()
@@ -825,14 +899,14 @@ func TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered(t *testing.T) {
 	// number is a property of the runner rather than of this code, so it
 	// is the number a red on another machine would be about.
 	t.Logf("the fixture's widest gap between flushes was %v, against a %v window "+
-		"and a %v pace", widest, stall, pace)
+		"and a %v pace", widest, stall, keepAlivePace)
 	if widest >= stall {
 		t.Fatalf("the fixture itself paused %v between flushes, past the %v window "+
 			"— this row measured the machine rather than the client", widest, stall)
 	}
 	if n := run.script.eventConnections(); n != 1 {
 		t.Errorf("the stream was opened %d times over %v of keep-alives, want 1 — "+
-			"a comment frame is proof of life", n, beats*pace)
+			"a comment frame is proof of life", n, keepAliveBeats*keepAlivePace)
 	}
 	if printed := run.prompt.results.String(); strings.Contains(printed, "keep-alive") {
 		t.Errorf("a keep-alive frame was rendered:\n%s", printed)
@@ -1155,6 +1229,151 @@ func TestOriginDecidesTheStream(t *testing.T) {
 	})
 }
 
+// partialLinePace is how fast the partial-line fixture flushes one
+// piece of its single line, and it is shared by the row and the probe
+// beside it so the two cannot pace differently while claiming to measure
+// the same thing.
+const partialLinePace = 20 * time.Millisecond
+
+// partialLineDelivery is how long that fixture spends delivering its one
+// line, and it is a STATED CONSTANT rather than a quantity derived from
+// the window.
+//
+// # AN INSTRUMENT THAT FOLLOWS ITS OWN READING CANNOT CONVERGE
+//
+// This used to be three and a half windows' worth, computed. The
+// reasoning was sound in isolation: the row asserts it spent three
+// windows on one line, so the fixture has to outlast three windows, so
+// derive it and it can never fall behind. What that missed is the loop
+// it closes. The gap this window is a margin over IS the fixture's own
+// pause between flushes — measured, across twenty-one passes of this
+// probe, the client's worst gap and the fixture's widest flush gap
+// agreed to within a millisecond every time — and the maximum of a
+// heavy-tailed sample grows with how long you look. So a wider window
+// delivered for longer, a longer delivery found a larger maximum, and
+// five times that maximum asked for a wider window. The window went 150
+// to 250 to 350 to 400 milliseconds inside one round, every step of it
+// the sizing rule being applied correctly to a fresh number.
+//
+// Stated, the loop is cut: the fixture is the same length whatever the
+// window becomes, so the maximum measured under it is a fixed quantity
+// and five times it is a number that stays put.
+//
+// # WHY IT IS GENEROUSLY LARGER THAN THE ASSERTION NEEDS
+//
+// The row asserts three windows and wants three and a half for margin,
+// so at a 250 ms window this constant only has to be 875 ms. It is a
+// second and a half, which is nearly twice that, and the extra is
+// deliberate: a constant sitting at the boundary is one that reds the
+// first time a leg measures slower, and each of those reds is a person
+// having to choose a new number under time pressure. The cost of the
+// headroom is a fixed 600 milliseconds per run of the row and of each
+// probe run, which is a price worth paying once to stop paying attention.
+//
+// RAISING IT IS A DELIBERATE ACT AND THE ROW SAYS SO. When a window
+// grows past what this covers, the row refuses with both numbers rather
+// than a fixture quietly growing to meet it.
+//
+// # IT WAS RAISED ONCE AND THEN LOWERED, 2026-09-11, AND BOTH MOVES WERE THE RULE WORKING
+//
+// 1.5 s to 2.3 s, because darwin's window went 230 ms to 650 ms and
+// three and a half of 650 is 2.275 s. The row refused first, with both
+// numbers, which is the paragraph above working rather than a
+// formality. Then 2.3 s to 1.0 s, because the reading that had moved
+// the window turned out to be a pass in which this fixture itself had
+// stopped for 139.277875 ms at its stated 20 ms pace — and once the
+// probe classified passes like that instead of recording them, the
+// window came back to 255 ms and three and a half of it is 892.5 ms.
+//
+// IT DID NOT GO ALL THE WAY BACK, AND THE FLOOR IS THE MARKER RATHER
+// THAN THE WINDOW. 892.5 ms is 44 pieces at this pace and the shortest
+// frame this fixture can build out of its own marker is 56, so a
+// constant sized from the window alone describes a fixture that cannot
+// exist — partialLineFrames refuses with both counts rather than
+// quietly returning a shorter one. 1.2 s is 60 pieces: above the
+// marker's floor, above three and a half windows, and the reason the
+// number is not 900 ms is written here rather than left as an oddity.
+//
+// WHAT MOVED THE WINDOW WAS NOT THIS FIXTURE. That is the distinction
+// between this raise and the four before it. The 150-to-400 sequence
+// was the loop: a wider window derived a longer delivery, a longer
+// delivery found a larger maximum, and five times that maximum asked
+// for a wider window. Here the fixture sat at a stated 1.5 s for every
+// one of eleven passes, and one of them reported 128.757833 ms against
+// a 45.707917 ms record — a reading the constant did not produce and
+// could not have grown into. The window followed the reading. The
+// fixture then followed the window, once, by hand.
+//
+// AND THE LOOP IS NOT CLOSED BY THAT BEING TRUE. A 2.3 s delivery
+// samples half as long again as a 1.5 s one, and the maximum of a
+// heavy-tailed sample grows with how long you look — so the next
+// measurement under this constant may be larger for no reason but the
+// constant. What stops that being a chase is that the raise is manual
+// and refused-by-default: nothing here moves without a person reading
+// two numbers and deciding. The alternative — a window that does not
+// cover the worst thing anybody has measured — is the flake this whole
+// task exists to remove.
+//
+// THE RUNTIME IT COSTS, measured rather than estimated: the row itself
+// pays the 800 ms difference once, and the probe beside it pays it
+// twenty times a pass in each of the two conditions the gate runs.
+const partialLineDelivery = 1200 * time.Millisecond
+
+// partialLineMarker is the text the row looks for on stdout. It is
+// repeated as the line grows, because what the row asserts is that the
+// line arrived, not that it arrived once.
+const partialLineMarker = "A-LINE-DELIVERED-IN-PIECES"
+
+// partialLineFrames is one log frame cut into partialLineDelivery's
+// worth of one-byte pieces.
+//
+// IT CANNOT SEE THE WINDOW, and that is the point rather than an
+// omission. A helper handed the window is a helper that can be made to
+// follow it, and following it is what stopped the margin converging —
+// see partialLineDelivery. The window is checked AGAINST this fixture,
+// by the row that asserts something about it, which is a different
+// direction and a different function.
+//
+// IT GROWS THE LINE AND THEN CHECKS, rather than computing a count and
+// trusting it. splitEvenly cuts by SIZE: ask it for forty-three pieces
+// of a sixty-byte string and it returns thirty, because it rounds the
+// piece size up and then runs out of string. A count handed straight to
+// it is a fixture quietly smaller than the arithmetic says. So the loop
+// asks for what it got — and it grows by ONE BYTE at a time, so that
+// what it got is what was asked for rather than the first multiple of a
+// repeated marker to clear it. Growing by a whole marker overshot the
+// stated delivery by nearly forty per cent, which would have made the
+// constant above a number that describes no fixture.
+func partialLineFrames(t *testing.T) []string {
+	t.Helper()
+	pieces := int(partialLineDelivery / partialLinePace)
+	line := partialLineMarker
+	// A bound, so a helper that can never satisfy its own condition
+	// fails as a test rather than as a hung run.
+	for grow := 0; grow <= pieces; grow++ {
+		frames := splitEvenly(logFrame(line), len(logFrame(line)))
+		if len(frames) >= pieces {
+			// EXACTLY, not at least. One byte per growth step means the
+			// first length to reach the target is the target, unless the
+			// marker's own frame was already past it — which is a
+			// constant chosen too small for the fixture to describe, and
+			// is worth a refusal rather than a silent overshoot.
+			if len(frames) != pieces {
+				t.Fatalf("the shortest frame this helper can build is %d pieces and "+
+					"partialLineDelivery asks for %d. The stated delivery is shorter "+
+					"than one frame of the marker, so the constant describes a fixture "+
+					"that cannot exist — raise it, or shorten the marker.",
+					len(frames), pieces)
+			}
+			return frames
+		}
+		line += "-"
+	}
+	t.Fatalf("no line this helper is willing to build reaches %d pieces, so the row "+
+		"it feeds delivers for less than the stated %v", pieces, partialLineDelivery)
+	return nil
+}
+
 // splitEvenly cuts s into n pieces, so a fixture can deliver one frame
 // as a sequence of partial writes rather than in a single flush.
 func splitEvenly(s string, n int) []string {
@@ -1184,18 +1403,70 @@ func splitEvenly(s string, n int) []string {
 // REQUIRED MUTATION: reset the watchdog on the completed line instead of
 // on the read.
 func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
-	const stall = 60 * time.Millisecond
+	stall := timing.StreamPartialLineIsNotAStall.Window
 
-	frame := logFrame("A-LINE-DELIVERED-IN-PIECES")
-	frames := splitEvenly(frame, 10)
-	frames = append(frames, doneFrame(wire.StatusBuilt))
+	// THE FIXTURE IS STATED AND THE WINDOW IS CHECKED AGAINST IT, which
+	// is the reverse of what this row used to do and the whole of the
+	// difference. The piece count used to be derived from the window, on
+	// the reasoning that a fixture which follows the window can never
+	// fall behind it. It cannot, and that is exactly the problem: the
+	// gap this window is a margin over is the fixture's own pause
+	// between flushes, so a longer fixture measures a larger maximum and
+	// five times that asks for a longer fixture. See
+	// partialLineDelivery.
+	//
+	// So the fixture is a constant, and the relation the row needs is
+	// asserted rather than arranged. THREE AND A HALF WINDOWS, not
+	// three: the halves are a margin over the ASSERTION below, so a
+	// scheduling hiccup cannot fail a row about something else, and they
+	// are a different margin from the five-times rule beside the
+	// registry, which is a margin over the GAP.
+	//
+	// REQUIRED MUTATIONS, RE-RUN ON THE TIP 2026-09-11, from both
+	// directions — because this check is a RELATION and breaking only
+	// one side of it proves half of a rule.
+	//
+	//  1. Drop partialLineDelivery to 700 ms against the 650 ms window.
+	//     Reds here: "the fixture is stated at 700ms of delivery and a
+	//     650ms window asks for 2.275s".
+	//  2. Leave the fixture alone and raise the window to 800 ms. Reds
+	//     here too: "stated at 2.3s … and a 800ms window asks for 2.8s".
+	//     That is the direction this check actually exists for — a leg
+	//     measuring slower is how the window grows, and nobody editing
+	//     the registry is looking at this file. It is also the direction
+	//     that fired for real this round rather than under a mutation:
+	//     the window went to 650 ms off one reading, and this line is
+	//     what stopped the fixture following it silently.
+	//
+	// The probe beside the row stays green under both, which is correct:
+	// it measures gaps and asserts nothing about spending three windows.
+	//
+	// AND AN EARLIER ATTEMPT AT THE FIRST ONE REDDENED SOMEWHERE ELSE,
+	// which is worth keeping. At a 400 ms window, 700 ms of delivery was
+	// short enough that the helper's own floor fired first — "the
+	// shortest frame this helper can build is 56 pieces and
+	// partialLineDelivery asks for 35" — because a stated delivery
+	// shorter than one frame of the marker describes a fixture that
+	// cannot be built at all. That red comes out of the probe as well as
+	// the row, and it is a second falsifier rather than a hole.
+	if 2*partialLineDelivery < 7*stall {
+		t.Fatalf("the fixture is stated at %v of delivery and a %v window asks for %v "+
+			"— three and a half of itself — so this row cannot spend three windows on "+
+			"one line.\nThe fixture does not follow the window on purpose: a fixture "+
+			"derived from the window makes the measurement below it follow its own "+
+			"reading, and that margin went 150 to 250 to 350 to 400 ms inside one "+
+			"round without settling. Raise partialLineDelivery deliberately, and pay "+
+			"the runtime it costs.",
+			partialLineDelivery, stall, 7*stall/2)
+	}
+	frames := append(partialLineFrames(t), doneFrame(wire.StatusBuilt))
 
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.StreamStallTimeout = stall
 	run.script.eventScripts = []eventScript{{
 		frames: frames,
-		pace:   20 * time.Millisecond,
+		pace:   partialLinePace,
 		hold:   true,
 	}}
 
@@ -1216,8 +1487,41 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 		t.Fatalf("the run took %v, under %v, so it never spent long enough on one "+
 			"line for a line-counting watchdog to fire", elapsed, 3*stall)
 	}
-	if printed := run.prompt.results.String(); !strings.Contains(printed, "A-LINE-DELIVERED-IN-PIECES") {
+	if printed := run.prompt.results.String(); !strings.Contains(printed, partialLineMarker) {
 		t.Errorf("the line delivered in pieces never reached stdout:\n%s", printed)
+	}
+
+	// THE FIXTURE'S OWN WIDEST PAUSE, checked the way the keep-alive row
+	// beside this one checks its own, and added because a runner
+	// supplied the instance. On a hosted macOS runner this row's probe
+	// measured a 272 ms gap between two arrivals while the FIXTURE's own
+	// widest gap between flushes was 220 ms — the server goroutine was
+	// starved, and the client was blamed for it.
+	//
+	// A window is a margin over the quantity this client depends on. A
+	// gap that is mostly the fixture failing to write is a measurement
+	// about the machine, and widening the window until it goes quiet is
+	// the "raise the number until the failures stop" this whole
+	// arrangement exists to replace. So it is named instead.
+	//
+	// ITS MUTATION IS NOT AVAILABLE FROM THIS FIXTURE'S KNOBS, and that
+	// is worth writing down rather than leaving as an untested line. The
+	// only knob that widens the fixture's own gap is the pace, and a
+	// pace past the window makes the client legitimately stall — run
+	// 2026-09-10 at fourteen times the pace, the row reds one assertion
+	// EARLIER, on "a stream delivering bytes continuously was treated as
+	// stalled", and never reaches here. What reaches here is a fixture
+	// that paces correctly and is starved once, which is a machine event
+	// rather than a setting. Its sibling guard in the keep-alive row has
+	// the same shape and the same limitation, and the instance that
+	// justifies both was supplied by a hosted runner rather than by a
+	// mutation.
+	widest := run.script.widestGap()
+	t.Logf("the fixture's widest gap between flushes was %v, against a %v window "+
+		"and a %v pace", widest, stall, partialLinePace)
+	if widest >= stall {
+		t.Fatalf("the fixture itself paused %v between flushes, past the %v window "+
+			"— this row measured the machine rather than the client", widest, stall)
 	}
 }
 

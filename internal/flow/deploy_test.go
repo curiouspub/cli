@@ -258,6 +258,9 @@ type deployScript struct {
 	// whether it measured the client or the machine: a fixture that
 	// itself paused past the window under test has measured the runner.
 	eventGaps []time.Duration
+	// eventWidests is the widest gap within EACH connection, one entry
+	// per connection served. See widestPerConnection.
+	eventWidests []time.Duration
 
 	// publishOutcome scripts the publish's answer, publishSubdomain and
 	// publishExpiresAt the success body, and publishBody replaces that
@@ -391,8 +394,21 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 		last = now
 	}
 
+	// PER CONNECTION AS WELL AS POOLED. eventGaps is every gap this
+	// fixture has ever left, which answers "did this machine pause";
+	// eventWidests is one number per connection, which answers the
+	// different question a probe asks — "did the fixture hold its pace
+	// on THIS run" — and a pooled maximum cannot answer it, because one
+	// starved connection would condemn every other run in the pass.
+	var widest time.Duration
+	for _, g := range gaps {
+		if g > widest {
+			widest = g
+		}
+	}
 	s.mu.Lock()
 	s.eventGaps = append(s.eventGaps, gaps...)
+	s.eventWidests = append(s.eventWidests, widest)
 	s.mu.Unlock()
 
 	if script.hold {
@@ -426,6 +442,18 @@ func absoluteURL(r *http.Request) string {
 // the epoch" are two different things and only an omitted key models the
 // first.
 func (s *deployScript) servePublish(w http.ResponseWriter, r *http.Request) {
+	// THIS RUNS WITH s.mu ALREADY HELD BY ServeHTTP, so the increment is
+	// synchronised and taking the lock here would deadlock — which it
+	// did, once, while this comment's first draft was being written.
+	// What was NOT synchronised was the READ: rows reached
+	// run.script.publishes straight off the struct from the test
+	// goroutine, and the hang-up branch below leaves this handler's
+	// goroutine alive after the client has given up, so a row asserting
+	// "the publish was sent exactly once" was reading a counter another
+	// goroutine could still be writing. Found by the race pass this
+	// round adds, on its first full run over this package, in a fixture
+	// that had been that way since the row was written. The reads now go
+	// through publishCount.
 	s.publishes++
 
 	if s.publishHangsUp {
@@ -654,6 +682,10 @@ type objectStore struct {
 	// upload while never letting the gap between two bytes reach one.
 	readChunk int
 	readPause time.Duration
+	// drainWidests is the widest interval between two drain steps within
+	// EACH paced request, one entry per request. See
+	// widestDrainPerRequest.
+	drainWidests []time.Duration
 
 	// pauseUntil is how many bytes are consumed at the paced rate before
 	// the rest is drained at full speed. The tail matters: once the
@@ -672,6 +704,24 @@ type objectStore struct {
 	// outlive its row.
 	release chan struct{}
 
+	// pin is what the kernel said when this store's listener asked for
+	// the SO_RCVBUF it was built with. It is the FAR HALF of the write
+	// side's pin: the gap a write-side row bounds is the time for the
+	// client's send buffer to free space, and that is governed by how
+	// fast this end drains and how much window it advertises at a time.
+	// Pinning only the client would measure this end's autotuning; see
+	// socketpin_test.go.
+	//
+	// THE SIZE IS NOT A FIELD HERE, and that is the round-2 defect
+	// removed rather than a tidying. It was one — written after the
+	// server had already started — so a connection could be accepted
+	// before the size existed, autotune, and be counted into the same
+	// record as the pinned ones. The size now travels in the listener
+	// wrapper, fixed before the wrapper is installed, so there is no
+	// moment at which the store is accepting and unpinned and nothing
+	// left for a mutex to protect.
+	pin *socketPin
+
 	srv *httptest.Server
 }
 
@@ -684,10 +734,35 @@ type storePut struct {
 	status        int
 }
 
-func newObjectStore(t *testing.T, journal *deployJournal) *objectStore {
+// newObjectStore builds the store double, with the receive buffer every
+// connection it accepts will be pinned to fixed HERE, before the
+// listener that will accept them is wrapped.
+//
+// THE PIN IS A PARAMETER RATHER THAN A FIELD, and the reason is a
+// measurement. Round 2 set it afterwards, on the started server: the
+// listener was already accepting, so a connection could arrive before
+// the size existed and autotune, and the run's record then covered two
+// connections under two different conditions. Under -race the write and
+// the accept-side read were reported as the data race they were, and
+// the run's own "two connections disagree" refusal reported the
+// consequence — 392384 on one and 131072 on the next. A parameter has no
+// such window: the size is known before anything can be accepted on the
+// listener it is installed in, which is what makes the mutex that used
+// to guard it unnecessary rather than merely absent.
+//
+// receivePin of zero pins nothing, which is what every row that is not
+// about a stall window wants: the pin narrows a socket deliberately, and
+// a row about an error message has no business running through one.
+func newObjectStore(t *testing.T, journal *deployJournal, receivePin int) *objectStore {
 	t.Helper()
-	store := &objectStore{journal: journal, release: make(chan struct{})}
-	srv := httptest.NewServer(store)
+	store := &objectStore{journal: journal, release: make(chan struct{}), pin: &socketPin{}}
+	// UNSTARTED, so the listener can be wrapped before anything is
+	// accepted on it. The only moment a receive buffer can be set before
+	// the client starts filling it is the accept, which is over long
+	// before a handler is called.
+	srv := httptest.NewUnstartedServer(store)
+	srv.Listener = &pinnedListener{Listener: srv.Listener, size: receivePin, pin: store.pin}
+	srv.Start()
 	store.srv = srv
 	// The release closes FIRST, so a wedged handler is let go before
 	// srv.Close waits for it. Cleanups run last-registered-first.
@@ -717,6 +792,17 @@ func (s *objectStore) sign(length int64) {
 	s.signedSet = true
 }
 
+// widestDrainPerRequest is one widest-interval-between-drain-steps per
+// paced request this store has served, in the order it served them. It
+// is the write side's answer to widestPerConnection, and a probe uses it
+// for the same thing: to tell a run that measured the client from a run
+// in which this fixture was the thing that stopped.
+func (s *objectStore) widestDrainPerRequest() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration(nil), s.drainWidests...)
+}
+
 func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The reading policy is snapshotted under the lock and the body is
 	// then read WITHOUT it: a wedged handler holds this goroutine for the
@@ -727,7 +813,25 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pauseUntil := s.pauseUntil
 	s.mu.Unlock()
 
-	var body []byte
+	// THE BODY IS COUNTED AND NOT KEPT. Nothing anywhere asks this
+	// fixture what the bytes WERE — only how many arrived — and the
+	// version that accumulated them appended up to a whole archive per
+	// request, reallocating and copying a growing slice while the paced
+	// loop was running, on the critical path of the very gap the
+	// write-side probe measures.
+	//
+	// THAT WAS A HYPOTHESIS ABOUT THE PROBE'S TAIL AND THE MEASUREMENT
+	// REFUTED IT, which is why it is written down here rather than
+	// claimed. On darwin, 2026-09-10, the worst gap over one hundred runs
+	// was 162.4 ms with the body counted against 221.3 ms with it kept —
+	// and the per-pass maxima on both sides of the change ran from about
+	// 105 ms to about 220 ms, so the two sets overlap almost completely
+	// and the difference is where each set's outlier happened to land.
+	// The allocator was not what sets this tail. The change stays because
+	// it removes a whole-archive allocation from every upload row in the
+	// suite and costs nothing; it is not the reason the number moved,
+	// because the number did not move.
+	var bodyLength int64
 	switch {
 	case stopAfter > 0:
 		_, _ = io.CopyN(io.Discard, r.Body, stopAfter)
@@ -736,9 +840,16 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case pause > 0 && chunk > 0:
 		buf := make([]byte, chunk)
 		var paced int64
+		// THE STORE'S OWN CYCLE, TIMED. The write-side gap this fixture
+		// governs is the time for the client's send buffer to free
+		// space, and space frees at exactly the rate this loop drains.
+		// So a loop that missed its own pace did not measure the client
+		// — the same distinction the read-side fixture records between
+		// flushes, on the side where it was missing.
+		var drainWidest time.Duration
+		last := time.Now()
 		for paced < pauseUntil {
 			n, err := io.ReadFull(r.Body, buf)
-			body = append(body, buf[:n]...)
 			paced += int64(n)
 			if err != nil {
 				break
@@ -748,11 +859,19 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-release:
 				return
 			}
+			now := time.Now()
+			if gap := now.Sub(last); gap > drainWidest {
+				drainWidest = gap
+			}
+			last = now
 		}
-		rest, _ := io.ReadAll(r.Body)
-		body = append(body, rest...)
+		rest, _ := io.Copy(io.Discard, r.Body)
+		bodyLength = paced + rest
+		s.mu.Lock()
+		s.drainWidests = append(s.drainWidests, drainWidest)
+		s.mu.Unlock()
 	default:
-		body, _ = io.ReadAll(r.Body)
+		bodyLength, _ = io.Copy(io.Discard, r.Body)
 	}
 
 	s.mu.Lock()
@@ -773,7 +892,7 @@ func (s *objectStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.puts = append(s.puts, storePut{
 		method:        r.Method,
 		contentLength: r.ContentLength,
-		bodyLength:    int64(len(body)),
+		bodyLength:    bodyLength,
 		authorization: r.Header.Get("Authorization"),
 		status:        status,
 	})
@@ -865,6 +984,14 @@ func doneFrame(status wire.DeployStatus) string {
 }
 
 // eventConnections is how many times the stream was opened.
+// publishCount is how many publishes this fixture has answered, read
+// under the lock the handler writes it under.
+func (s *deployScript) publishCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.publishes
+}
+
 func (s *deployScript) eventConnections() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -884,6 +1011,16 @@ func (s *deployScript) widestGap() time.Duration {
 		}
 	}
 	return widest
+}
+
+// widestPerConnection is one widest-gap-between-flushes per connection
+// this fixture has served, in the order it served them. A probe pairs it
+// with its own per-run client gaps to tell a run that measured the
+// client from a run that measured the machine.
+func (s *deployScript) widestPerConnection() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration(nil), s.eventWidests...)
 }
 
 func (s *deployScript) sent() int {
@@ -934,8 +1071,22 @@ type deployRun struct {
 
 // newDeployRun wires a run against a project directory, with the door
 // open, plenty of room and no stored login — so a row states only the
-// thing it is about.
+// thing it is about. Its object store pins nothing, which is what every
+// row that is not about a stall window wants.
 func newDeployRun(t *testing.T, root string) *deployRun {
+	t.Helper()
+	return newDeployRunPinnedAt(t, root, 0)
+}
+
+// newDeployRunPinnedAt is the same run with the store's receive buffer
+// pinned to receivePin from the instant its listener exists.
+//
+// IT IS A SECOND CONSTRUCTOR RATHER THAN A SETTER, which is the whole of
+// this whole change in one line: a setter can only run after the listener is already
+// accepting, and a connection accepted in that gap is a connection under
+// a condition nobody chose. Two constructors is the cost of there being
+// no such gap.
+func newDeployRunPinnedAt(t *testing.T, root string, receivePin int) *deployRun {
 	t.Helper()
 
 	// A CONFIG PATH OF THIS TEST'S OWN, and CURIOUS_API_URL emptied: a
@@ -944,7 +1095,7 @@ func newDeployRun(t *testing.T, root string) *deployRun {
 	t.Setenv("CURIOUS_API_URL", "")
 
 	journal := &deployJournal{}
-	store := newObjectStore(t, journal)
+	store := newObjectStore(t, journal, receivePin)
 	script := &deployScript{
 		journal:  journal,
 		capacity: wire.CapacityResponse{Open: true, AccountsLeft: 200},

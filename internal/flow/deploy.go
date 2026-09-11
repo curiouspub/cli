@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -131,6 +132,50 @@ type DeployDeps struct {
 	// row drives the race by advancing the clock and this only keeps it
 	// from spending real seconds doing so.
 	PublishRetryInterval time.Duration
+
+	// UploadTransport is the transport the archive's body travels over.
+	// Optional; without one the upload takes the API client's, which is
+	// what production gets and what uploadTransport below returns.
+	//
+	// IT IS A SEAM FOR A REASON THE OTHERS ARE NOT, and the reason is
+	// worth stating because nothing about the shipped behaviour needs
+	// it. UploadStallTimeout exists so a row can see a thirty-second
+	// window in milliseconds; this one exists so a row can see the same
+	// window over a socket whose BUFFERS ARE KNOWN. The quantity the
+	// upload's stall window is a margin over — the time for the kernel's
+	// send buffer to free space — is not a property of this program at
+	// all: both kernels grow a connection's buffers as it carries
+	// traffic, and a margin over an autotuned quantity is a margin over
+	// a number nobody chose. Measured rather than assumed: the same
+	// probe over a warm connection reported 594 ms where a fresh one
+	// reported 434 ms. A test cannot pin a socket it never sees, and
+	// before this field the only transport the upload could use was one
+	// built out of reach inside this function.
+	//
+	// A SEAM THAT CAN SILENTLY CHANGE WHAT SHIPS IS WORSE THAN NO SEAM,
+	// so what production gets when this is empty is asserted by a row of
+	// its own rather than left to reading — see uploadTransport.
+	UploadTransport *http.Transport
+}
+
+// uploadTransport is the transport the upload's body travels over: the
+// caller's when one was supplied, and otherwise the API client's own.
+//
+// THE DEFAULT IS THE POINT OF THIS FUNCTION EXISTING. Written inline at
+// the call site, "the seam or the client's" is one `if` that a later
+// change can quietly rewrite into "a fresh transport" — and a fresh
+// &http.Transport{} is not the client's: it has no Proxy, so it ignores
+// HTTPS_PROXY, HTTP_PROXY and NO_PROXY altogether, and it does so
+// quietly, because a direct connection still works everywhere except the
+// one desk behind a corporate proxy. Pulled out here it has a name a row
+// can call, and the row beside it asserts that with no seam supplied the
+// answer is the API client's transport ITSELF rather than one that
+// resembles it.
+func uploadTransport(deps DeployDeps, client *api.Client) *http.Transport {
+	if deps.UploadTransport != nil {
+		return deps.UploadTransport
+	}
+	return client.Transport()
 }
 
 // Handoff is what a completed run leaves in the caller's hands: the
@@ -429,7 +474,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		ArchivePath:  prepared.Archive.Path,
 		Bytes:        prepared.Archive.Size,
 		ExpiresAt:    resp.ExpiresAt,
-		Transport:    authed.Transport(),
+		Transport:    uploadTransport(deps, authed),
 		Now:          now,
 		StallTimeout: deps.UploadStallTimeout,
 	}); err != nil {
