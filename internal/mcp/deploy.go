@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -173,6 +174,21 @@ func deploySiteTool() Tool {
 // reader does not have is worse than one that names none.
 func deployRefusal(err error, prompt *agentPrompter) Result {
 	text := refusalText(err)
+	// THE ID THE REFUSAL WAS THROWING AWAY. A deploy refused after the
+	// server created its record has one, and it is the only handle the
+	// one follow-up call takes: there is no way to list deploys, so an
+	// agent told that a deploy failed and not WHICH deploy cannot ask
+	// what happened. The refusal ended the conversation exactly where
+	// the next question begins.
+	//
+	// It is rendered here and not in the copy the terminal prints,
+	// because a person does not type a base36 id at anything — they fix
+	// something and run the command again.
+	var failure *ui.Failure
+	if errors.As(err, &failure) && failure.DeployID != "" {
+		text += "\n\nThe deploy id is " + ui.Sanitize(failure.DeployID) +
+			". Call " + toolDeployStatus + " with it to read what the build said."
+	}
 	if len(prompt.build) > 0 {
 		text += "\n\nThe end of the build log:\n\n" +
 			strings.Join(safeLines(prompt.build), "\n")

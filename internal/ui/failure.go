@@ -50,6 +50,27 @@ type Failure struct {
 	// call site already put it: the server says what happened and this
 	// program says what it means.
 	Detail string
+
+	// DeployID is the server's record for the deploy this failure
+	// happened during, when there was one, and it is a FIELD rather than
+	// a paragraph on purpose.
+	//
+	// WHY IT IS NOT IN THE COPY. Paragraphs() is what a terminal prints,
+	// and a person reading a failed deploy has no use for a base36 id:
+	// they are going to fix something and run the command again. A
+	// machine does. An agent that was told a deploy failed and not which
+	// deploy cannot ask what happened — the one call that would tell it
+	// takes an id — so the refusal ends the conversation exactly where
+	// the follow-up question begins.
+	//
+	// It is therefore carried, never rendered here, and the surface that
+	// wants it reads the field. That keeps the terminal's copy
+	// byte-for-byte what it was.
+	//
+	// EMPTY IS HONEST. A run refused before the server created a record
+	// has no id to carry, and every failure before that step leaves this
+	// zero rather than inventing one.
+	DeployID string
 }
 
 // Error makes a Failure travel as an error, so a check deep in a flow

@@ -586,7 +586,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	// renders like any other.
 	startResp, err := authed.DeployStart(ctx, resp.DeployID)
 	if err != nil {
-		return nil, startFailure(err)
+		return nil, carryingDeployID(startFailure(err), resp.DeployID)
 	}
 	deps.Prompt.Step("%s%s.", startNarration, string(startResp.Status))
 
@@ -606,7 +606,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		Progress:      deps.Progress,
 	})
 	if err != nil {
-		return nil, err
+		return nil, carryingDeployID(err, resp.DeployID)
 	}
 	if status == wire.StatusFailed {
 		// THE ONLY VALUE THIS CLIENT ACTS ON, and it acts on it by
@@ -614,7 +614,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		// build predates — the stream is a narrator rather than an
 		// authority, and what the output validator makes of the build is
 		// a question for the next call rather than for this one.
-		return nil, buildFailedFailure()
+		return nil, carryingDeployID(buildFailedFailure(), resp.DeployID)
 	}
 
 	// 12. THE PUBLISH, AND THE LAST LINE OF THE COMMAND.
@@ -633,7 +633,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		RetryInterval: deps.PublishRetryInterval,
 	})
 	if err != nil {
-		return nil, err
+		return nil, carryingDeployID(err, resp.DeployID)
 	}
 	renderPublished(deps.Prompt, published, now())
 
@@ -853,4 +853,35 @@ func tempDirFailure(err error) *ui.Failure {
 		err.Error(),
 		"Check that the temporary directory exists, is writable and has space,\n"+
 			"then run `curious deploy` again. "+uploadedNothing)
+}
+
+// carryingDeployID attaches the server's record for this deploy to a
+// failure raised after that record existed.
+//
+// # It is the answer to a refusal that ends where the question begins
+//
+// Every step from the start onwards can fail with the deploy already
+// created, and until this existed each of those failures threw the id
+// away. At a terminal that costs nothing — the reader fixes something
+// and runs the command again, and nobody types a base36 id at anything.
+// To an agent it is the whole difference between "your deploy failed"
+// and a fact it can act on, because the one call that says what happened
+// takes an id and there is no way to list deploys.
+//
+// IT SETS THE FIELD AND NEVER THE COPY. What a terminal prints is
+// unchanged, byte for byte: the id is a field on the failure and
+// Paragraphs() does not read it.
+//
+// AN ID ALREADY THERE IS LEFT ALONE. A failure raised deeper in the
+// sequence may know a more specific record than the caller does, and the
+// inner one is the one that was measured.
+func carryingDeployID(err error, id string) error {
+	if id == "" {
+		return err
+	}
+	var failure *ui.Failure
+	if errors.As(err, &failure) && failure.DeployID == "" {
+		failure.DeployID = id
+	}
+	return err
 }

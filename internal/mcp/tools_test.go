@@ -56,6 +56,12 @@ type deployScript struct {
 	// on a message this file wrote.
 	refuseAuth *scriptedRefusal
 
+	// refusePublish answers the publish with one error envelope, so a row
+	// can drive a refusal that happens AFTER the server created the
+	// deploy record. Every earlier refusal has no id to carry, so this is
+	// the only place the carrying is observable.
+	refusePublish *scriptedRefusal
+
 	// capacityShut answers the capacity check with a closed door, which
 	// is the only condition under which the gate's verdict is visible
 	// from outside: open, a run that checks and a run that does not look
@@ -147,6 +153,14 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/publish"):
 		s.note("publish")
+		if s.refusePublish != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(s.refusePublish.status)
+			_ = json.NewEncoder(w).Encode(wire.ErrorResponse{Error: wire.Error{
+				Code: s.refusePublish.code, Message: s.refusePublish.message,
+			}})
+			return
+		}
 		writeJSON(w, wire.DeployPublishResponse{
 			Subdomain: s.subdomain,
 			ExpiresAt: s.expiresAt,
@@ -898,6 +912,75 @@ func TestDeployStatusNeverReportsAStatusTheStreamDidNotSay(t *testing.T) {
 					"contract may grow", answer.Status, tc.status)
 			}
 		})
+	}
+}
+
+// TestARefusedDeployCarriesTheIdItsFollowUpCallNeeds.
+//
+// # A refusal that ends where the next question begins
+//
+// Every step from the start onwards can fail with the deploy record
+// already created, and until this row existed each of those failures
+// threw the id away. At a terminal that costs nothing: the reader fixes
+// something and runs the command again, and nobody types a base36 id at
+// anything.
+//
+// An agent has no such move. deploy_status is the one call that says
+// what the build said, it takes an id, and there is NO WAY TO LIST
+// DEPLOYS — so "your deploy failed" with no id is a dead end by
+// construction. The fact existed on this side of the wire the whole
+// time and was dropped on the way out.
+//
+// THE PUBLISH IS THE STEP THIS ROW REFUSES, and it is chosen rather than
+// convenient: it is the last step, so every earlier one succeeded and
+// the record certainly exists. A refusal before the create has no id to
+// carry, which is a different case and honestly empty.
+//
+// REQUIRED MUTATION, run 2026-09-12: drop the carrying at the publish's
+// return in the sequence. Reds here alone — the copy is unchanged
+// either way, because the id is a FIELD on the failure and never a
+// paragraph, which is what keeps the terminal byte-for-byte what it was.
+func TestARefusedDeployCarriesTheIdItsFollowUpCallNeeds(t *testing.T) {
+	script := &deployScript{
+		uploadPath: "/object-store/put",
+		deployID:   "dpl-refused-at-publish",
+		subdomain:  "quick-koala-4f2a",
+		expiresAt:  fixedExpiry,
+		frames: []string{
+			phaseAt(wire.PhaseInstalling),
+			finished(wire.StatusBuilt),
+		},
+		refusePublish: &scriptedRefusal{
+			status:  http.StatusInternalServerError,
+			code:    wire.CodeInternal,
+			message: "the publisher fell over",
+		},
+	}
+	run := newToolsRun(t, script)
+
+	result := run.call(toolDeploySite,
+		fmt.Sprintf(`{"dir":%q}`, project(t, "localhost-hits")))
+	if !result.IsError {
+		t.Fatal("a refused publish answered as a success")
+	}
+	// THE RUN MUST HAVE REACHED THE PUBLISH, or this row is asserting
+	// about a refusal raised before the deploy record existed — which
+	// has no id to carry and would make the assertion below a claim
+	// about the wrong failure entirely.
+	if got := strings.Join(script.ordered(), ","); got != "create,upload,start,stream,publish" {
+		t.Fatalf("the run went %q, and this row is about a refusal AFTER the "+
+			"server created the deploy record", got)
+	}
+	said := text(t, result)
+
+	if !strings.Contains(said, script.deployID) {
+		t.Errorf("the refusal does not carry the deploy id, so the one call that "+
+			"would say what happened cannot be pointed at anything:\n%s", said)
+	}
+	// AND IT NAMES THE CALL, because an id with no verb beside it is a
+	// string an agent has to guess the use of.
+	if !strings.Contains(said, toolDeployStatus) {
+		t.Errorf("the refusal carries an id and never says what to do with it:\n%s", said)
 	}
 }
 
