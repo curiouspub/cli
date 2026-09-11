@@ -984,6 +984,174 @@ func TestARefusedDeployCarriesTheIdItsFollowUpCallNeeds(t *testing.T) {
 	}
 }
 
+// TestNoResultTellsAnAgentToRunATerminalCommand.
+//
+// # The most useful paragraph was the one this reader had to ignore
+//
+// Every next-step line in this codebase was written for somebody at a
+// prompt: "run `curious deploy` again", "try again a little later",
+// "press Ctrl-C". A model reads those verbatim and can act on none of
+// them — it has no terminal and does not run commands, it calls tools.
+// Worse than useless: the likeliest thing it does with the sentence is
+// repeat it to a person as advice this program gave, which turns a
+// refusal an agent could have retried into a hand-off to a human.
+//
+// So the action travels as a VALUE. The terminal keeps every word it had
+// — that is asserted next door, in the sequence package's transcripts —
+// and this surface renders the enum.
+//
+// THIS ROW SWEEPS RESULTS RATHER THAN CHECKING ONE, because the leak is
+// per-path and a row that drove one refusal would be green while five
+// others carried the sentence. Every path a fixture in this file can
+// reach is driven, and the successful result is swept too: findings
+// carry a Next of their own, written by the same hand for the same
+// terminal.
+//
+// REQUIRED MUTATION, run 2026-09-12: collapse the enum back to prose —
+// render failure.Escaped() instead of EscapedWithoutAction plus the
+// value. Reds here, naming the path and the sentence.
+func TestNoResultTellsAnAgentToRunATerminalCommand(t *testing.T) {
+	// THE PHRASES ARE THE INSTRUCTION FORMS, and the list is the row's
+	// whole accuracy.
+	//
+	// A FIRST SHAPE MATCHED "curious deploy" AND WAS WRONG. It reds on
+	// "curious deploys Astro sites, and every Astro project has a
+	// package.json at its root" — which is prose about the product, in a
+	// Why, telling an agent something true and useful. A substring of a
+	// command is not a command: the same trap as a limits check matching
+	// 3000 inside 30000000, arriving in copy instead of in digits.
+	//
+	// What makes a line an instruction to a terminal is how this
+	// codebase spells one: the command in backticks, or a phrase naming
+	// the terminal itself. Both are listed, because the second has no
+	// backticks — "Run curious directly in a terminal" — and a row
+	// matching only the first would be green about it.
+	terminalisms := []string{
+		"`curious ",
+		"in a terminal",
+		"Run the command again",
+		"Ctrl-C",
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T) []Result
+	}{
+		{
+			name: "a deploy refused at the publish",
+			run: func(t *testing.T) []Result {
+				run := newToolsRun(t, &deployScript{
+					uploadPath: "/object-store/put",
+					deployID:   "dpl-late-refusal",
+					subdomain:  "quick-koala-4f2a",
+					expiresAt:  fixedExpiry,
+					frames: []string{
+						phaseAt(wire.PhaseInstalling),
+						finished(wire.StatusBuilt),
+					},
+					refusePublish: &scriptedRefusal{
+						status:  http.StatusInternalServerError,
+						code:    wire.CodeInternal,
+						message: "the publisher fell over",
+					},
+				})
+				return []Result{run.call(toolDeploySite,
+					fmt.Sprintf(`{"dir":%q}`, project(t, "localhost-hits")))}
+			},
+		},
+		{
+			name: "a build the server reported as failed",
+			run: func(t *testing.T) []Result {
+				run := newToolsRun(t, &deployScript{
+					uploadPath: "/object-store/put",
+					deployID:   "dpl-build-failed",
+					frames: []string{
+						phaseAt(wire.PhaseBuilding),
+						logLine("astro build exploded"),
+						finished(wire.StatusFailed),
+					},
+				})
+				return []Result{run.call(toolDeploySite,
+					fmt.Sprintf(`{"dir":%q}`, project(t, "localhost-hits")))}
+			},
+		},
+		{
+			name: "a project the pre-flight refuses",
+			run: func(t *testing.T) []Result {
+				run := newToolsRun(t, &deployScript{uploadPath: "/object-store/put"})
+				return []Result{run.call(toolDeploySite,
+					fmt.Sprintf(`{"dir":%q}`, t.TempDir()))}
+			},
+		},
+		{
+			name: "a closed door at the capacity gate",
+			run: func(t *testing.T) []Result {
+				run := newToolsRun(t, &deployScript{
+					uploadPath:   "/object-store/put",
+					capacityShut: true,
+				})
+				return []Result{run.call(toolLoginStart,
+					`{"email":"someone@example.com"}`)}
+			},
+		},
+		{
+			name: "the server refusing both login calls",
+			run: func(t *testing.T) []Result {
+				run := newToolsRun(t, refusingScript(http.StatusTooManyRequests,
+					wire.CodeRateLimited, "slow down"))
+				return []Result{
+					run.call(toolLoginStart, `{"email":"someone@example.com"}`),
+					run.call(toolLoginVerify,
+						`{"email":"someone@example.com","code":"123456"}`),
+				}
+			},
+		},
+		{
+			name: "a deploy that succeeded, findings and all",
+			run: func(t *testing.T) []Result {
+				run := newToolsRun(t, &deployScript{
+					uploadPath: "/object-store/put",
+					deployID:   "dpl-warned",
+					subdomain:  "quick-koala-4f2a",
+					expiresAt:  fixedExpiry,
+					frames: []string{
+						phaseAt(wire.PhaseInstalling),
+						finished(wire.StatusBuilt),
+					},
+				})
+				result := run.call(toolDeploySite,
+					fmt.Sprintf(`{"dir":%q}`, project(t, "localhost-hits")))
+				// THE POSITIVE CONTROL for this case. A successful
+				// result with no findings in it sweeps an empty array
+				// and reports clean about a field that was not there —
+				// which is the shape of every guard that passes by
+				// measuring nothing.
+				var answer deploySiteResult
+				decodeInto(t, result, &answer)
+				if len(answer.Findings) == 0 {
+					t.Fatal("this deploy produced no findings, so sweeping its " +
+						"result says nothing about the Next a finding carries")
+				}
+				return []Result{result}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for i, result := range tc.run(t) {
+				said := text(t, result)
+				for _, phrase := range terminalisms {
+					if strings.Contains(said, phrase) {
+						t.Errorf("result %d tells its reader to act at a terminal — it "+
+							"spells %q. This surface has no terminal and its caller "+
+							"does not run commands; the action travels as a value "+
+							"here:\n%s", i, phrase, said)
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestAToolThatNeedsALoginSaysWhichCallsMakeOne.
 //
 // The FACT — this machine holds no usable credential — belongs to the

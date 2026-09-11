@@ -205,7 +205,7 @@ func TestASecretSurvivesEveryMethodAndEveryVerbThisPackageCanBeGiven(t *testing.
 		"Step":   {nil, func(u *UI, f string) { u.Step("token "+f, secret) }},
 		"Result": {nil, func(u *UI, f string) { u.Result("token "+f, secret) }},
 		"Fail": {nil, func(u *UI, f string) {
-			u.Fail(NewFailure("What.", fmt.Sprintf("token "+f, secret), "Next."))
+			u.Fail(NewFailure("What.", fmt.Sprintf("token "+f, secret), NextGiveUp, "Next."))
 		}},
 		"Internal": {map[string]string{debugEnvVar: "1"}, func(u *UI, f string) {
 			u.Internal(fmt.Errorf("token "+f+" was refused", secret))

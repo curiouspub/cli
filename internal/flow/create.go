@@ -187,7 +187,7 @@ func createUnansweredFailure(err error) error {
 		"curious didn't hear back after asking for somewhere to upload.",
 		deployMayExist+" — curious cannot tell whether the\n"+
 			"request arrived. Nothing has been uploaded to it either way, and an\n"+
-			"unused deploy is discarded by the server on its own.",
+			"unused deploy is discarded by the server on its own.", ui.NextWait,
 		"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 }
 
@@ -202,7 +202,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		return ui.NewFailure(
 			authenticationFailed,
 			"curious logged in again and the server still would not "+
-				"accept the\nrequest, so it stopped rather than keep asking.",
+				"accept the\nrequest, so it stopped rather than keep asking.", ui.NextFreshDeploy,
 			"Check that this machine's clock is right, then run `curious deploy`\n"+
 				"again. If it keeps happening, please get in touch. "+uploadedNothing).Quoting(apiErr.Message)
 
@@ -211,7 +211,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// switch has no reset anybody can honestly name.
 		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not taking deploys right now.",
-			apiErr.Message,
+			apiErr.Message, ui.NextWait,
 			"Try again a little later. "+uploadedNothing))
 
 	case wire.CodeCapacityClosed:
@@ -227,7 +227,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// server named is USED rather than dropped.
 		return ui.Quoted(
 			"Too many requests from here.",
-			apiErr.Message,
+			apiErr.Message, ui.NextGiveUp,
 			retryAdvice(apiErr.RetryAfter, now))
 
 	case wire.CodeBadRequest:
@@ -237,7 +237,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		return ui.NewFailure(
 			"The server wouldn't accept that archive.",
 			"Sending the same thing again would not go any better, "+
-				"so the run\nstopped here.",
+				"so the run\nstopped here.", ui.NextGiveUp,
 			"Check that you are running a current version — `curious version` says\n"+
 				"which one — and please report this if it keeps happening. "+
 				uploadedNothing).Quoting(apiErr.Message)
@@ -248,7 +248,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.Quoted(
 		"curious couldn't start the deploy.",
-		apiErr.Message,
+		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server. "+uploadedNothing)
 }

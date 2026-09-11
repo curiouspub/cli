@@ -643,7 +643,7 @@ func startFailure(err error) error {
 			buildMayBeRunning+" — curious cannot tell whether the\n"+
 				"request arrived, and it does not ask twice: everything you would be\n"+
 				"waiting for arrives on the build log rather than in a second answer\n"+
-				"to this question.",
+				"to this question.", ui.NextWait,
 			"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 	}
 
@@ -652,7 +652,7 @@ func startFailure(err error) error {
 		// the archive is already where it was going.
 		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not building right now.",
-			apiErr.Message,
+			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
 	}
 
@@ -662,7 +662,7 @@ func startFailure(err error) error {
 	// build may be older than the code it is being shown.
 	return ui.Quoted(
 		"The server wouldn't start the build.",
-		apiErr.Message,
+		apiErr.Message, ui.NextFreshDeploy,
 		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.")
 }
@@ -674,12 +674,12 @@ func streamRefusedFailure(apiErr *api.APIError) error {
 	if apiErr.Code == wire.CodeMaintenance {
 		return ui.ServerClosed(ui.Quoted(
 			"curious.pub stopped sending the build log.",
-			apiErr.Message,
+			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
 	}
 	return ui.Quoted(
 		"The server wouldn't send the build log.",
-		apiErr.Message,
+		apiErr.Message, ui.NextFreshDeploy,
 		"Run `curious deploy` again. If it keeps happening, please report it.")
 }
 
@@ -696,7 +696,7 @@ func streamLostFailure(deployID string) error {
 		fmt.Sprintf("The connection to the build log dropped, and %d attempts to "+
 			"re-establish\nit did not last either. THE BUILD ITSELF IS NOT AFFECTED "+
 			"— it is running on\nthe server, and this was only the window onto it.\n\n"+
-			"The deploy is %s.", streamReconnectAttempts, deployID),
+			"The deploy is %s.", streamReconnectAttempts, deployID), ui.NextWait,
 		"Run `curious deploy` again when the connection is steadier.")
 }
 
@@ -708,7 +708,7 @@ func buildFailedFailure() error {
 		"The build failed.",
 		"The server ran the build and it did not finish. What went wrong is in\n"+
 			"the log above rather than here, and it is a problem in the project\n"+
-			"rather than in curious or the service.",
+			"rather than in curious or the service.", ui.NextFreshDeploy,
 		"Fix what the log reports, then run `curious deploy` again.")
 }
 

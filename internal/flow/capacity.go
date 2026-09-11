@@ -149,7 +149,7 @@ func capacityCheckFailure(err error) error {
 			"curious couldn't ask whether there is room today.",
 			"That check runs before anything is uploaded, so the "+
 				"run stopped here rather than walking you through a login and a "+
-				"pack that might have nowhere to land.",
+				"pack that might have nowhere to land.", ui.NextFreshDeploy,
 			"Check your connection and run `curious deploy` again. "+uploadedNothing).Quoting(err.Error())
 	}
 
@@ -158,12 +158,12 @@ func capacityCheckFailure(err error) error {
 		// switch has no reset anybody can honestly name.
 		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not taking deploys right now.",
-			apiErr.Message,
+			apiErr.Message, ui.NextWait,
 			"Try again a little later. "+uploadedNothing))
 	}
 
 	return ui.Quoted(
 		"curious couldn't ask whether there is room today.",
-		apiErr.Message,
+		apiErr.Message, ui.NextWait,
 		"Try again in a moment. "+uploadedNothing)
 }

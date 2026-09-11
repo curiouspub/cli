@@ -215,7 +215,7 @@ func ownCopy(f check.Finding) *ui.Failure {
 	if next == "" {
 		next = standingAction
 	}
-	return ui.NewFailure(what, why, next)
+	return ui.NewFailure(what, why, ui.NextFreshDeploy, next)
 }
 
 // synthesised builds one failure out of several summaries.
@@ -239,7 +239,7 @@ func synthesised(hardStops []check.Finding) *ui.Failure {
 	return ui.NewFailure(
 		"curious can't deploy this project yet.",
 		strings.TrimRight(b.String(), "\n"),
-		standingAction,
+		ui.NextFreshDeploy, standingAction,
 	)
 }
 

@@ -683,14 +683,14 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		return ui.NewFailure(
 			"curious sent something this server wouldn't accept.",
 			"Sending it again would not go any better, so the run "+
-				"stopped here rather than spending another of your attempts.",
+				"stopped here rather than spending another of your attempts.", ui.NextGiveUp,
 			"Check that you are running a current version — `curious version` says\n"+
 				"which one — and please report this if it keeps happening.").Quoting(apiErr.Message)
 
 	case wire.CodeRateLimited:
 		return ui.Quoted(
 			"Too many requests from here.",
-			apiErr.Message,
+			apiErr.Message, ui.NextGiveUp,
 			retryAdvice(apiErr.RetryAfter, now))
 
 	case wire.CodeCapacityClosed:
@@ -723,13 +723,13 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		// the contract does not promise one for it.
 		return ui.ServerClosed(ui.Quoted(
 			"curious.pub is not taking logins right now.",
-			apiErr.Message,
+			apiErr.Message, ui.NextWait,
 			"Try again a little later. Nothing has been uploaded."))
 
 	case wire.CodeForbidden:
 		return ui.Quoted(
 			"That login was refused.",
-			apiErr.Message,
+			apiErr.Message, ui.NextGiveUp,
 			"If you think this is wrong, please get in touch — there is nothing\n"+
 				"to retry here.")
 
@@ -741,7 +741,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 			"That server does not answer the login endpoint.",
 			fmt.Sprintf("curious called %s and the route was not there. That usually "+
 				"means\nthe address is wrong rather than that the server is broken.",
-				deps.Endpoint),
+				deps.Endpoint), ui.NextGiveUp,
 			"Check CURIOUS_API_URL, or unset it to use the default.")
 	}
 
@@ -758,7 +758,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 func unknownCodeFailure(apiErr *api.APIError) error {
 	return ui.Quoted(
 		"curious couldn't finish logging you in.",
-		apiErr.Message,
+		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.")
 }
@@ -804,7 +804,7 @@ func retryAdvice(retryAfter time.Duration, now time.Time) string {
 func writeFailure(err error) error {
 	return ui.Quoted(
 		"Logged in, but the login could not be saved.",
-		err.Error(),
+		err.Error(), ui.NextFreshDeploy,
 		"Check that the folder above exists, is writable and has space, then\n"+
 			"run the command again. It is safe to log in again — it costs you\n"+
 			"nothing and replaces the token that could not be stored.")

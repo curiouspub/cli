@@ -168,7 +168,25 @@ func refusalText(err error) string {
 		// newlines and a sentence would arrive in a model's context as
 		// something curious said. Only the package that owns the parts
 		// knows which one is the quotation.
-		return strings.Join(failure.Escaped(), "\n\n")
+		// THE ACTION AS A VALUE, NEVER AS THIS PROGRAM'S SENTENCE ABOUT
+		// A TERMINAL. Every next-step line in this codebase was written
+		// for somebody at a prompt — "run `curious deploy` again", "try
+		// again a little later" — and a model reads those verbatim and
+		// can act on none of them: it has no terminal and does not run
+		// commands, it calls tools. So the most useful paragraph in a
+		// refusal was the one paragraph its second reader had to ignore,
+		// and worse, the one most likely to be repeated to a user as
+		// advice this program gave.
+		//
+		// The action is the same for both readers; only the wording
+		// differs, and the wording belongs to the surface doing the
+		// rendering. The terminal keeps every word it had. This one
+		// takes the value and says nothing a caller cannot act on.
+		parts := failure.EscapedWithoutAction()
+		if failure.Next != "" && failure.Next != ui.NextNone {
+			parts = append(parts, "What to do next: "+string(failure.Next))
+		}
+		return strings.Join(parts, "\n\n")
 	}
 
 	switch {
