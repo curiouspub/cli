@@ -25,14 +25,12 @@ package guard
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,57 +93,29 @@ func moduleRoot(t *testing.T) string {
 // below. Scoping it to ".go" left a citation in a markdown document, a
 // workflow YAML, a Makefile or a shell script shipping past it, and
 // every one of those is as world-readable as a source file.
+//
+// IT NO LONGER WALKS, and the skip list it used to carry is gone with
+// the walk. This helper is now a FILTER over repoFiles: git decides
+// which files are the repository's, and the only thing left here is the
+// question this helper actually asks, which is "is it Go, and do we want
+// the tests". The .claude skip it used to need is unnecessary because
+// .gitignore already covers the lanes, and having both was two homes for
+// one fact that had already begun to drift. See enumerate_test.go.
 func goFiles(t *testing.T, root string, includeTests bool) []string {
 	t.Helper()
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor":
-				return filepath.SkipDir
-			case ".claude":
-				// WORKTREE LANES LIVE HERE, and a lane is a second
-				// checkout of this repository inside it. Walking one
-				// makes every guard that uses this list count another
-				// branch's files as though they were ours: the URL
-				// ceiling saw four constants where the tree has two,
-				// and would have red for anybody with a lane open.
-				//
-				// .gitignore cannot fix it, and that is the part worth
-				// knowing. This walk never consults git — the citation
-				// guard one file over enumerates through
-				// `git ls-files --cached --others --exclude-standard`
-				// and therefore honours ignores, while this one honours
-				// nothing but the two names above. TWO ANSWERS TO
-				// "which files are ours", in one package, disagreeing
-				// exactly when a lane exists.
-				//
-				// This skip is the narrow fix. The real one is a single
-				// enumeration both use, which is a change with its own
-				// reasons and its own task.
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	for _, path := range repoFiles(t, root, "") {
 		if !strings.HasSuffix(path, ".go") {
-			return nil
+			continue
 		}
 		if !includeTests && strings.HasSuffix(path, "_test.go") {
-			return nil
+			continue
 		}
 		files = append(files, path)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking %s: %v", root, err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no .go files found under the module root — this guard would silently pass")
+		t.Fatalf("no Go source under %s, so this guard would silently pass", root)
 	}
-	sort.Strings(files)
 	return files
 }
 
@@ -213,54 +183,15 @@ func goFiles(t *testing.T, root string, includeTests bool) []string {
 // where the answer that counts is produced.
 func publishedTextFiles(t *testing.T, root string) []string {
 	t.Helper()
-
-	// -z, so a path containing a newline cannot split into two entries.
-	// --cached is the tracked set; --others adds untracked files and
-	// --exclude-standard subtracts everything the ignore rules cover.
-	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git ls-files in %s: %v\n"+
-			"This guard cannot establish what the repository publishes, so it fails "+
-			"rather than report a pass over a set it never determined.", root, err)
-	}
-
 	var files []string
-	seen := make(map[string]bool)
-	for _, name := range strings.Split(string(out), "\x00") {
-		// An unmerged path is listed once per stage, so dedupe rather
-		// than scan the same file three times mid-conflict.
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		if name == "vendor" || strings.HasPrefix(name, "vendor/") {
-			continue
-		}
-
-		path := filepath.Join(root, filepath.FromSlash(name))
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			if errors.Is(statErr, fs.ErrNotExist) {
-				// Tracked in the index, deleted in the working tree.
-				// There is no content to scan, and that is not a
-				// violation.
-				continue
-			}
-			t.Fatalf("stat %s: %v", path, statErr)
-		}
-		if !info.Mode().IsRegular() {
-			// A symlink or a submodule directory: nothing to read here,
-			// and following either would scan content this repository
-			// does not author.
-			continue
-		}
-
+	for _, path := range repoFiles(t, root, "") {
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", path, readErr)
 		}
+		// A NUL in the first 8 KiB means binary, and a binary file has
+		// no prose to leak. The probe is bounded so a large asset costs
+		// a page rather than its whole length.
 		probe := data
 		if len(probe) > 8192 {
 			probe = probe[:8192]
@@ -270,11 +201,9 @@ func publishedTextFiles(t *testing.T, root string) []string {
 		}
 		files = append(files, path)
 	}
-
 	if len(files) == 0 {
 		t.Fatal("git listed no publishable text file under the module root — this guard would silently pass")
 	}
-	sort.Strings(files)
 	return files
 }
 
@@ -1594,29 +1523,27 @@ func TestNoUnexportedSecretFields(t *testing.T) {
 }
 
 // packageDirs returns every directory under root holding non-test Go
-// source. testdata trees are skipped: Go itself ignores them, and a
-// fixture is not shipped code.
+// source, from the one enumeration in enumerate_test.go rather than from
+// a walk of its own. The testdata skip's reason is stated at the check:
+// it is the only thing this helper subtracts from what git reported.
 func packageDirs(t *testing.T, root string) []string {
 	t.Helper()
 	seen := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, path := range repoFiles(t, root, "") {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "bin", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
+		// TESTDATA IS THE ONE SEMANTIC EXCEPTION THIS HELPER ADDS, and
+		// it is not an ignore rule: those trees are TRACKED — 190 files
+		// of them — so git lists them and should. Go itself ignores a
+		// directory named testdata when it builds, so a .go file in one
+		// is a fixture rather than shipped code, and a guard over "this
+		// module's packages" that counted them would be reporting on
+		// files no build ever compiles.
+		if isTestdata(root, path) {
+			continue
 		}
-		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
-			seen[filepath.Dir(path)] = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking %s: %v", root, err)
+		seen[filepath.Dir(path)] = true
 	}
 	if len(seen) == 0 {
 		t.Fatal("found no package directories — this guard would silently pass")
@@ -1627,6 +1554,21 @@ func packageDirs(t *testing.T, root string) []string {
 	}
 	sort.Strings(dirs)
 	return dirs
+}
+
+// isTestdata reports whether path sits under a directory named testdata
+// at any depth, which is the rule Go's own toolchain applies.
+func isTestdata(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "testdata" {
+			return true
+		}
+	}
+	return false
 }
 
 // isSecretType reports whether t is exactly ui.Secret.
