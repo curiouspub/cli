@@ -530,6 +530,54 @@ type PaceIntegrity struct {
 	// dropping the starved passes without recording it would hide
 	// exactly that.
 	WorstFixtureGap time.Duration
+
+	// ValidGapMin, ValidGapMedian and ValidGapMax are the fixture's own
+	// gap across the passes that were ADMITTED — the shape of the
+	// population the threshold let in, rather than the one number at the
+	// top of it.
+	//
+	// # A THRESHOLD IS A LINE THROUGH A DISTRIBUTION NOBODY HAD LOOKED AT
+	//
+	// Three times the stated pace was chosen between two readings: the
+	// ordinary passes near 1.25× and the starved one at 15.8×. That is a
+	// defensible line and it says nothing about what lies between. The
+	// first retake under the rule produced a darwin partial-line maximum
+	// of 47.297583 ms whose own fixture gap was 47.14675 ms — 2.36× the
+	// stated pace, admitted, and the reading that set that window.
+	//
+	// So the record now carries the distribution rather than its
+	// endpoint. Divided by StatedPace these three are the ratio spread,
+	// per leg, per retake: if the admitted passes cluster near 1.2× with
+	// one at 2.4×, the line is in open space; if they run continuously
+	// from 1× to 3×, there is no gap for a line to sit in and the
+	// threshold is dividing one population rather than separating two.
+	// That is the evidence the threshold moves on — not one entry's
+	// unlucky pass.
+	// A RECORD IS ONE PASS'S, not an aggregate of several. A leg is
+	// measured over a series and keeps the pass whose CLIENT gap was
+	// worst, so every field here came from the same twenty runs. The
+	// alternative — a min over one pass, a median over another, a
+	// maximum over a third — puts a median in the record that no sample
+	// produced.
+	ValidGapMin    time.Duration
+	ValidGapMedian time.Duration
+	ValidGapMax    time.Duration
+}
+
+// Ratios renders the admitted passes' fixture gaps as multiples of the
+// stated pace, which is the form the threshold is written in.
+//
+// IT RETURNS ZEROS FOR AN UNPACED FIXTURE rather than dividing by one.
+// A fixture with no pace has no ratio to a pace, and a 1.0 there would
+// read as "held it exactly" — a claim about a test that was never run.
+func (p *PaceIntegrity) Ratios() (min, median, max float64) {
+	if p == nil || p.StatedPace <= 0 {
+		return 0, 0, 0
+	}
+	pace := float64(p.StatedPace)
+	return float64(p.ValidGapMin) / pace,
+		float64(p.ValidGapMedian) / pace,
+		float64(p.ValidGapMax) / pace
 }
 
 // Starves reports whether this leg starved more often than the rule
@@ -779,7 +827,7 @@ const MinimumMargin = 5
 var UploadSlowIsNotStalled = Entry{
 	Name: "UploadSlowIsNotStalled",
 	Row:  "TestASlowUploadIsNotAStalledOne",
-	// 850 ms: five times darwin's 166.233959 ms is 831.17 ms.
+	// 900 ms: five times darwin's 179.409167 ms is 897.05 ms.
 	//
 	// IT WENT 800 TO 1150 AND BACK DOWN, and the round trip is the
 	// record of what the integrity test was worth. 1150 came from a
@@ -793,7 +841,7 @@ var UploadSlowIsNotStalled = Entry{
 	// coming back down matters rather than being tidy. An inflated
 	// window is a client that waits longer than it needs to before
 	// telling a person their upload has stopped.
-	Window: 850 * time.Millisecond,
+	Window: 900 * time.Millisecond,
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads and by how much window it advertises at a time — not " +
@@ -901,10 +949,12 @@ var UploadSlowIsNotStalled = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 161876041 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
+			WorstGap: 179409167 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 55760875},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 57369375,
+				ValidGapMin: 26486875, ValidGapMedian: 26716750,
+				ValidGapMax: 57369375},
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -982,7 +1032,7 @@ var UploadSlowIsNotStalled = Entry{
 var UploadWedgedStops = Entry{
 	Name:   "UploadWedgedStops",
 	Row:    "TestAWedgedUploadStopsAndSaysSo",
-	Window: 850 * time.Millisecond,
+	Window: 900 * time.Millisecond,
 	Side:   Write,
 	Governs: "the time for the kernel's send buffer to free space, which is set by how " +
 		"fast the far end reads — the same quantity its sibling row measures, under " +
@@ -1036,10 +1086,12 @@ var UploadWedgedStops = Entry{
 		// That is a decision for a person with the evidence in front of
 		// them, and the evidence is all here.
 		Darwin: {
-			WorstGap: 161876041 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
+			WorstGap: 179409167 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 55760875},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 57369375,
+				ValidGapMin: 26486875, ValidGapMedian: 26716750,
+				ValidGapMax: 57369375},
 			BlockPoint: 819200,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1268,11 +1320,12 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 		// read-side window is a margin over how long the machine can
 		// stop the far end from writing, and this is the largest such
 		// pause anybody has measured here.
-		Darwin: {WorstGap: 28934458 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
+		Darwin: {WorstGap: 38055000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 19725667}},
+				WorstFixtureGap: 38010583, ValidGapMin: 16393708,
+				ValidGapMedian: 16641500, ValidGapMax: 38010583}},
 		// 16.6084ms under the detector, 28.8472ms without it.
 		Windows: {WorstGap: 16372100 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
@@ -1410,11 +1463,12 @@ var StreamPartialLineIsNotAStall = Entry{
 		// also one pass — is the same phenomenon at a comparable size.
 		// Two entries sampling one distribution and carrying windows a
 		// factor of two apart is an open item rather than a finding.
-		Darwin: {WorstGap: 47297583 * time.Nanosecond, Runs: 140, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Valid: 140, Starved: 0,
+		Darwin: {WorstGap: 48391958 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 20 * time.Millisecond, Flushes: 61,
-				WorstFixtureGap: 47146750}},
+				WorstFixtureGap: 48492625, ValidGapMin: 21446750,
+				ValidGapMedian: 22331708, ValidGapMax: 48492625}},
 		// 21.4369ms under the detector, 26.8971ms without it.
 		Windows: {WorstGap: 21605500 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,

@@ -153,6 +153,38 @@ func TestEveryMeasurementSaysWhetherItsFixtureHeldItsPace(t *testing.T) {
 						entry.Pace.Flushes, entry.Pace.Interval)
 				}
 			}
+			// THE DISTRIBUTION IS PRESENT AND ORDERED. A paced leg
+			// whose admitted passes left no spread behind is a record
+			// that kept its endpoint and dropped the shape, which is
+			// the thing the threshold has to be judged against.
+			if p.StatedPace > 0 {
+				switch {
+				case p.ValidGapMin <= 0 || p.ValidGapMedian <= 0 || p.ValidGapMax <= 0:
+					t.Errorf("timing.%s's %s measurement admitted %d passes and "+
+						"records no spread for them (min %v, median %v, max %v).\n"+
+						"A threshold is a line through a distribution, and a record "+
+						"carrying only the largest admitted gap cannot say whether "+
+						"the line sits in open space or through the middle of one "+
+						"population.",
+						entry.Name, leg, p.Valid,
+						p.ValidGapMin, p.ValidGapMedian, p.ValidGapMax)
+				case p.ValidGapMin > p.ValidGapMedian || p.ValidGapMedian > p.ValidGapMax:
+					t.Errorf("timing.%s's %s spread is not ordered: min %v, median "+
+						"%v, max %v. Those three came from one sorted sample or "+
+						"they came from nowhere.",
+						entry.Name, leg,
+						p.ValidGapMin, p.ValidGapMedian, p.ValidGapMax)
+				case p.ValidGapMax*time.Duration(p.ThresholdDen) >
+					p.StatedPace*time.Duration(p.ThresholdNum):
+					lo, mid, hi := p.Ratios()
+					t.Errorf("timing.%s's %s admitted a pass at %.2f× its stated "+
+						"pace against a %d/%d threshold (spread %.2f/%.2f/%.2f).\n"+
+						"An admitted pass past the line means the record and the "+
+						"rule disagree about which passes were let in.",
+						entry.Name, leg, hi, p.ThresholdNum, p.ThresholdDen,
+						lo, mid, hi)
+				}
+			}
 			if p.ThresholdNum <= 0 || p.ThresholdDen <= 0 {
 				t.Errorf("timing.%s's %s integrity record has no threshold (%d/%d), "+
 					"so it says passes were excluded without saying by what rule",

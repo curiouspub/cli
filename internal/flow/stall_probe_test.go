@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -196,8 +197,17 @@ func probeLeg() timing.Leg {
 func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration, pin *timing.PinnedPair, integrity *timing.PaceIntegrity, extra string) {
 	t.Helper()
 	leg := probeLeg()
-	recorded, known := entry.Measurements[leg], false
-	known = recorded.Measured()
+	recorded := entry.Measurements[leg]
+	// COMPLETE, NOT MERELY MEASURED. The paste hint below is the only
+	// place a record's literal is ever printed, and it used to fire on
+	// Measured() alone — so a record that was missing a field this probe
+	// could have supplied got no hint, and the person filling it in had
+	// to reconstruct the literal from a prose log line. A record is
+	// incomplete when the fixture had a pace and the admitted passes'
+	// spread is absent: that is the distribution the threshold is judged
+	// against, and it exists here and nowhere else.
+	known := recorded.Measured() &&
+		(recorded.Integrity.StatedPace == 0 || recorded.Integrity.ValidGapMax > 0)
 
 	t.Logf("%s on %s%s: worst gap %v over %d runs, against a %v window%s%s",
 		entry.Name, leg, detectorNote(), measured, runs, entry.Window,
@@ -212,7 +222,7 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 	}
 
 	if !known {
-		t.Errorf("%s has no recorded measurement on %s, and this run measured a "+
+		t.Errorf("%s has no complete record on %s, and this run measured a "+
 			"worst gap of %v over %d runs on %s%s.\nRecord it in internal/timing: "+
 			"{WorstGap: %v, Runs: %d, Date: \"%s\"%s%s%s} — or run this again and "+
 			"record the worst across the passes, with the run count to match, "+
@@ -367,6 +377,33 @@ const (
 // between two measured populations should be, and it is one constant to
 // move.
 //
+// THE THRESHOLD MOVES ON THE DISTRIBUTION, NOT ON ONE ENTRY, and the
+// distribution has now been looked at. Twenty-one darwin passes of
+// twenty runs, three paced entries, 2026-09-11 — the admitted passes'
+// ratio of fixture gap to stated pace:
+//
+//	entry          median across passes   largest admitted
+//	upload         1.06-1.08              2.29
+//	keep-alive     1.09-1.11              2.53
+//	partial line   1.08-1.09              2.42
+//
+// It is a TIGHT BODY WITH A THIN TAIL, not a spread running evenly from
+// one to three. Every median across those 420 runs sits between 1.06
+// and 1.11, and nothing admitted anywhere reached 2.6. So the line at
+// three sits in open space above the tail rather than through the
+// middle of one population, which is the shape a threshold wants and
+// the reason this one stays where it is.
+//
+// WHAT THE SAME DATA SAYS THAT IS LESS COMFORTABLE: each entry's
+// recorded maximum comes from its HIGHEST-RATIO admitted pass. Upload's
+// 179.409167 ms came from the pass that ran 2.29×, the keep-alives'
+// 38.055 ms from 2.53×, the partial line's 48.391958 ms from 2.42×. The
+// tail is not a curiosity beside the measurement — it is where every
+// window comes from. That is an observation for a person rather than a
+// number to act on: tightening the line would cut the passes that
+// produce the maxima, which would lower every window on an argument
+// about the instrument rather than about the client.
+//
 // A ZERO PACE IS NOT A PASSING GRADE. A fixture that writes its frames
 // and goes silent has no pace to miss, so there is no test to apply and
 // every run counts — recorded as StatedPace zero, so a reader can tell
@@ -392,6 +429,12 @@ func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration
 		Flushes:      flushes,
 	}
 	var worst time.Duration
+	// THE ADMITTED PASSES' OWN GAPS ARE KEPT, not just the largest. A
+	// threshold is a line through a distribution, and a record carrying
+	// only the top of that distribution cannot say whether the line sits
+	// in open space or through the middle of one population. See
+	// PaceIntegrity's ValidGap fields.
+	admitted := make([]time.Duration, 0, len(perRun))
 	for i, gap := range perRun {
 		if fixture[i] > integrity.WorstFixtureGap {
 			integrity.WorstFixtureGap = fixture[i]
@@ -402,9 +445,21 @@ func classifyPasses(name string, leg timing.Leg, perRun, fixture []time.Duration
 			continue
 		}
 		integrity.Valid++
+		admitted = append(admitted, fixture[i])
 		if gap > worst {
 			worst = gap
 		}
+	}
+	if len(admitted) > 0 {
+		sorted := append([]time.Duration(nil), admitted...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		integrity.ValidGapMin = sorted[0]
+		integrity.ValidGapMax = sorted[len(sorted)-1]
+		// THE LOWER MIDDLE ON AN EVEN COUNT, stated rather than left to
+		// a reader to guess: this is a spread's shape, not a statistic
+		// anybody averages, and interpolating between two observations
+		// would put a number in the record that nothing measured.
+		integrity.ValidGapMedian = sorted[(len(sorted)-1)/2]
 	}
 	if integrity.Valid == 0 {
 		return 0, nil, fmt.Errorf("%s on %s: every one of %d passes starved — the "+
@@ -458,9 +513,10 @@ func integrityLiteral(p *timing.PaceIntegrity) string {
 	}
 	return fmt.Sprintf(", Integrity: &timing.PaceIntegrity{Valid: %d, Starved: %d, "+
 		"ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, Flushes: %d, "+
-		"WorstFixtureGap: %d}",
+		"WorstFixtureGap: %d, ValidGapMin: %d, ValidGapMedian: %d, ValidGapMax: %d}",
 		p.Valid, p.Starved, p.ThresholdNum, p.ThresholdDen,
-		p.StatedPace, p.Flushes, p.WorstFixtureGap)
+		p.StatedPace, p.Flushes, p.WorstFixtureGap,
+		p.ValidGapMin, p.ValidGapMedian, p.ValidGapMax)
 }
 
 // integrityNote renders what a pass says about its own instrument.
@@ -469,10 +525,12 @@ func integrityNote(p *timing.PaceIntegrity) string {
 		return fmt.Sprintf(" the fixture has no pace to hold, so no pass is "+
 			"excluded; its own widest gap was %v", p.WorstFixtureGap)
 	}
+	lo, mid, hi := p.Ratios()
 	return fmt.Sprintf(" the fixture held its %v pace on %d of %d passes (%d starved "+
-		"past %d/%d of it); its own widest gap was %v",
+		"past %d/%d of it); its own widest gap was %v, and the admitted passes ran "+
+		"%.2f/%.2f/%.2f times the pace (min/median/max)",
 		p.StatedPace, p.Valid, p.Valid+p.Starved, p.Starved,
-		paceThresholdNum, paceThresholdDen, p.WorstFixtureGap)
+		paceThresholdNum, paceThresholdDen, p.WorstFixtureGap, lo, mid, hi)
 }
 
 // paceThresholdNum over paceThresholdDen is the multiple of its stated
