@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/curiouspub/cli/internal/ui"
+	"github.com/curiouspub/cli/pkg/wire"
 )
 
 // ProtocolVersion is the revision of the Model Context Protocol this
@@ -195,7 +196,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out, logw io.Writer) e
 			continue
 		}
 
-		reply, answer := s.handle(ctx, line, diagnostics)
+		reply, answer := s.handle(ctx, line, out, diagnostics)
 		if !answer {
 			continue
 		}
@@ -216,7 +217,14 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out, logw io.Writer) e
 
 // handle turns one inbound line into the reply that should go back, and
 // reports whether there is a reply at all.
-func (s *Server) handle(ctx context.Context, line []byte, logw notes) (response, bool) {
+//
+// IT IS HANDED THE PROTOCOL STREAM AS WELL AS RETURNING A REPLY, which
+// reads as redundant and is not. A tool call can produce messages BEFORE
+// its reply — progress notifications, which are the only thing an agent
+// has to watch a build with — and a function that could only return one
+// value could only speak once, at the end, which is exactly when
+// progress has stopped being useful.
+func (s *Server) handle(ctx context.Context, line []byte, out io.Writer, logw notes) (response, bool) {
 	// THE TWO WAYS AN INBOUND MESSAGE CAN BE UNREADABLE ARE DIFFERENT
 	// FAULTS AND GET DIFFERENT CODES, which is worth the extra call
 	// because the codes are the only thing a client can act on. Bytes
@@ -272,7 +280,7 @@ func (s *Server) handle(ctx context.Context, line []byte, logw notes) (response,
 		return resultReply(req.ID, s.listTools()), true
 
 	case methodToolsCall:
-		result, rpcErr := s.callTool(ctx, req.Params, logw)
+		result, rpcErr := s.callTool(ctx, req.Params, out, logw)
 		if rpcErr != nil {
 			return errorReply(req.ID, rpcErr.Code, rpcErr.Message), true
 		}
@@ -428,6 +436,121 @@ func (s *Server) listTools() toolsListResult {
 type callParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	Meta      *callMeta       `json:"_meta"`
+}
+
+// callMeta is the protocol's own side-channel on a request, and this
+// server reads exactly one thing out of it.
+type callMeta struct {
+	// ProgressToken is the handle a client sends when it wants to be
+	// told how a call is going, and every notification about that call
+	// quotes it back. ABSENT MEANS THE CLIENT IS NOT WATCHING, which is
+	// the ordinary case and not a degraded one — a tool reports either
+	// way and the reports simply go nowhere.
+	//
+	// IT IS HELD AS RAW BYTES for the reason the request id is: the
+	// protocol allows a string or a number, and a number decoded into
+	// any becomes a float64, so a large integer token would be quoted
+	// back as a different number and the client could not match it to
+	// the call it is watching.
+	ProgressToken json.RawMessage `json:"progressToken"`
+}
+
+// methodProgress is the notification a watched call's reports go out as.
+const methodProgress = "notifications/progress"
+
+// progressParams is one progress notification.
+//
+// THE PROTOCOL HAS ROOM FOR A NUMBER AND A SENTENCE, and a deploy has
+// neither to give honestly. Nothing here knows how much of a build is
+// left — the server sends no such figure, and inventing one would be a
+// percentage a person watches and a model reasons about, both wrong. So
+// Progress is a COUNT OF REPORTS, which is monotonic as the protocol
+// requires and claims nothing, Total is omitted entirely so no client
+// renders a bar, and what the report actually says travels in Message.
+//
+// MESSAGE IS PROSE AND NOTHING READS IT BACK. It is the one shape this
+// notification has, so the phase and the line are rendered into it — and
+// the facts a caller acts on are in the tool's RESULT, as fields, so
+// nothing is ever parsed out of this. A progress notification is
+// something to watch, not something to decide on.
+type progressParams struct {
+	ProgressToken json.RawMessage `json:"progressToken"`
+	Progress      int             `json:"progress"`
+	Message       string          `json:"message,omitempty"`
+}
+
+// reportingProgress is the sink a WATCHED call gets: every report it is
+// given becomes one notification on the protocol stream.
+//
+// IT WRITES FROM THE HANDLER'S OWN GOROUTINE, which is safe because
+// there is only ever one: a call is dispatched, run and replied to in
+// sequence by the read loop, so nothing else is writing to the stream
+// while a tool is running. If this server ever dispatches calls
+// concurrently, this is the type that needs a lock, and the reply
+// writing in Serve needs one with it.
+type reportingProgress struct {
+	out   io.Writer
+	token json.RawMessage
+	logw  notes
+
+	sent int
+	// stopped is set once a write has failed. A broken protocol stream
+	// fails again for every later report, and a diagnostic per line of a
+	// build log would bury the first one — which is the only one that
+	// says anything.
+	stopped bool
+}
+
+func (p *reportingProgress) Report(phase wire.Phase, line string) {
+	if p.stopped {
+		return
+	}
+	message := progressMessage(phase, line)
+	if message == "" {
+		// A report with nothing in either half says nothing, and a
+		// notification carrying only a counter is noise a client has to
+		// filter.
+		return
+	}
+	p.sent++
+	err := writeMessage(p.out, notification{
+		JSONRPC: jsonrpcVersion,
+		Method:  methodProgress,
+		Params: progressParams{
+			ProgressToken: p.token,
+			Progress:      p.sent,
+			Message:       message,
+		},
+	})
+	if err != nil {
+		p.stopped = true
+		p.logw.say("curious mcp: the client stopped reading progress (%s); "+
+			"the call is still running and its result will be sent if the stream recovers",
+			err.Error())
+	}
+}
+
+// progressMessage renders one report as the single string a progress
+// notification has room for.
+//
+// THE LINE IS ESCAPED and the phase is not, which is the same split the
+// terminal makes. A phase is the contract's own vocabulary and this
+// program's to render; a line is arbitrary program output — whatever the
+// package manager and the site builder printed — and a terminal obeys
+// some of those bytes. The service escapes the same set at its end;
+// this escapes it again, because a local safety property must not rest
+// on a remote guarantee this client cannot verify or version-check.
+func progressMessage(phase wire.Phase, line string) string {
+	safe := ui.Sanitize(line)
+	switch {
+	case phase != "" && safe != "":
+		return string(phase) + ": " + safe
+	case phase != "":
+		return string(phase)
+	default:
+		return safe
+	}
 }
 
 // callTool runs one tool and returns either its result or the reason the
@@ -438,7 +561,7 @@ type callParams struct {
 // faults in the request and are answered as protocol errors, and
 // everything from the tool itself — including a total failure — comes
 // back as a result the client can read.
-func (s *Server) callTool(ctx context.Context, params json.RawMessage, logw notes) (Result, *rpcError) {
+func (s *Server) callTool(ctx context.Context, params json.RawMessage, out io.Writer, logw notes) (Result, *rpcError) {
 	var p callParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return Result{}, &rpcError{Code: codeInvalidParams, Message: "the tool call parameters were not readable"}
@@ -452,13 +575,25 @@ func (s *Server) callTool(ctx context.Context, params json.RawMessage, logw note
 		return Result{}, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("unknown tool %q", p.Name)}
 	}
 
-	// NOBODY IS LISTENING YET, AND THAT IS SAID HERE RATHER THAN LEFT TO
-	// A NIL. Reporting a tool's progress to a client means a notification
-	// with the token the client sent on the call it wants watched, which
-	// is protocol this server does not speak today; the sink that turns
-	// a report into one belongs to the change that has a tool to report
-	// from. This is the line that change edits, and until it does, the
-	// honest value is the sink that discards — not a field nothing ever
-	// writes, which would be a seam pointing at nothing.
-	return invoke(ctx, tool, p.Arguments, noProgress{}, logw), nil
+	// WHETHER ANYBODY IS LISTENING IS THE CLIENT'S TO SAY, and it says it
+	// by sending a progress token on the call it wants watched. With one,
+	// every report a tool makes goes out as a notification quoting that
+	// token; without one the tool reports into the sink that discards,
+	// which is the ordinary case and costs a tool nothing — it says what
+	// it is doing either way and never asks whether it is worth saying.
+	return invoke(ctx, tool, p.Arguments, progressFor(p.Meta, out, logw), logw), nil
+}
+
+// progressFor is the sink one call's reports go to: the protocol stream
+// when the client asked to watch, and nowhere otherwise.
+//
+// AN EMPTY TOKEN IS NOT A TOKEN. A client sending `"progressToken": null`
+// or an absent _meta has not asked to be told anything, and quoting
+// either back on a notification would be this server inventing a handle
+// the client cannot match a call to.
+func progressFor(meta *callMeta, out io.Writer, logw notes) Progress {
+	if meta == nil || len(meta.ProgressToken) == 0 || string(meta.ProgressToken) == "null" {
+		return noProgress{}
+	}
+	return &reportingProgress{out: out, token: meta.ProgressToken, logw: logw}
 }
