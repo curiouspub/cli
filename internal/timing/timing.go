@@ -979,10 +979,12 @@ var UploadSlowIsNotStalled = Entry{
 		// which is the kernel honouring the request rather than refusing
 		// it. It is the leg where the pair rule is least in doubt.
 		Linux: {
-			WorstGap: 101876390 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			WorstGap: 102256000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 26261484},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 26301870,
+				ValidGapMin: 25833365, ValidGapMedian: 25947440,
+				ValidGapMax: 26301870},
 			BlockPoint: 589824,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 262144,
@@ -1002,10 +1004,12 @@ var UploadSlowIsNotStalled = Entry{
 		// it is put — which is what makes that a fact about one kernel
 		// rather than about this fixture.
 		Windows: {
-			WorstGap: 52522900 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			WorstGap: 53542000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 27096500},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 27003200,
+				ValidGapMin: 25819200, ValidGapMedian: 26065400,
+				ValidGapMax: 27003200},
 			BlockPoint: 229376,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1116,10 +1120,12 @@ var UploadWedgedStops = Entry{
 		// which is the kernel honouring the request rather than refusing
 		// it. It is the leg where the pair rule is least in doubt.
 		Linux: {
-			WorstGap: 101876390 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			WorstGap: 102256000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 26261484},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 26301870,
+				ValidGapMin: 25833365, ValidGapMedian: 25947440,
+				ValidGapMax: 26301870},
 			BlockPoint: 589824,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 262144,
@@ -1139,10 +1145,12 @@ var UploadWedgedStops = Entry{
 		// it is put — which is what makes that a fact about one kernel
 		// rather than about this fixture.
 		Windows: {
-			WorstGap: 52522900 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+			WorstGap: 53542000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 27096500},
+				StatedPace: 25 * time.Millisecond, WorstFixtureGap: 27003200,
+				ValidGapMin: 25819200, ValidGapMedian: 26065400,
+				ValidGapMax: 27003200},
 			BlockPoint: 229376,
 			Pin: &PinnedPair{
 				Send: Pin{Requested: 131072, ReadBack: 131072,
@@ -1306,11 +1314,12 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// for.
 	Measurements: map[Leg]Measurement{
 		// 15.692101ms under the detector, 15.475903ms without it.
-		Linux: {WorstGap: 15828202 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+		Linux: {WorstGap: 15785000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 15775491}},
+				WorstFixtureGap: 15444588, ValidGapMin: 15332180,
+				ValidGapMedian: 15392740, ValidGapMax: 15444588}},
 		// 24.413541ms under the detector and 104.351792ms WITHOUT it, on
 		// the gate's macOS runner — and the fixture's own widest pause
 		// between two flushes in that pass was 104.142542ms, which says
@@ -1327,11 +1336,12 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 				WorstFixtureGap: 38010583, ValidGapMin: 16393708,
 				ValidGapMedian: 16641500, ValidGapMax: 38010583}},
 		// 16.6084ms under the detector, 28.8472ms without it.
-		Windows: {WorstGap: 16372100 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+		Windows: {WorstGap: 16656000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 16060400}},
+				WorstFixtureGap: 16287100, ValidGapMin: 15723400,
+				ValidGapMedian: 15844500, ValidGapMax: 16287100}},
 	},
 	SetBy: Darwin,
 }
@@ -1428,11 +1438,12 @@ var StreamPartialLineIsNotAStall = Entry{
 	// once, by hand, with the row refusing until a person did it.
 	Measurements: map[Leg]Measurement{
 		// 20.831652ms under the detector, 20.591115ms without it.
-		Linux: {WorstGap: 20855344 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+		Linux: {WorstGap: 21612000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 20 * time.Millisecond, Flushes: 61,
-				WorstFixtureGap: 20436308}},
+				WorstFixtureGap: 20591111, ValidGapMin: 20398193,
+				ValidGapMedian: 20421878, ValidGapMax: 20591111}},
 		// # DARWIN'S MAXIMUM CAME OFF A DEVELOPER MAC, NOT OFF THE RUNNER
 		//
 		// 128.757833 ms, one pass of twenty on 2026-09-11, out of eleven
@@ -1470,11 +1481,12 @@ var StreamPartialLineIsNotAStall = Entry{
 				WorstFixtureGap: 48492625, ValidGapMin: 21446750,
 				ValidGapMedian: 22331708, ValidGapMax: 48492625}},
 		// 21.4369ms under the detector, 26.8971ms without it.
-		Windows: {WorstGap: 21605500 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
+		Windows: {WorstGap: 21346000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Valid: 20, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 20 * time.Millisecond, Flushes: 61,
-				WorstFixtureGap: 21040200}},
+				WorstFixtureGap: 21103800, ValidGapMin: 20786900,
+				ValidGapMedian: 20883600, ValidGapMax: 21103800}},
 	},
 	SetBy: Darwin,
 }
