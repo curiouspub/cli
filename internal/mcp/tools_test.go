@@ -834,6 +834,71 @@ func TestDeployStatusNeverReportsAStatusTheStreamDidNotSay(t *testing.T) {
 			t.Errorf("errors = %+v, want the one diagnostic the stream carried", answer.Errors)
 		}
 	})
+
+	// THE THIRD STATE, and it was argued in a comment for a day before it
+	// was asserted. status.go says the sentinel is chosen by whether the
+	// stream SPOKE and never by whether the status happens to be a value
+	// this build knows — "a terminal event carrying a status this build
+	// has never heard of is still the stream reporting one, and rendering
+	// the sentinel for it would be this client saying the deploy had not
+	// finished when it had".
+	//
+	// Nothing tested it. Every fixture in this package and in the
+	// sequence package sent StatusBuilt or StatusFailed, so both
+	// branches a reader can see were covered and the one the comment
+	// defends was not. Found 2026-09-12 by a mutation that made the
+	// sentinel depend on the VALUE and left the package green.
+	//
+	// TWO CASES, because the drift has two shapes and one fixture only
+	// catches one. An unmapped value is what an additive contract
+	// actually produces — a status minted after this build shipped. An
+	// empty one is the degenerate form, and it is the shape a nil-ish
+	// check reaches for.
+	//
+	// REQUIRED MUTATION, run 2026-09-12: make reportedStatus return the
+	// sentinel when the status is empty, or when it is not one of the
+	// values this build knows. Reds here on the matching case, and on no
+	// other row in either package.
+	for _, tc := range []struct {
+		name   string
+		status wire.DeployStatus
+	}{
+		{name: "a status minted after this build shipped", status: "resurrected"},
+		{name: "a terminal event carrying no status at all", status: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := &deployScript{
+				uploadPath: "/object-store/put",
+				frames: []string{
+					phaseAt(wire.PhaseUploading),
+					finished(tc.status),
+				},
+			}
+			run := newToolsRun(t, script)
+
+			var answer deployStatusResult
+			decodeInto(t, run.call(toolDeployStatus, `{"deploy_id":"dpl-odd"}`), &answer)
+
+			if !answer.Reported {
+				t.Error("reported is false for a stream that carried a terminal " +
+					"event — the stream spoke, whatever it said")
+			}
+			// THE ASSERTION THE COMMENT WAS MAKING. Reporting the
+			// sentinel here would be this client telling an agent the
+			// deploy has not finished, about a deploy that HAS.
+			if answer.Status == notYetReported {
+				t.Errorf("status = %q for a terminal event carrying %q. The sentinel "+
+					"says the stream has not reported, and it has: an agent reading "+
+					"this would wait for an answer that already arrived",
+					answer.Status, tc.status)
+			}
+			if answer.Status != string(tc.status) {
+				t.Errorf("status = %q, want %q — reported as received and unmapped, "+
+					"because this build does not get to decide which statuses the "+
+					"contract may grow", answer.Status, tc.status)
+			}
+		})
+	}
 }
 
 // TestAToolThatNeedsALoginSaysWhichCallsMakeOne.

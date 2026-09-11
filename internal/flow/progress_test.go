@@ -93,10 +93,23 @@ func TestARunReportsBothHalvesOfWhereItHasGot(t *testing.T) {
 // makes the run reconnect at all: a stream that ends without `done`
 // ended abnormally and is picked up again.
 //
-// REQUIRED MUTATION, run 2026-09-11: move the report in the log branch
-// of renderEvent above the replay test, beside the counter. Reds here
-// with eight reports against five, the first three of the second
-// connection repeating "a", "b" and the phase they arrived under.
+// REQUIRED MUTATION, run 2026-09-11 and RE-RUN 2026-09-12: move the
+// report in the log branch of renderEvent above the replay test, beside
+// the counter. Reds here with SEVEN reports against five, and on this
+// row alone — the two log lines of the second connection repeating "a"
+// and "b".
+//
+// THE COUNT WAS WRITTEN AS EIGHT and the phase was named as repeating
+// with them. It does not: the replayed phase event is suppressed by the
+// `ev.Phase == run.lastPhase` check in the phase branch (stream.go:589),
+// which this mutation does not touch. Measured on the tip:
+//
+//	progress_test.go:143: the sink heard 7 reports, want 5
+//
+// Corrected because a required-mutation note is a claim about what a
+// command PRINTS, and one written from the mutation's intent rather
+// than its output is the same defect as a commit message that names
+// less than its diff — read by the next person as a measurement.
 func TestAReplayedBuildIsNarratedOnce(t *testing.T) {
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
