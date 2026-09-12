@@ -49,6 +49,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/rulefile"
 )
 
 // ---------------------------------------------------------------------
@@ -467,24 +469,25 @@ func loadProviderAuthActions(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
+	declared, err := rulefile.Parse("scripts/provider-auth-actions.txt", string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var fragments []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	for _, rule := range declared {
 		// The same strictness the dependency denylist learned: neither
 		// whitespace nor a hash is legal inside an action path, so either
-		// one means somebody wrote a trailing comment — which does not
-		// terminate the line here, it becomes part of the fragment. The
-		// fragment then matches nothing and the rule is silently off with
-		// the guard still green.
-		if strings.ContainsAny(line, " \t#") {
-			t.Fatalf("scripts/provider-auth-actions.txt: %q is not a bare action-path fragment "+
-				"(whitespace or # present). A trailing comment silently disables the entry it "+
-				"is attached to; put the comment on its own line.", line)
+		// one after the id means somebody wrote a trailing comment — which
+		// does not terminate the line here, it becomes part of the
+		// fragment. The fragment then matches nothing and the rule is
+		// silently off with the guard still green.
+		if strings.ContainsAny(rule.Text, " \t#") {
+			t.Fatalf("scripts/provider-auth-actions.txt:%d: %s does not carry a bare "+
+				"action-path fragment (whitespace or # present after the id). A trailing "+
+				"comment silently disables the entry it is attached to; put the comment on "+
+				"its own line.", rule.Line, rule.ID)
 		}
-		fragments = append(fragments, strings.ToLower(line))
+		fragments = append(fragments, strings.ToLower(rule.Text))
 	}
 	if len(fragments) == 0 {
 		t.Fatal("scripts/provider-auth-actions.txt lists no fragments — this guard would silently pass")

@@ -69,7 +69,7 @@ func aCitedPhrase(t *testing.T, rules Rules) (phrase, rule string) {
 	for _, candidate := range candidates {
 		var matched []string
 		for _, f := range rules.Scan("candidate", candidate) {
-			matched = append(matched, f.Rule)
+			matched = append(matched, f.PatternID)
 		}
 		if len(matched) == 1 {
 			return candidate, matched[0]
@@ -132,10 +132,10 @@ func TestScanReadsThePublishedSurfaces(t *testing.T) {
 				t.Errorf("finding names the subject %q, want the commit it came from",
 					found[0].Subject)
 			}
-			if found[0].Rule != rule {
+			if found[0].PatternID != rule {
 				t.Errorf("finding names the rule %q, want %q — an author who is not told "+
 					"which line caught them cannot tell a real citation from a false one",
-					found[0].Rule, rule)
+					found[0].PatternID, rule)
 			}
 			if found[0].Line != 3 {
 				t.Errorf("finding is on line %d, want 3: a body line is not the subject line",
@@ -163,7 +163,7 @@ func TestScanReadsThePublishedSurfaces(t *testing.T) {
 			// above is passing because the vocabulary is off.
 			spelled := "handoff to " + strings.ToUpper(term[:1]) + term[1:] + "Runtime"
 			found := rules.Scan("commit abcdef0", spelled)
-			if len(found) != 1 || found[0].Rule != vendorVocabulary || found[0].Match != term {
+			if len(found) != 1 || !found[0].Infrastructure || found[0].Match != term {
 				t.Errorf("the same term spelled as a subword produced %v, want one vendor "+
 					"finding matching %q", found, term)
 			}

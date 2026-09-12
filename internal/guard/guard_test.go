@@ -41,6 +41,7 @@ import (
 	"testing"
 
 	"github.com/curiouspub/cli/internal/citations"
+	"github.com/curiouspub/cli/internal/rulefile"
 )
 
 // moduleRoot walks up from the test binary's working directory (which
@@ -261,26 +262,27 @@ func loadBannedDependencies(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
+	declared, err := rulefile.Parse("scripts/banned-dependencies.txt", string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var fragments []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	for _, rule := range declared {
+		// A data line is an id and then a bare import-path substring.
+		// Neither whitespace nor "#" is legal in an import path, so either
+		// one AFTER the id means somebody wrote a trailing comment — and a
+		// trailing comment does not terminate a line here, it becomes PART
+		// of the fragment. The fragment then matches nothing and the ban is
+		// silently off, with the guard still green. Found by a reviewer
+		// within hours of this file being created, against a real banned
+		// import: baseline red, one inline comment later, green.
+		if strings.ContainsAny(rule.Text, " \t#") {
+			t.Fatalf("scripts/banned-dependencies.txt:%d: %s does not carry a bare "+
+				"import-path fragment (whitespace or # present after the id). A trailing "+
+				"comment silently disables the ban it is attached to; put the comment on its "+
+				"own line.", rule.Line, rule.ID)
 		}
-		// A data line is a bare import-path substring. Neither whitespace
-		// nor "#" is legal in an import path, so either one means somebody
-		// wrote a trailing comment — and a trailing comment does not
-		// terminate a line here, it becomes PART of the fragment. The
-		// fragment then matches nothing and the ban is silently off, with
-		// the guard still green. Found by a reviewer within hours of this
-		// file being created, against a real banned import: baseline red,
-		// one inline comment later, green.
-		if strings.ContainsAny(line, " \t#") {
-			t.Fatalf("scripts/banned-dependencies.txt: %q is not a bare import-path fragment "+
-				"(whitespace or # present). A trailing comment silently disables the ban it "+
-				"is attached to; put the comment on its own line.", line)
-		}
-		fragments = append(fragments, strings.ToLower(line))
+		fragments = append(fragments, strings.ToLower(rule.Text))
 	}
 	if len(fragments) == 0 {
 		t.Fatal("scripts/banned-dependencies.txt lists no fragments — this guard would silently pass")
@@ -858,15 +860,16 @@ func loadCitationPatterns(t *testing.T, root string) []*regexp.Regexp {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 
+	declared, err := rulefile.Parse("scripts/citation-patterns.txt", string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var patterns []*regexp.Regexp
-	for i, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		re, err := regexp.Compile(line)
+	for _, rule := range declared {
+		re, err := regexp.Compile(rule.Text)
 		if err != nil {
-			t.Fatalf("scripts/citation-patterns.txt:%d: invalid pattern %q: %v", i+1, line, err)
+			t.Fatalf("scripts/citation-patterns.txt:%d: %s is not a pattern this guard can "+
+				"compile: %v", rule.Line, rule.ID, err)
 		}
 		patterns = append(patterns, re)
 	}
@@ -887,13 +890,13 @@ func loadVendorTerms(t *testing.T, root string) map[string]bool {
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
+	declared, err := rulefile.Parse("scripts/vendor-terms.txt", string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	terms := map[string]bool{}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		terms[strings.ToLower(line)] = true
+	for _, rule := range declared {
+		terms[strings.ToLower(rule.Text)] = true
 	}
 	if len(terms) == 0 {
 		t.Fatal("scripts/vendor-terms.txt lists no terms — this guard would silently pass")
@@ -1637,4 +1640,89 @@ func reachesSecret(t types.Type, seen map[types.Type]bool) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------
+// The rule manifests carry ids, and no two rules answer to one.
+// ---------------------------------------------------------------------
+
+// ruleManifests is every file in this repository whose lines are rules
+// with handles. It is a function for the reason the other two sets here
+// are: a row that restated the list would pass against a list nothing
+// reads.
+func ruleManifests() []string {
+	return []string{
+		"scripts/citation-patterns.txt",
+		"scripts/vendor-terms.txt",
+		"scripts/banned-dependencies.txt",
+		"scripts/provider-auth-actions.txt",
+	}
+}
+
+// TestEveryRuleCarriesAnIdAndNoTwoRulesShareOne is where the id format is
+// POLICED, and it is here rather than in the readers on purpose.
+//
+// The readers that consult these files across a range deliberately
+// tolerate a revision that predates the column, because the base of a
+// range is history and history cannot be edited into compliance. That
+// tolerance has to be paid for somewhere, or a data line written without
+// an id would silently fall back to being read whole — a rule that then
+// matches nothing, with every check still green. This is the somewhere:
+// the working tree, which is the only copy anybody can still fix.
+//
+// GLOBAL UNIQUENESS, not per file, and that is the property the ids
+// exist to have. A recorded match names a rule by its id and nothing
+// else; two files each declaring one handle would make every such record
+// ambiguous, and the ambiguity would show up as a record that silently
+// starts describing a different rule.
+//
+// MUTATION RUN, and what actually reddened. Deleting the id from one data
+// line of the citation manifest reds here naming the file and the line;
+// giving a term in the vendor vocabulary an id already used by a citation
+// pattern reds naming both files. Nothing else in this package moves for
+// either, which is the measurement that says no other row can see this.
+func TestEveryRuleCarriesAnIdAndNoTwoRulesShareOne(t *testing.T) {
+	root := moduleRoot(t)
+	owner := map[string]string{}
+	total := 0
+
+	for _, name := range ruleManifests() {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		declared, err := rulefile.Parse(name, string(data))
+		if err != nil {
+			t.Errorf("%v\n"+
+				"A rule with no usable handle cannot be referred to from a report or from a "+
+				"record of what has already been published, which is the whole reason the "+
+				"column exists. Readers that look at OLD revisions tolerate this, because "+
+				"history cannot be edited; the working tree does not get that tolerance.", err)
+			continue
+		}
+		if len(declared) == 0 {
+			t.Errorf("%s declares no rules at all, so every check reading it would pass "+
+				"everything silently", name)
+		}
+		total += len(declared)
+		for _, rule := range declared {
+			if where, taken := owner[rule.ID]; taken {
+				t.Errorf("%s:%d uses the id %s, which %s already uses.\n"+
+					"A recorded match names a rule by its id and nothing else, so one handle "+
+					"over two rules makes every record of it ambiguous — and the ambiguity "+
+					"surfaces as a record that quietly starts describing the other one.",
+					name, rule.Line, rule.ID, where)
+				continue
+			}
+			owner[rule.ID] = name
+		}
+	}
+
+	// THE FLOOR. Everything above is satisfied by four files that declare
+	// nothing, and an empty manifest is the one failure none of the rows
+	// that READ these files can report: they pass.
+	if total < len(ruleManifests()) {
+		t.Errorf("the rule manifests declare %d rule(s) between them, which is fewer than "+
+			"there are files — this row cannot be saying anything about ids", total)
+	}
 }

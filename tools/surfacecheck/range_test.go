@@ -28,6 +28,20 @@ func clonedRepo(t *testing.T) *fixture {
 	f.git("config", "user.name", "surface check fixture")
 	f.git("config", "user.email", "fixture@example.invalid")
 	f.git("config", "commit.gpgsign", "false")
+
+	// THE RULE FILES ARE TAKEN FROM THIS WORKING TREE, not from whatever
+	// the clone's tip carries, and they are left UNCOMMITTED because that
+	// is exactly where the head end of a range reads them from.
+	//
+	// A clone's tip is history. It can predate any change to these files
+	// — the id column, a pattern, a term — so a row that did not do this
+	// would be measuring the checker against a vocabulary somebody
+	// retired months ago, and would go green or red for reasons nothing
+	// in the row can see. The subject of every row below is the checker
+	// against the vocabulary this repository declares NOW.
+	for _, path := range []string{citationPatternsPath, vendorTermsPath} {
+		f.write(path, realRuleFile(t, path))
+	}
 	return f
 }
 
@@ -132,8 +146,16 @@ func TestTheRangeCheckAnswersTheThreeWaysItCan(t *testing.T) {
 		// THE ATTACK THE UNION EXISTS FOR, end to end: one push deletes
 		// the line that would catch it and adds the message, together.
 		f := clonedRepo(t)
-		base := strings.TrimSpace(f.git("rev-parse", "HEAD"))
-		f.write(citationPatternsPath, withoutLine(t, realRuleFile(t, citationPatternsPath), removed))
+		// THE BASE IS PINNED TO THE FILE THIS ROW IS ABOUT, rather than
+		// to whatever the clone's tip happens to carry. The row asks what
+		// happens when a range RETIRES a named rule, so the base has to
+		// be a revision that declares that rule under that name — and the
+		// tip of a clone is history, which may predate the id column
+		// entirely and would have the narrowing reported under a
+		// synthesised handle instead.
+		f.write(citationPatternsPath, realRuleFile(t, citationPatternsPath))
+		base := f.commit("the rule file as this working tree declares it", citationPatternsPath)
+		f.write(citationPatternsPath, withoutRule(t, realRuleFile(t, citationPatternsPath), removed))
 		head := f.commit("guard: retire a pattern\n\nand "+phrase+" while we are here\n",
 			citationPatternsPath)
 
@@ -155,8 +177,16 @@ func TestTheRangeCheckAnswersTheThreeWaysItCan(t *testing.T) {
 		// exactly what is being given up, rather than as a red nobody can
 		// separate from the rest of a change.
 		f := clonedRepo(t)
-		base := strings.TrimSpace(f.git("rev-parse", "HEAD"))
-		f.write(citationPatternsPath, withoutLine(t, realRuleFile(t, citationPatternsPath), removed))
+		// THE BASE IS PINNED TO THE FILE THIS ROW IS ABOUT, rather than
+		// to whatever the clone's tip happens to carry. The row asks what
+		// happens when a range RETIRES a named rule, so the base has to
+		// be a revision that declares that rule under that name — and the
+		// tip of a clone is history, which may predate the id column
+		// entirely and would have the narrowing reported under a
+		// synthesised handle instead.
+		f.write(citationPatternsPath, realRuleFile(t, citationPatternsPath))
+		base := f.commit("the rule file as this working tree declares it", citationPatternsPath)
+		f.write(citationPatternsPath, withoutRule(t, realRuleFile(t, citationPatternsPath), removed))
 		head := f.commit("guard: retire a pattern\n", citationPatternsPath)
 
 		code, stdout, _ := checked(t, "-repo", f.dir, "-base", base, "-head", head)

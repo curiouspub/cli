@@ -132,10 +132,10 @@ func TestTheReportNamesThePlaceAndNeverTheTextThatTrippedIt(t *testing.T) {
 // one, and nothing else in the package moves.
 func TestTheNarrowingOutputSaysWhatHappensNext(t *testing.T) {
 	narrowed := renderReport(t, nil, []Narrowing{
-		{Path: citationPatternsPath, Line: "a-line-that-used-to-be-here"},
+		{Path: citationPatternsPath, Rule: "a-rule-that-used-to-be-here"},
 	})
 
-	if !strings.Contains(narrowed, "a-line-that-used-to-be-here") ||
+	if !strings.Contains(narrowed, "a-rule-that-used-to-be-here") ||
 		!strings.Contains(narrowed, citationPatternsPath) {
 		t.Fatalf("the narrowing does not name the file and the line that went:\n%s", narrowed)
 	}
@@ -179,8 +179,11 @@ func TestTheSelfTestSaysHowToRepairItself(t *testing.T) {
 	r := repo{dir: moduleRoot(t)}
 
 	blind := Rules{
-		patterns: []*regexp.Regexp{regexp.MustCompile(`zzz-this-pattern-matches-nothing-zzz`)},
-		vendor:   map[string]bool{"zzzthistermmatchesnothingzzz": true},
+		patterns: []pattern{{
+			id: "matches-nothing",
+			re: regexp.MustCompile(`zzz-this-pattern-matches-nothing-zzz`),
+		}},
+		vendor: map[string]string{"zzzthistermmatchesnothingzzz": "term-matches-nothing"},
 	}
 	var out bytes.Buffer
 	err := selfTest(r, blind, &out)

@@ -80,22 +80,32 @@ func realRuleFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// withoutLine returns a rule file with exactly one data line removed, and
-// fails if that line was not there — an edit that changed nothing is not
-// a narrowing, and a row resting on one proves nothing.
-func withoutLine(t *testing.T, text, line string) string {
+// withoutRule returns a rule file with exactly one data line removed —
+// the one carrying the given id — and fails if that line was not there.
+// An edit that changed nothing is not a narrowing, and a row resting on
+// one proves nothing.
+//
+// IT REMOVES BY ID RATHER THAN BY TEXT, which is what the id column is
+// for: the rows below are handed the handle a scan reported, and a helper
+// that wanted the rule's own text would need the caller to hold a regular
+// expression that this file makes a point of never writing down.
+func withoutRule(t *testing.T, text, id string) string {
 	t.Helper()
 	var kept []string
 	removed := 0
 	for _, l := range strings.Split(text, "\n") {
-		if strings.TrimSpace(l) == line {
-			removed++
-			continue
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if fields := strings.Fields(trimmed); len(fields) > 0 && fields[0] == id {
+				removed++
+				continue
+			}
 		}
 		kept = append(kept, l)
 	}
 	if removed != 1 {
-		t.Fatalf("removing %q from the rule file took out %d line(s), want exactly 1", line, removed)
+		t.Fatalf("removing the rule %s from the rule file took out %d line(s), want exactly 1",
+			id, removed)
 	}
 	return strings.Join(kept, "\n")
 }
@@ -119,7 +129,7 @@ func narrowedRepo(t *testing.T) (f *fixture, base, head, phrase, removed string)
 	f.write(vendorTermsPath, vendor)
 	base = f.commit("the rules as they stand", citationPatternsPath, vendorTermsPath)
 
-	f.write(citationPatternsPath, withoutLine(t, patterns, removed))
+	f.write(citationPatternsPath, withoutRule(t, patterns, removed))
 	head = f.commit("tidy the walk\n\nas "+phrase+" says\n", citationPatternsPath)
 	return f, base, head, phrase, removed
 }
@@ -140,7 +150,7 @@ func widenedRepo(t *testing.T) (f *fixture, base, phrase, added string) {
 	vendor := realRuleFile(t, vendorTermsPath)
 
 	f = newFixture(t)
-	f.write(citationPatternsPath, withoutLine(t, patterns, added))
+	f.write(citationPatternsPath, withoutRule(t, patterns, added))
 	f.write(vendorTermsPath, vendor)
 	base = f.commit("the rules before the line was added", citationPatternsPath, vendorTermsPath)
 
@@ -295,7 +305,7 @@ func TestTheRuleFilesAreReadAtBothEnds(t *testing.T) {
 		if len(narrowings) != 1 {
 			t.Fatalf("the range reports %d narrowing(s), want exactly 1: %v", len(narrowings), narrowings)
 		}
-		if narrowings[0].Path != citationPatternsPath || narrowings[0].Line != removed {
+		if narrowings[0].Path != citationPatternsPath || narrowings[0].Rule != removed {
 			t.Errorf("narrowing reported as %+v, want %s / %q — a narrowing nobody can read "+
 				"is a red nobody can act on", narrowings[0], citationPatternsPath, removed)
 		}
@@ -368,19 +378,22 @@ func TestTheLoaderRefusesWhatItCannotCheckWith(t *testing.T) {
 // files rather than about lowercasing: one marker line, re-cased in each,
 // and exactly one narrowing comes back.
 func TestSamenessIsTheFILESOwnQuestion(t *testing.T) {
+	const marker = "zz-marker-only-for-this-row  "
 	const asWritten, recased = "ZZMARKERONLYFORTHISROW", "zzmarkeronlyforthisrow"
 
 	f := newFixture(t)
 	patterns := realRuleFile(t, citationPatternsPath)
 	vendor := realRuleFile(t, vendorTermsPath)
-	f.write(citationPatternsPath, patterns+"\n"+asWritten+"\n")
-	f.write(vendorTermsPath, vendor+"\n"+asWritten+"\n")
+	f.write(citationPatternsPath, patterns+"\n"+marker+asWritten+"\n")
+	f.write(vendorTermsPath, vendor+"\n"+marker+asWritten+"\n")
 	base := f.commit("a marker line in both rule files", citationPatternsPath, vendorTermsPath)
 
 	// HEAD IS THE WORKING TREE, and the only edit is the case of that one
-	// line in each file.
-	f.write(citationPatternsPath, patterns+"\n"+recased+"\n")
-	f.write(vendorTermsPath, vendor+"\n"+recased+"\n")
+	// line in each file. THE ID IS UNTOUCHED, which is the whole subject:
+	// one handle, two spellings of the rule behind it, and only the rule
+	// files themselves get to say whether those are one rule or two.
+	f.write(citationPatternsPath, patterns+"\n"+marker+recased+"\n")
+	f.write(vendorTermsPath, vendor+"\n"+marker+recased+"\n")
 
 	rules, narrowings, err := LoadRules(f.repo.atRevision(base), f.repo.workingTree())
 	if err != nil {
@@ -409,7 +422,7 @@ func TestSamenessIsTheFILESOwnQuestion(t *testing.T) {
 	// swapping them retires one.
 	saw := 0
 	for _, n := range narrowings {
-		if n.Path == citationPatternsPath && n.Line == asWritten {
+		if n.Path == citationPatternsPath && n.Rule == strings.TrimSpace(marker) {
 			saw++
 		}
 	}

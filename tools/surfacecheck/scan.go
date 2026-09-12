@@ -20,26 +20,43 @@ type Finding struct {
 	// that has no lines to speak of, such as a branch name.
 	Line int
 
-	// Rule is the pattern that matched, written exactly as the manifest
-	// declares it, or vendorVocabulary for a forbidden name. Both are
-	// public text from this repository's own files.
-	Rule string
+	// PatternID is the id the manifest gives the rule that matched.
+	//
+	// IT IS AN ID RATHER THAN THE RULE'S OWN TEXT, and both halves of
+	// that are deliberate. A citation pattern quoted into a report is a
+	// regular expression written into a run's log, which is readable but
+	// says nothing an id does not; a provider term quoted into one is the
+	// forbidden name itself, arriving in a log more public than the
+	// surface it was read from. And every vendor finding used to carry a
+	// single generic label, so no two entries in that vocabulary could be
+	// told apart at all — which is fatal to anything that has to RECORD a
+	// finding, because the record has to name the rule.
+	PatternID string
+
+	// Infrastructure distinguishes a provider or service name from a
+	// citation pattern, for the one sentence of the report that differs
+	// between them. It is carried rather than derived from the id,
+	// because deriving it would tie the renderer to how a data file
+	// happens to spell its handles.
+	Infrastructure bool
 
 	// Match is the text that tripped the rule.
 	Match string
 }
 
-// vendorVocabulary is the Rule value for a provider or service name. It
-// is not a pattern — those are matched by tokenising rather than by a
-// regular expression — so it names the check instead of a line.
-const vendorVocabulary = "vendor vocabulary"
+// pattern is one compiled citation rule with the handle the manifest
+// gives it.
+type pattern struct {
+	id string
+	re *regexp.Regexp
+}
 
 // Rules is one compiled vocabulary: the citation patterns and the vendor
 // terms, together, because a surface is scanned against both or it is
 // scanned against neither.
 type Rules struct {
-	patterns []*regexp.Regexp
-	vendor   map[string]bool
+	patterns []pattern
+	vendor   map[string]string // term -> the id the manifest gives it
 }
 
 // Scan returns every finding on one surface.
@@ -68,27 +85,28 @@ func (r Rules) Scan(subject, text string) []Finding {
 
 		var terms []string
 		for token := range citations.IdentifierTokens(line) {
-			if r.vendor[token] {
+			if _, ok := r.vendor[token]; ok {
 				terms = append(terms, token)
 			}
 		}
 		sort.Strings(terms)
 		for _, term := range terms {
 			out = append(out, Finding{
-				Subject: subject,
-				Line:    lineNumber,
-				Rule:    vendorVocabulary,
-				Match:   term,
+				Subject:        subject,
+				Line:           lineNumber,
+				PatternID:      r.vendor[term],
+				Infrastructure: true,
+				Match:          term,
 			})
 		}
 
-		for _, re := range r.patterns {
-			for _, m := range re.FindAllString(line, -1) {
+		for _, p := range r.patterns {
+			for _, m := range p.re.FindAllString(line, -1) {
 				out = append(out, Finding{
-					Subject: subject,
-					Line:    lineNumber,
-					Rule:    re.String(),
-					Match:   m,
+					Subject:   subject,
+					Line:      lineNumber,
+					PatternID: p.id,
+					Match:     m,
 				})
 			}
 		}
