@@ -259,6 +259,44 @@ func TestTheRangeCheckAnswersTheThreeWaysItCan(t *testing.T) {
 	})
 }
 
+// TestAMalformedCurrentManifestCannotReportACleanRange is the end-to-end
+// regression for the historical reader's former all-or-nothing fallback.
+// One duplicate id used to rewrite every valid vendor line into dead text,
+// after which a message carrying a real term was reported as clean.
+func TestAMalformedCurrentManifestCannotReportACleanRange(t *testing.T) {
+	rules := realRules(t)
+	term, _, _ := aForbiddenName(t, rules)
+	f := clonedRepo(t)
+
+	vendor := realRuleFile(t, vendorTermsPath)
+	var duplicate string
+	for _, line := range strings.Split(vendor, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			duplicate = line
+			break
+		}
+	}
+	if duplicate == "" {
+		t.Fatal("the vendor control has no data line to duplicate")
+	}
+	f.write(vendorTermsPath, vendor+"\n"+duplicate+"\n")
+	base := f.commit("a malformed vocabulary", vendorTermsPath)
+	head := f.commit("handoff to " + term + " runtime")
+
+	code, stdout, stderr := checked(t, "-repo", f.dir, "-base", base, "-head", head)
+	if code != exitUndetermined {
+		t.Fatalf("exit %d, want %d — malformed rules produced a verdict\nstdout:\n%s\nstderr:\n%s",
+			code, exitUndetermined, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "vocabulary could not be assembled") {
+		t.Errorf("the refusal does not identify the unread vocabulary:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "clean.") {
+		t.Errorf("the malformed vocabulary reported a clean range:\n%s", stdout)
+	}
+}
+
 // ---------------------------------------------------------------------
 // Turning a workflow event into a range.
 // ---------------------------------------------------------------------

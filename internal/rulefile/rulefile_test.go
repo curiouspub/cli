@@ -97,3 +97,21 @@ func TestParseNamesTheFileAndTheLine(t *testing.T) {
 		}
 	}
 }
+
+// TestParseHistoricalKeepsAnAllOldFormatFile is the compatibility half
+// of the surface check's strict-at-head rule. A range base can predate
+// the id column, and its bare rules remain in force for that range.
+func TestParseHistoricalKeepsAnAllOldFormatFile(t *testing.T) {
+	rules := rulefile.ParseHistorical("old.txt", "# before ids\n\\bZZQ-[0-9]+\\b\nzzqcloud\n")
+	if len(rules) != 2 {
+		t.Fatalf("got %d rules, want 2", len(rules))
+	}
+	if rules[0].Text != "\\bZZQ-[0-9]+\\b" || rules[1].Text != "zzqcloud" {
+		t.Errorf("old-format rules came back as %q and %q", rules[0].Text, rules[1].Text)
+	}
+	for _, rule := range rules {
+		if !strings.HasPrefix(rule.ID, "unnamed-line-") {
+			t.Errorf("historical rule id %q does not state that it was synthesised", rule.ID)
+		}
+	}
+}

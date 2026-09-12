@@ -147,6 +147,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "%d ref(s), %d blob(s), %d read (%d skipped as binary), %d byte(s)\n",
 		len(refs), len(blobs), read, skipped, bytesRead)
+	if skipped > 0 {
+		fmt.Fprintf(stdout, "%d NUL-containing blob(s) were not examined; UTF-16 text is "+
+			"included in that skipped count.\n", skipped)
+	}
 	fmt.Fprintf(stdout, "enumerated in %s, read and matched in %s\n",
 		enumerated.Round(time.Millisecond), (matched - enumerated).Round(time.Millisecond))
 
@@ -155,9 +159,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return exitUndetermined
 	}
+	if *inventory != "" {
+		// THE PRIVATE LEDGER OWNS ONLY THE PRIVATE DELTA. Public matches
+		// already have one home, in the committed public ledger. Loading
+		// that ledger and removing its identities here prevents a private
+		// recording from making a second copy that silently diverges.
+		publicLedger := filepath.Join(r.dir, filepath.FromSlash(publicBaselinePath))
+		publicEntries, err := loadBaseline(publicLedger)
+		if err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return exitUndetermined
+		}
+		found = withoutRecorded(found, publicEntries)
+	}
 
 	if *record {
-		return writeLedger(stdout, stderr, ledgerPath, found)
+		producer := "go run ./tools/leakscan -public -write-baseline"
+		if *inventory != "" {
+			producer = "go run ./tools/leakscan -inventory <path> -write-baseline"
+		}
+		return writeLedger(stdout, stderr, ledgerPath, found, producer)
 	}
 	return check(r, refs, stdout, ledgerPath, ledger, found, started, matchedAt)
 }
@@ -192,6 +213,23 @@ func vocabulary(r repo, public bool, inventory, baselinePath string) (leakcheck.
 	if err != nil {
 		return leakcheck.Rules{}, "", err
 	}
+	ids := map[string]string{}
+	for _, group := range []struct {
+		path  string
+		rules []rulefile.Rule
+	}{
+		{citationPatternsPath, patterns},
+		{vendorTermsPath, terms},
+	} {
+		for _, rule := range group.rules {
+			if first, exists := ids[rule.ID]; exists {
+				return leakcheck.Rules{}, "", fmt.Errorf("the rule id %s belongs to both %s and "+
+					"%s. A finding is a blob and a rule id, so those two rules would have one "+
+					"identity", rule.ID, first, group.path)
+			}
+			ids[rule.ID] = group.path
+		}
+	}
 
 	ledgerPath := filepath.Join(r.dir, filepath.FromSlash(publicBaselinePath))
 	if inventory != "" {
@@ -212,6 +250,13 @@ func vocabulary(r repo, public bool, inventory, baselinePath string) (leakcheck.
 		if len(declared) == 0 {
 			return leakcheck.Rules{}, "", fmt.Errorf("the inventory at %s declares no rules, "+
 				"so the private half of this scan would pass everything silently", inventory)
+		}
+		for _, rule := range declared {
+			if first, exists := ids[rule.ID]; exists {
+				return leakcheck.Rules{}, "", fmt.Errorf("the inventory rule id %s already "+
+					"belongs to %s. A finding is a blob and a rule id, so the private match "+
+					"could not be distinguished from the public one", rule.ID, first)
+			}
 		}
 		patterns = append(patterns, declared...)
 		ledgerPath = defaultPrivateBaseline(baselinePath, inventory)
@@ -397,7 +442,8 @@ func check(r repo, refs []string, stdout io.Writer, ledgerPath string, ledger []
 // rather than by remembering — and a run that RECORDED findings has not
 // checked anything. Spelling that as a pass would make "write the
 // baseline" a way to turn the gate green.
-func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]map[string]bool) int {
+func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]map[string]bool,
+	producer string) int {
 	entries := make([]entry, 0, len(found))
 	for f, paths := range found {
 		entries = append(entries, entry{
@@ -411,7 +457,7 @@ func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]
 			Paths:  sortedPaths(paths),
 		})
 	}
-	const header = `# Matches this repository has ALREADY PUBLISHED, and the reason each stays.
+	header := `# Matches this repository has ALREADY PUBLISHED, and the reason each stays.
 #
 # A finding is a BLOB and a RULE: not a commit, not a path, not a line.
 # The same content at another path under the same rule is the same
@@ -432,8 +478,7 @@ func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]
 # between a ledger and a loosened rule. An entry that stops matching
 # FAILS, so this file cannot fill up with lines that mean nothing.
 #
-# Produced by: go run ./tools/leakscan -public -write-baseline
-`
+# Produced by: ` + producer + "\n"
 	if err := os.WriteFile(ledgerPath, []byte(renderBaseline(header, entries)), 0o644); err != nil {
 		fmt.Fprintf(stderr, "writing %s: %v\n", ledgerPath, err)
 		return exitUndetermined
@@ -442,6 +487,17 @@ func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]
 	fmt.Fprintln(stdout, "This run RECORDED and did not check, so it is not a pass. Read the "+
 		"diff — every line is a match that is already public — and run again without the flag.")
 	return exitUndetermined
+}
+
+func withoutRecorded(found map[finding]map[string]bool, recorded []entry) map[finding]map[string]bool {
+	out := make(map[finding]map[string]bool, len(found))
+	for f, paths := range found {
+		out[f] = paths
+	}
+	for _, e := range recorded {
+		delete(out, e.finding)
+	}
+	return out
 }
 
 func sortedPaths(set map[string]bool) []string {

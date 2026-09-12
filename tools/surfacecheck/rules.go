@@ -124,24 +124,16 @@ func unionOf(base, head end, path string, sameAs func(string) string) ([]rulefil
 			"vocabulary to check against", path)
 	}
 
-	// BOTH ENDS ARE READ AS WHATEVER THEY WERE, and neither is policed
-	// here. The id column arrived at a point in time and both ends of a
-	// range can sit before it: the base is any commit in the history, and
-	// head is whatever revision is checked out, which on a machine
-	// examining an old push is also history. Parsed strictly, such a
-	// revision does not load at all, and this check would report that it
-	// could not assemble a vocabulary — an UNDETERMINED run rather than a
-	// clean one — on every range old enough.
-	//
-	// THAT THE TREE KEEPS THE FORMAT IS A DIFFERENT RULE WITH A DIFFERENT
-	// HOME. internal/guard loads these same files strictly, on the
-	// working tree, on every run of the suite: a data line with no id, a
-	// malformed one, or two rules answering to one handle fails there,
-	// loudly, in the change that writes it. This reader's job is to be
-	// able to read the past; that reader's job is to keep the present
-	// well formed, and only one of them is looking at something anybody
-	// can still edit.
-	headRules := rulefile.ParseHistorical(path+" at head", headText)
+	// THE BASE IS HISTORY AND HEAD IS EDITABLE. The id column arrived in
+	// the middle of this repository's history, so an old base must retain
+	// the all-old-format fallback. Head is the working tree a run is being
+	// asked to trust, and accepting malformed current data would turn all
+	// of its otherwise valid lines into dead rules with an id prefix. That
+	// is not a clean vocabulary; it is one this reader could not assemble.
+	headRules, err := rulefile.Parse(path+" at head", headText)
+	if err != nil {
+		return nil, nil, err
+	}
 	baseRules := rulefile.ParseHistorical(path+" at the base of the range", baseText)
 
 	inHead := map[string]bool{}

@@ -170,41 +170,12 @@ func RuleFileNames() map[string]bool {
 	}
 }
 
-// RuleQuotingFiles is the set of files that are not manifests and carry
-// manifest CONTENT: a test that quotes the rules in order to reason about
-// them.
-//
-// THE EXEMPTION IS THE SAME ONE AND IT IS NARROWER, because these files
-// are mostly prose. A manifest's whole body is data; a test file's body
-// is argument, and only the lines that ARE quoted entries earn the
-// waiver. So it is granted to a line that is nothing but a Go string
-// literal, which is the shape a quoted rule takes and is not a shape
-// prose can take by accident.
-//
-// It earns its place on real instances rather than on principle: this
-// repository's dependency denylist LIVED in a Go slice literal before it
-// became a file, and those revisions are still published. Without this,
-// the only readings of them are "a leak" or "a manifest is a file name,
-// so a test that holds the same list is different" — and the second is
-// the sort of distinction that is true right up until somebody moves a
-// list back.
-func RuleQuotingFiles() map[string]bool {
-	return map[string]bool{"internal/guard/guard_test.go": true}
-}
-
 // GeneratedManifestNames is the exemption set for files no human wrote.
 // There is one, and what it buys is a COLUMN rather than a file; see
 // stripModuleHashes.
 func GeneratedManifestNames() map[string]bool {
 	return map[string]bool{"go.sum": true}
 }
-
-// quotedRuleLine matches a line that is nothing but a Go string literal,
-// optionally with a trailing comma: the shape a quoted denylist entry
-// takes inside a slice. Prose does not take this shape, and neither does
-// a comment — a comment explaining a rule has no need to name what the
-// rule forbids, which is the same line the manifests themselves draw.
-var quotedRuleLine = regexp.MustCompile(`^"[^"]*",?$`)
 
 // moduleHashField matches a go.sum checksum column: an algorithm name, a
 // colon, and base64. A module path cannot match it — a path has no colon
@@ -237,9 +208,6 @@ func VendorScanLine(relPath, line string) (string, bool) {
 	isComment := strings.HasPrefix(trimmed, "#")
 
 	if RuleFileNames()[relPath] && !isComment {
-		return "", false
-	}
-	if RuleQuotingFiles()[relPath] && quotedRuleLine.MatchString(trimmed) {
 		return "", false
 	}
 	if GeneratedManifestNames()[relPath] {

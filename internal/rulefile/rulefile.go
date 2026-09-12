@@ -134,7 +134,10 @@ func cut(line string) (id, rest string, found bool) {
 // per-line, because a per-line guess cannot be made safely: several
 // citation patterns match PHRASES and contain spaces of their own, so
 // "does this line have an id" has no local answer. Strict first, and only
-// if the whole file refuses does every data line become one rule.
+// if the whole HISTORICAL file refuses does every data line become one
+// rule. Editable head files are parsed with Parse by their caller; this
+// fallback must never turn a malformed current manifest into a live-
+// looking vocabulary whose valid rules acquired literal id prefixes.
 //
 // THE SYNTHESISED ID SAYS WHAT IT IS. A rule the base declares and head
 // does not still enters the union — that is the union's whole point — so

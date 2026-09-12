@@ -131,20 +131,11 @@ func TestARuleFilesExemptionIsPerLineAndPerCheck(t *testing.T) {
 	}
 }
 
-// TestARuleQuotingTestGetsTheSameWaiverAndOnlyOnQuotedLines is the row
-// for the exemption's newest member, and both halves are load bearing.
-//
-// A test that quotes the rules in order to reason about them is doing the
-// rule's work: this repository's dependency denylist lived in a Go slice
-// literal before it became a file, and those revisions are still
-// published. But a manifest's whole body is data and a test file's body
-// is ARGUMENT, so the waiver is granted to a line that is nothing but a
-// string literal and to nothing else.
-//
-// MUTATION RUN: removing the rule-quoting branch from VendorScanLine reds
-// the first row here and the matching rows in internal/guard's exemption
-// table, and nothing else in either package moves.
-func TestARuleQuotingTestGetsTheSameWaiverAndOnlyOnQuotedLines(t *testing.T) {
+// TestAQuotedRuleGetsNoPathBasedWaiver is the regression for granting a
+// writable test path authority to suppress an ordinary string literal.
+// Historical quoted rules are recorded in the blob ledger; a path an
+// outsider can write is not evidence that newly published text is safe.
+func TestAQuotedRuleGetsNoPathBasedWaiver(t *testing.T) {
 	rules := toyRules(t)
 	const quoting = "internal/guard/guard_test.go"
 
@@ -152,7 +143,8 @@ func TestARuleQuotingTestGetsTheSameWaiverAndOnlyOnQuotedLines(t *testing.T) {
 		name, path, content string
 		want                []string
 	}{
-		{"a quoted entry is exempt", quoting, "\t\"zzqcloud-sdk\",\n", nil},
+		{"a quoted entry is read", quoting, "\t\"zzqcloud-sdk\",\n",
+			[]string{"term-01:1"}},
 		{"a sentence naming it is not", quoting, "// zzqcloud is where it runs\n",
 			[]string{"term-01:1"}},
 		{"a quoted entry carrying a citation still reds", quoting, "\t\"ZZQ-4\",\n",

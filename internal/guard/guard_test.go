@@ -1133,21 +1133,12 @@ func TestTheVendorExemptionsAreRealAndNarrow(t *testing.T) {
 		{"a rule file's comment is still read", "scripts/banned-dependencies.txt", "# " + pathField, true,
 			"the prose explaining a rule has no need to name what the rule forbids"},
 
-		// THE THIRD EXEMPTION, and it is the same one over a file that is
-		// not a manifest. A test that quotes the rules in order to reason
-		// about them is doing the rule's work; this repository's own
-		// dependency denylist LIVED in a Go slice literal before it became
-		// a file, and those revisions are still published.
-		//
-		// The waiver is narrower here than in a manifest, because a
-		// manifest's whole body is data and a test file's body is
-		// argument: only a line that is nothing but a string literal
-		// earns it. That is the shape a quoted entry takes and is not a
-		// shape prose can take by accident.
-		{"a quoted rule in a rule-quoting test is exempt", "internal/guard/guard_test.go",
-			"\t\"" + pathField + "\",", false,
-			"the list this file reasons about cannot be reasoned about without being " +
-				"written down, which is the same argument a manifest makes"},
+		// AN ORDINARY WRITABLE PATH EARNS NO WAIVER. Historical quoted
+		// rules are accounted for by the blob ledger; letting this path
+		// excuse the same shape today lets a new line hide in plain sight.
+		{"a quoted rule in a test is read", "internal/guard/guard_test.go",
+			"\t\"" + pathField + "\",", true,
+			"a path an outsider can write is not evidence that a new quoted line is safe"},
 		{"prose in a rule-quoting test is still read", "internal/guard/guard_test.go",
 			"// the " + pathField + " client is banned", true,
 			"the waiver is for quoted entries, not for the file — a sentence naming a " +
@@ -1216,9 +1207,8 @@ func TestNoPrivateCitations(t *testing.T) {
 	//
 	// What the shared engine carries, each with its own rows beside it
 	// there: a rule file's DATA lines are exempt from the provider
-	// vocabulary and from NOTHING else; a rule-quoting test's lines that
-	// are nothing but a string literal get the same narrow waiver; a
-	// go.sum CHECKSUM COLUMN is dropped and the module path beside it is
+	// vocabulary and from NOTHING else; a go.sum CHECKSUM COLUMN is
+	// dropped and the module path beside it is
 	// not. Every one of those is per-line and per-check, so a private
 	// identifier written on an exempt line still reds.
 	//

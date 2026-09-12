@@ -257,10 +257,12 @@ surface-check:
 #
 # WHAT IT COSTS, recorded here because the next person to ask "can we
 # afford this in CI" should have a number instead of an opinion: about
-# ten seconds over 1,157 blobs and 20 MB, LOCAL, on Apple arm64 — half a
-# second to enumerate and the rest to read and match. A hosted runner is
-# unmeasured; the first CI run records it per leg, and the figure decays,
-# because the cost grows with the history.
+# eleven seconds over 1,157 blobs, 347 commits and 20 MB, LOCAL, on Apple
+# arm64 — about 1.3 seconds to enumerate every blob-path membership and
+# 9.5 seconds to read and match. The former one-name enumeration took
+# about 0.6 seconds, so complete path membership adds about 0.7 seconds.
+# A hosted runner is unmeasured; the first CI run records it per leg, and
+# the figure decays, because the cost grows with the history.
 #
 # IT NEEDS NO SECRET, which is what lets it run on a pull request from a
 # stranger's fork like every other row here.

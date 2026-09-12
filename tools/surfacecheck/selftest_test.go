@@ -53,6 +53,9 @@ func TestTheSelfTestProvesTheCheckerBothWays(t *testing.T) {
 					"which half ran:\n%s", short(sha), out.String())
 			}
 		}
+		if !strings.Contains(out.String(), vendorControlID+" reported one infrastructure finding") {
+			t.Errorf("the self-test output does not show that the vendor half ran:\n%s", out.String())
+		}
 	})
 
 	t.Run("each half reports what it must, and the other half does not", func(t *testing.T) {
@@ -134,6 +137,12 @@ func TestTheSelfTestProvesTheCheckerBothWays(t *testing.T) {
 			if tripped == 0 {
 				t.Fatalf("%s produced no finding this row could check the output against, so "+
 					"the absence above is satisfied by a scan that found nothing", short(sha))
+			}
+		}
+		for term, id := range rules.VendorTerms() {
+			if id == vendorControlID && strings.Contains(strings.ToLower(out.String()), term) {
+				t.Fatal("the self-test output reproduces the pinned provider term; the control " +
+					"must name only its public rule id")
 			}
 		}
 	})

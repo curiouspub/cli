@@ -361,6 +361,47 @@ func TestTheLoaderRefusesWhatItCannotCheckWith(t *testing.T) {
 				"operator mid-procedure is the least able to guess", err)
 		}
 	})
+
+	t.Run("a malformed head is refused instead of becoming a dead vocabulary", func(t *testing.T) {
+		const patterns = "marker-id  \\bZZQ-[0-9]+\\b\n"
+		const validTerms = "term-01  zzqcloud\n"
+		ends := func(vendor string) end {
+			return func(path string) (string, bool, error) {
+				switch path {
+				case citationPatternsPath:
+					return patterns, true, nil
+				case vendorTermsPath:
+					return vendor, true, nil
+				default:
+					return "", false, nil
+				}
+			}
+		}
+
+		control, _, err := LoadRules(ends(validTerms), ends(validTerms))
+		if err != nil {
+			t.Fatalf("the well-formed control did not load: %v", err)
+		}
+		if got := control.Scan("commit", "handoff to zzqcloud runtime"); len(got) != 1 {
+			t.Fatalf("the control produced %v, want one infrastructure finding", got)
+		}
+
+		for _, row := range []struct {
+			name, vendor string
+		}{
+			{"a duplicate id", validTerms + "term-01  another-term\n"},
+			{"a line with no id", validTerms + "another-term\n"},
+			{"a malformed id", validTerms + "NOT_AN_ID  another-term\n"},
+		} {
+			t.Run(row.name, func(t *testing.T) {
+				if _, _, err := LoadRules(ends(row.vendor), ends(row.vendor)); err == nil {
+					t.Error("the malformed current manifest loaded. The historical fallback " +
+						"would prefix every valid term with its id and report a clean surface " +
+						"it had not measured")
+				}
+			})
+		}
+	})
 }
 
 // TestSamenessIsTheFILESOwnQuestion covers an edit that gives nothing up

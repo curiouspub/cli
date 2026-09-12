@@ -213,6 +213,74 @@ func TestTheUniverseIsOriginsRefsAndNotThisClones(t *testing.T) {
 	}
 }
 
+// TestThePullRefRulingNamesItsGap guards the truth of the rationale, not
+// merely the ref filter. The filter is an intentional ruling; claiming
+// another check covers intermediate file content would make the stated
+// coverage larger than the code that exists.
+func TestThePullRefRulingNamesItsGap(t *testing.T) {
+	source, err := os.ReadFile("git.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(source, []byte("KNOWN, ACCEPTED GAP")) {
+		t.Error("the pull-ref exclusion does not state that intermediate file content is an " +
+			"accepted gap")
+	}
+	if bytes.Contains(source, []byte("covered rather than that it is harmless")) {
+		t.Error("the pull-ref rationale still claims coverage no reader provides")
+	}
+}
+
+// TestABlobIsCheckedAtEveryPublishedPath is the regression for a blob
+// being assigned the single name rev-list happened to print for it.
+//
+// The later copy is deliberately put in a manifest path, where the
+// provider vocabulary must excuse it. The earlier name is ordinary prose
+// and must still red. With rev-list --objects supplying paths, git names
+// this blob only at the newer, exempt path and the scan reports clean:
+// publishing the second copy suppresses the first.
+func TestABlobIsCheckedAtEveryPublishedPath(t *testing.T) {
+	f := newFixture(t)
+	content := "handoff to zzqcloud runtime\n"
+	f.write("notes.txt", content)
+	first := f.commitAt("2026-01-01T00:00:00Z", "ordinary copy", "notes.txt")
+	f.publish("refs/remotes/origin/main", first)
+
+	f.write("scripts/banned-dependencies.txt", content)
+	second := f.commitAt("2026-01-02T00:00:00Z", "manifest copy",
+		"scripts/banned-dependencies.txt")
+	f.publish("refs/remotes/origin/main", second)
+
+	refs, err := (repo{dir: f.dir}).Refs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, err := (repo{dir: f.dir}).Blobs(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, b := range blobs {
+		if len(b.Paths) > 1 {
+			paths = b.Paths
+			break
+		}
+	}
+	wantPaths := []string{"notes.txt", "scripts/banned-dependencies.txt"}
+	if strings.Join(paths, "\n") != strings.Join(wantPaths, "\n") {
+		t.Fatalf("the shared blob was seen at %v, want every published path %v", paths, wantPaths)
+	}
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d — the exempt second copy suppressed the ordinary first one\n%s\n%s",
+			code, exitFindings, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "notes.txt") {
+		t.Errorf("the finding does not name the non-exempt path:\n%s", stdout)
+	}
+}
+
 // TestAUniverseWithNothingInItIsNotAPass. A scan over nothing is green
 // for the same reason a clean one is, and an unfetched checkout is the
 // ordinary way to arrive at one.
@@ -228,6 +296,27 @@ func TestAUniverseWithNothingInItIsNotAPass(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "not a pass") {
 		t.Errorf("the refusal reads like a clean run: %s", stderr)
+	}
+}
+
+// TestANULSkipIsSaidInWords keeps the deliberate binary policy visible
+// in a clean report. A count alone does not tell a reader that those
+// blobs were not examined or that UTF-16 text falls on the skipped side.
+func TestANULSkipIsSaidInWords(t *testing.T) {
+	f := newFixture(t)
+	f.write("plain.txt", "an ordinary line\n")
+	f.write("wide.txt", "w\x00i\x00d\x00e\x00\n\x00")
+	head := f.commitAt("2026-01-01T00:00:00Z", "text and nul", "plain.txt", "wide.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitClean {
+		t.Fatalf("exit %d, want %d\n%s\n%s", code, exitClean, stdout, stderr)
+	}
+	for _, want := range []string{"1 NUL-containing blob(s) were not examined", "UTF-16 text"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report does not say %q:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -574,5 +663,82 @@ func TestThePrivateHalfReadsTheInventoryAndRecordsBesideIt(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.dir, filepath.FromSlash(publicBaselinePath))); err == nil {
 		t.Error("the private half wrote into this repository. A public file cannot hold an " +
 			"exception to a private rule without naming the thing it excuses")
+	}
+}
+
+// TestThePrivateLedgerContainsOnlyTheDeltaFromThePublicLedger keeps one
+// published fact in one home. The private vocabulary includes the public
+// rules, but findings already accepted by the public ledger must neither
+// be reported nor copied into the ledger beside the inventory.
+func TestThePrivateLedgerContainsOnlyTheDeltaFromThePublicLedger(t *testing.T) {
+	f := newFixture(t)
+	f.write("public.txt", toyMatch+"\n")
+	f.write("estate.txt", "the box is called zzq-box-7\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "two kinds", "public.txt", "estate.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	if code, stdout, stderr := scanned(t, "-repo", f.dir, "-public", "-write-baseline"); code != exitUndetermined {
+		t.Fatalf("recording the public control exited %d\n%s\n%s", code, stdout, stderr)
+	}
+
+	outside := t.TempDir()
+	inventory := filepath.Join(outside, "inventory.txt")
+	if err := os.WriteFile(inventory, []byte("estate-box  zzq-box-[0-9]+\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-inventory", inventory)
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d\n%s\n%s", code, exitFindings, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "estate-box") {
+		t.Errorf("the private finding was not reported:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "marker-id") {
+		t.Errorf("a finding already recorded publicly was re-reported privately:\n%s", stdout)
+	}
+
+	if code, stdout, stderr = scanned(t, "-repo", f.dir, "-inventory", inventory,
+		"-write-baseline"); code != exitUndetermined {
+		t.Fatalf("recording the private delta exited %d\n%s\n%s", code, stdout, stderr)
+	}
+	privateLedger := filepath.Join(outside, privateBaselineName)
+	entries, err := loadBaseline(privateLedger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].PatternID != "estate-box" {
+		t.Errorf("the private ledger contains %+v, want only the inventory finding", entries)
+	}
+	data, err := os.ReadFile(privateLedger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "-public -write-baseline") ||
+		!strings.Contains(string(data), "-inventory <path> -write-baseline") {
+		t.Errorf("the private ledger's producer header names the wrong mode:\n%s", data)
+	}
+}
+
+// TestAnInventoryIDCannotCollideWithAPublicID protects finding identity.
+// Adding the rule text to identity is forbidden, so the only honest
+// answer to two vocabularies assigning one id is to refuse them.
+func TestAnInventoryIDCannotCollideWithAPublicID(t *testing.T) {
+	f := newFixture(t)
+	f.write("plain.txt", "an ordinary line\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "plain", "plain.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	inventory := filepath.Join(t.TempDir(), "inventory.txt")
+	if err := os.WriteFile(inventory, []byte("marker-id  another-pattern\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := scanned(t, "-repo", f.dir, "-inventory", inventory)
+	if code != exitUndetermined {
+		t.Fatalf("exit %d, want %d — two rules were given one finding identity", code,
+			exitUndetermined)
+	}
+	if !strings.Contains(stderr, "could not be distinguished") {
+		t.Errorf("the refusal does not explain the identity collision: %s", stderr)
 	}
 }

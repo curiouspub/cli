@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // FetchRefspec is what this scan's universe IS, written once.
@@ -21,11 +22,14 @@ import (
 // they stop agreeing is the day a rewrite orphans content — which is
 // exactly when somebody needs this to be trustworthy.
 //
-// refs/pull/* IS EXCLUDED BY RULING, and the reason is that it is
-// covered rather than that it is harmless: a pull request's content is
-// read at pull-request time by the surface check and by the suite, before
-// anything can be merged. Scanning it here would report on text that was
-// never published to a branch and can still be rewritten by its author.
+// refs/pull/* IS EXCLUDED BY RULING. THIS LEAVES A KNOWN, ACCEPTED GAP:
+// neither the surface check nor the suite reads file content from a pull
+// request's intermediate commits, and a squash merge can leave those
+// blobs reachable only from the advertised pull head. Scanning that
+// mutable namespace would make never-branch-published content part of
+// this scan's universe, and the ruling is not to do so. Merge-queue refs
+// land under refs/heads/* and remain included, so a non-squash candidate
+// tree is read before it lands.
 var FetchRefspec = []string{
 	"+refs/heads/*:refs/remotes/origin/*",
 	"+refs/tags/*:refs/tags/*",
@@ -115,40 +119,81 @@ type blob struct {
 // merge diffs and walks one ancestry. Merge commits are included here by
 // construction, because a blob is a blob however it entered.
 func (r repo) Blobs(refs []string) ([]blob, error) {
-	listed, err := r.run(append([]string{"rev-list", "--objects"}, refs...)...)
+	listed, err := r.run(append([]string{"rev-list"}, refs...)...)
 	if err != nil {
 		return nil, err
+	}
+
+	commits := strings.Fields(listed)
+	trees := make([]string, len(commits))
+	type result struct {
+		at      int
+		listing string
+		err     error
+	}
+	jobs := make(chan int, len(commits))
+	results := make(chan result, len(commits))
+	for i := range commits {
+		jobs <- i
+	}
+	close(jobs)
+	workers := 8
+	if len(commits) < workers {
+		workers = len(commits)
+	}
+	var group sync.WaitGroup
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for i := range jobs {
+				listing, err := r.run("ls-tree", "-r", "-z", "--full-tree", commits[i])
+				results <- result{at: i, listing: listing, err: err}
+			}
+		}()
+	}
+	group.Wait()
+	close(results)
+	for result := range results {
+		if result.err != nil {
+			return nil, result.err
+		}
+		trees[result.at] = result.listing
 	}
 
 	paths := map[string][]string{}
 	seen := map[string]map[string]bool{}
 	var order []string
-	for _, line := range strings.Split(listed, "\n") {
-		sha, path, named := strings.Cut(line, " ")
-		if !named || path == "" || len(sha) == 0 {
-			// A commit is listed with no path. A tree has one, and is
-			// filtered out below by its type rather than by its name.
-			continue
-		}
-		if seen[sha] == nil {
-			seen[sha] = map[string]bool{}
-			order = append(order, sha)
-		}
-		if !seen[sha][path] {
-			seen[sha][path] = true
-			paths[sha] = append(paths[sha], path)
+	for _, tree := range trees {
+		// rev-list --objects gives an object ONE convenient name, not
+		// every path at which a blob is published. Walk every reachable
+		// commit's tree instead. Repeated trees and blobs are cheap here:
+		// only their names are revisited, and content is still streamed
+		// exactly once below.
+		for _, record := range strings.Split(tree, "\x00") {
+			meta, path, named := strings.Cut(record, "\t")
+			fields := strings.Fields(meta)
+			if !named || path == "" || len(fields) != 3 || fields[1] != "blob" {
+				continue
+			}
+			sha := fields[2]
+			if seen[sha] == nil {
+				seen[sha] = map[string]bool{}
+				order = append(order, sha)
+			}
+			if !seen[sha][path] {
+				seen[sha][path] = true
+				paths[sha] = append(paths[sha], path)
+			}
 		}
 	}
 
-	types, sizes, err := r.batchCheck(order)
+	_, sizes, err := r.batchCheck(order)
 	if err != nil {
 		return nil, err
 	}
 	var out []blob
 	for _, sha := range order {
-		if types[sha] != "blob" {
-			continue
-		}
 		sort.Strings(paths[sha])
 		out = append(out, blob{SHA: sha, Size: sizes[sha], Paths: paths[sha]})
 	}
