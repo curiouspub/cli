@@ -205,6 +205,7 @@ func (f *Failure) Quoting(detail string) *Failure {
 // ErrNotInteractive itself and this is what is left for one that has
 // none.
 var notInteractiveFailure = &Failure{
+	ID:   IDNeedsATerminal,
 	What: "curious needs a terminal for that.",
 	Why: "It had a question to ask you and no way to ask it. That happens when\n" +
 		"curious runs through a pipe, from a script, or inside a tool that\n" +
@@ -227,6 +228,7 @@ var notInteractiveFailure = &Failure{
 // that the answers were not understood, and it names the two words that
 // work. Nothing about it suggests anything is broken, because nothing is.
 var noAnswerFailure = &Failure{
+	ID:   IDAnswerNotUnderstood,
 	What: "Didn't catch that.",
 	Why: "curious asked the same question a few times and couldn't read any of\n" +
 		"the answers, so it stopped rather than keep asking.",
@@ -247,6 +249,12 @@ var noAnswerFailure = &Failure{
 // It names no time to come back, because this sentinel carries none. A
 // caller that knows one says so in the Failure it wraps.
 var serverClosedFailure = &Failure{
+	// THE SAME FAMILY AS THE FIVE STAGE-SPECIFIC ONES, ruled: the kill
+	// switch is our mechanism, not the user's diagnosis, and the stage
+	// that met it is not a family. This is the bare case — reached when
+	// the closed-door marker was used with no copy behind it — and a
+	// reader meeting it has met the same thing.
+	ID:   IDServiceUnavailable,
 	What: "curious.pub isn't taking this right now.",
 	Why: "The server is closed to this run — not because of anything wrong with\n" +
 		"your project, and not because of anything you did.",
@@ -480,6 +488,7 @@ const (
 // that.
 func (u *UI) Internal(err error) {
 	f := &Failure{
+		ID:   IDInternalFault,
 		What: internalWhat,
 		Why:  internalWhy,
 		Next: NextGiveUp,

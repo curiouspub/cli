@@ -154,6 +154,41 @@ func TestTheFailureContractHolds(t *testing.T) {
 	for _, p := range files {
 		rel := displayPath(root, p.path)
 		ast.Inspect(p.file, func(n ast.Node) bool {
+			// A COMPOSITE LITERAL IS A CONSTRUCTION TOO, and leaving it
+			// out is how four failures came to carry no id while this
+			// checker reported a clean census. Three of them were the
+			// standing failures a person meets when the program cannot
+			// ask them anything — no terminal, no usable answer, a closed
+			// door — and they rendered no id line at all.
+			//
+			// The checker's claim was "every production ui.Failure
+			// construction" and it visited only the ones built through a
+			// summarised helper. The claim was the thing that was wrong.
+			if lit, isLit := n.(*ast.CompositeLit); isLit {
+				if typeName(lit.Type) != "Failure" {
+					return true
+				}
+				pos := fset.Position(lit.Pos())
+				site := rel + ":" + itoa(pos.Line)
+				if _, inHelper := summaries[enclosingFunc(p.file, lit.Pos())]; inHelper {
+					return true
+				}
+				in := enclosingDecl(p.file, lit.Pos())
+				field := func(name string) ast.Expr {
+					for _, elt := range lit.Elts {
+						if kv, ok := elt.(*ast.KeyValueExpr); ok &&
+							calleeName(kv.Key) == name {
+							return kv.Value
+						}
+					}
+					return nil
+				}
+				obs = append(obs,
+					resolveIn(site, "ID", field("ID"), text, p, "id", in, 0),
+					resolveIn(site, "Next", field("Next"), text, p, "action", in, 0),
+					resolveIn(site, "NextText", field("NextText"), text, p, "text", in, 0))
+				return true
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -247,8 +282,12 @@ func TestTheFailureContractHolds(t *testing.T) {
 			"not an obligation that is satisfied. Use a supported form, extend the "+
 			"checker deliberately, or name the scenario test that covers it.", m)
 	}
+	// RECORDED FOR THE CENSUS ROW, which compares this against an
+	// independently written count of the tree's constructions. Two
+	// numbers from one enumeration would agree with themselves.
+	contractSitesVisited = len(obs) / 3
 	t.Logf("%d obligations across %d sites, %d invalid, %d unresolved",
-		len(obs), len(obs)/3, len(invalid), len(unresolved))
+		len(obs), contractSitesVisited, len(invalid), len(unresolved))
 }
 
 // verifySummary establishes a helper's relationship by READING ITS BODY.
@@ -604,46 +643,136 @@ func keyOf(message string) string {
 	return parts[0] + " " + parts[1]
 }
 
-// TestEveryScenarioCoverEntryNamesATestThatExists is the positive
-// control, and without it the map above is a list of excuses.
+// TestEveryScenarioCoverEntryAssertsTheNamedField.
 //
-// A covered entry pointing at a test nobody wrote reads exactly like
-// coverage and is none, which is the failure mode every baseline in this
-// estate is written against.
-func TestEveryScenarioCoverEntryNamesATestThatExists(t *testing.T) {
+// # The control that was one level too weak
+//
+// Its first form asserted only that the named test EXISTED. That is not
+// coverage, and the gap was found the day after it was written: the
+// entry for `upload.go:340 NextText` named a test that calls
+// `refusalCopy` as `id, action, _, _ :=` — discarding the copy entirely —
+// and then asserts on the id and the action and nothing else. A test
+// that exists, runs, passes, and never reads the field it is recorded as
+// covering.
+//
+// An entry naming a test that does not touch its field is the
+// baseline-shaped mute button with one extra step of indirection: the
+// list looks checked because something on the other end has the right
+// name.
+//
+// So the control reads the named test's BODY and requires an assertion
+// that mentions the field. That is deliberately a low bar — it does not
+// judge whether the assertion is a good one — but it is a bar the
+// existing miss fails, and a bar that cannot be met by naming.
+//
+// REQUIRED MUTATION, run 2026-09-12: point an entry at a test that does
+// not read its field. Reds here, naming both.
+func TestEveryScenarioCoverEntryAssertsTheNamedField(t *testing.T) {
 	root := moduleRoot(t)
 	if len(scenarioCovered) == 0 {
 		t.Skip("nothing is scenario-covered, so there is nothing to check")
 	}
-	sources := map[string]string{}
+	fset := token.NewFileSet()
+
+	// Index every test function body in the tree, by package.TestName.
+	bodies := map[string]*ast.FuncDecl{}
+	files := map[string]parsedFile{}
 	for _, path := range publishedTextFiles(t, root) {
 		if !strings.HasSuffix(path, "_test.go") {
 			continue
 		}
-		b, err := os.ReadFile(path)
+		src, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		sources[path] = string(b)
-	}
-	for obligation, named := range scenarioCovered {
-		pkgAndTest := strings.SplitN(named, ".", 2)
-		if len(pkgAndTest) != 2 {
-			t.Errorf("%s names %q, which is not package.TestName", obligation, named)
-			continue
+		f, perr := parser.ParseFile(fset, path, src, 0)
+		if perr != nil {
+			t.Fatalf("%s did not parse: %v", displayPath(root, path), perr)
 		}
-		want := "func " + pkgAndTest[1] + "("
-		found := false
-		for path, src := range sources {
-			if strings.Contains(path, "/"+pkgAndTest[0]+"/") && strings.Contains(src, want) {
-				found = true
-				break
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && strings.HasPrefix(fd.Name.Name, "Test") {
+				key := f.Name.Name + "." + fd.Name.Name
+				bodies[key] = fd
+				files[key] = parsedFile{path, f, src}
 			}
 		}
-		if !found {
+	}
+
+	for obligation, named := range scenarioCovered {
+		fd, ok := bodies[named]
+		if !ok {
 			t.Errorf("%s is recorded as covered by %s, and no such test exists. "+
 				"An entry naming a test nobody wrote reads exactly like coverage "+
 				"and is none", obligation, named)
+			continue
+		}
+		parts := strings.Fields(obligation)
+		if len(parts) < 2 {
+			t.Errorf("%q is not a <site> <field> key", obligation)
+			continue
+		}
+		field := parts[1]
+
+		// THE FIELD MUST APPEAR IN AN ASSERTION, not merely in the file.
+		// A mention in a comment, or in a struct being built as a
+		// fixture, is not the test reading the value under test.
+		p := files[named]
+		touched := false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			cond, ok := n.(*ast.IfStmt)
+			if !ok || cond.Cond == nil {
+				return true
+			}
+			lo := fset.Position(cond.Cond.Pos()).Offset
+			hi := fset.Position(cond.Cond.End()).Offset
+			if lo < 0 || hi > len(p.src) || lo > hi {
+				return true
+			}
+			// THE FIELD NAME, OR THE LOCAL A GO AUTHOR WOULD HOLD IT IN.
+			// A test reads the value out of a helper's returns into a
+			// lower-camel local — `nextText` for NextText — and that is
+			// the same field under the convention every Go file here
+			// follows. Matching only the exported spelling reported two
+			// tests as not asserting a field they assert on the next
+			// line; matching case-insensitively would let `valid` count
+			// as a mention of ID.
+			condText := string(p.src[lo:hi])
+			if strings.Contains(condText, field) ||
+				strings.Contains(condText, lowerFirst(field)) {
+				touched = true
+			}
+			return true
+		})
+		if !touched {
+			t.Errorf("%s is recorded as covered by %s, and that test never asserts "+
+				"on %s.\nThe checker cannot establish this obligation and the test "+
+				"named as covering it does not either, so nothing does — which is "+
+				"worse than an unresolved entry, because this one looks answered.",
+				obligation, named, field)
 		}
 	}
+}
+
+// lowerFirst is the field name as a Go local would spell it.
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// contractSitesVisited is how many construction sites the contract
+// checker last visited, and contractSiteCount is how the census row
+// obtains it without depending on test order.
+var contractSitesVisited int
+
+func contractSiteCount(t *testing.T) int {
+	t.Helper()
+	if contractSitesVisited == 0 {
+		// THE CENSUS ROW MUST NOT PASS BY RUNNING FIRST. Go orders tests
+		// within a package by declaration, and a row that silently read a
+		// zero would compare nothing against nothing and report clean.
+		TestTheFailureContractHolds(t)
+	}
+	return contractSitesVisited
 }

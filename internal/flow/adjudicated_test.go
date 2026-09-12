@@ -47,7 +47,7 @@ func TestARefusalInsideTheWindowSaysGiveUp(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	// The window is still open, which is what makes the diagnosis a
 	// mismatch rather than an expiry.
-	id, action, why, next := refusalCopy("store.example", now.Add(time.Hour), now)
+	id, action, why, nextText := refusalCopy("store.example", now.Add(time.Hour), now)
 
 	if id != ui.IDUploadSignatureMismatch {
 		t.Errorf("id = %q, want %q — a mismatch inside the window is not the "+
@@ -62,9 +62,10 @@ func TestARefusalInsideTheWindowSaysGiveUp(t *testing.T) {
 	// correction was to the action alone, and a row that let the words
 	// drift while checking the action would be the same defect facing
 	// the other way.
-	if !strings.Contains(next, "Please report this") || !strings.Contains(next, "curious version") {
+	if !strings.Contains(nextText, "Please report this") ||
+		!strings.Contains(nextText, "curious version") {
 		t.Errorf("the next-step copy changed; it should ask for a report and the "+
-			"version and nothing else:\n%s", next)
+			"version and nothing else:\n%s", nextText)
 	}
 	if !strings.Contains(why, "a fault in curious") {
 		t.Errorf("the why no longer names this as our fault:\n%s", why)
@@ -79,17 +80,31 @@ func TestTheOtherTwoRefusalBranchesKeepTheirOwnFamilies(t *testing.T) {
 
 	// No announced window: the server does not say when a link stops
 	// working, so this client cannot tell which refusal it met.
-	id, action, _, _ := refusalCopy("store.example", time.Time{}, now)
+	id, action, _, nextText := refusalCopy("store.example", time.Time{}, now)
 	if id != ui.IDUploadRefusedUnexplained || action != ui.NextFreshDeploy {
 		t.Errorf("unknown-expiry branch = (%q, %q), want (%q, %q)",
 			id, action, ui.IDUploadRefusedUnexplained, ui.NextFreshDeploy)
 	}
+	// THE COPY WAS DISCARDED HERE — `_, _` — while this test was recorded
+	// as what covers the next-step text the checker cannot resolve. It
+	// asserted the id and the action and nothing else, so the obligation
+	// had no coverage anywhere and the ledger said it did.
+	if !strings.Contains(nextText, "twice") {
+		t.Errorf("the unknown-expiry branch no longer asks the reader to report a "+
+			"second identical failure, which is the only action available when "+
+			"this client cannot say which refusal it met:\n%s", nextText)
+	}
 
 	// The window has closed: a fresh link is issued every run.
-	id, action, _, _ = refusalCopy("store.example", now.Add(-time.Hour), now)
+	id, action, _, nextText = refusalCopy("store.example", now.Add(-time.Hour), now)
 	if id != ui.IDUploadLinkExpired || action != ui.NextFreshDeploy {
 		t.Errorf("expired branch = (%q, %q), want (%q, %q)",
 			id, action, ui.IDUploadLinkExpired, ui.NextFreshDeploy)
+	}
+	if !strings.Contains(nextText, "fresh link") {
+		t.Errorf("the expired branch no longer tells the reader a fresh link is "+
+			"issued every run, which is the whole reason this one is worth "+
+			"retrying:\n%s", nextText)
 	}
 }
 
