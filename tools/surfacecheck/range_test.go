@@ -20,10 +20,30 @@ import (
 func clonedRepo(t *testing.T) *fixture {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "clone")
-	out, err := exec.Command("git", "clone", "--quiet", "--shared", moduleRoot(t), dir).CombinedOutput()
+	// gc.auto=0 IS NOT TIDINESS, IT IS THE FIX FOR A CLEANUP RACE.
+	//
+	// A clone can trip git's automatic gc, which runs in the BACKGROUND
+	// and keeps writing into .git/objects after the command that started
+	// it has returned. t.TempDir's cleanup then walks a tree something
+	// else is still creating files in, and RemoveAll fails with
+	// "directory not empty" — a red with a passing test body underneath
+	// it, which is the worst shape a flake can take because the assertion
+	// it interrupts had already succeeded.
+	//
+	// Seen on ubuntu-latest in a merge-queue run on 2026-09-12, where it
+	// ejected a pull request whose own change was a comment. Not
+	// reproducible locally, which is the other half of why it is worth
+	// preventing rather than retrying: a race that fails once in a queue
+	// costs a merge and leaves nothing to debug.
+	out, err := exec.Command("git", "-c", "gc.auto=0",
+		"clone", "--quiet", "--shared", moduleRoot(t), dir).CombinedOutput()
 	if err != nil {
 		t.Fatalf("cloning this repository: %v: %s", err, out)
 	}
+	// And the clone's own config, because a later git command inside the
+	// fixture can start the same background work the clone avoided.
+	f0 := &fixture{t: t, dir: dir, repo: repo{dir: dir}}
+	f0.git("config", "gc.auto", "0")
 	f := &fixture{t: t, dir: dir, repo: repo{dir: dir}}
 	f.git("config", "user.name", "surface check fixture")
 	f.git("config", "user.email", "fixture@example.invalid")

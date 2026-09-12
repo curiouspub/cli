@@ -298,6 +298,32 @@ YAML is a step nobody can run before pushing.
   A direct push is refused with *"Changes must be made through the merge
   queue"* — verified by attempting one.
 
+  **AND `gh pr merge` CANNOT QUEUE A PULL REQUEST HERE — 2026-09-12.**
+  Auto-merge is disabled at the repository level, and `gh` reaches the
+  queue THROUGH auto-merge: with checks already green it still answers
+
+  ```
+  ! The merge strategy for main is set by the merge queue
+  GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)
+  ```
+
+  and does so identically with a strategy flag, without one, and with the
+  bare form `gh` documents for queue-protected branches. The only path
+  that is not `--admin` — which BYPASSES the queue and is therefore not
+  the same act at all — is the mutation:
+
+  ```
+  PRID=$(gh pr view <N> --json id --jq .id)
+  gh api graphql -f query='mutation($id:ID!){ enqueuePullRequest(input:{pullRequestId:$id}){ mergeQueueEntry { position state } } }' -f id="$PRID"
+  ```
+
+  which answers `{"position":1,"state":"QUEUED"}` and then runs the
+  queue's own checks before landing. Recorded because the failure looks
+  like a permissions problem and is not one: every check was green, the
+  pull request was `CLEAN`, and the tool still refused. The reflex it
+  invites is `--admin`, which would merge past the very queue this
+  ruleset exists to enforce.
+
   **The seven required checks, spelled exactly as GitHub names them:**
 
   | required check |
