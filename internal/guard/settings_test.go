@@ -206,10 +206,15 @@ func failureParts(n ast.Node, text func(ast.Node) string) (whole, why, kind stri
 		name := calleeName(node.Fun)
 		switch name {
 		case "NewFailure":
-			if len(node.Args) < 2 {
+			// THE WHY IS ARGUMENT THREE, and it moved there when the
+			// constructor gained a family id. This guard reddened the day
+			// that happened, which is the behaviour to keep: a positional
+			// summary that is wrong about a signature must fail rather
+			// than read a neighbouring argument as the one it wanted.
+			if len(node.Args) < 3 {
 				return "", "", "", false
 			}
-			return text(node), text(node.Args[1]), "NewFailure", true
+			return text(node), text(node.Args[2]), "NewFailure", true
 		case "Quoted":
 			// NO WHY BY CONSTRUCTION. The middle paragraph is somebody
 			// else's sentence, so there is nowhere in this shape for a

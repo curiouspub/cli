@@ -147,6 +147,7 @@ func closedCapacityFailure(serverMessage string, resetsAt, now time.Time) *ui.Fa
 		why = capacityUsedUp
 	}
 	return ui.NewFailure(
+		ui.IDDailyCapacityClosed,
 		closedHeadline,
 		why, ui.NextWait,
 		"Try again "+afterTheReset(resetsAt, now)+". "+uploadedNothing).

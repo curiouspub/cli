@@ -64,6 +64,14 @@ const (
 )
 
 type Failure struct {
+	// ID is this failure's stable public identity. See FailureID.
+	//
+	// IT IS NOT DERIVED FROM ANYTHING HERE — not from the wording, not
+	// from the file that raised it. A headline can be improved and a call
+	// site can move; the id is what a troubleshooting entry, a support
+	// answer and an agent all match on, so it survives both.
+	ID FailureID
+
 	What string
 	Why  string
 
@@ -145,16 +153,16 @@ func (f *Failure) Error() string { return f.What }
 // the three parts are named at the call site — a positional
 // Failure{a, b, c} reads as three interchangeable strings, and they are
 // not: the third is the only one the reader can act on.
-func NewFailure(what, why string, next NextAction, nextText string) *Failure {
-	return &Failure{What: what, Why: why, Next: next, NextText: nextText}
+func NewFailure(id FailureID, what, why string, next NextAction, nextText string) *Failure {
+	return &Failure{ID: id, What: what, Why: why, Next: next, NextText: nextText}
 }
 
 // Quoted is a failure whose middle paragraph is somebody else's sentence
 // and nothing of ours — the commonest shape by far, because where the
 // server knows something this client does not, its words are the only
 // thing that carries it.
-func Quoted(what, detail string, next NextAction, nextText string) *Failure {
-	return &Failure{What: what, Detail: detail, Next: next, NextText: nextText}
+func Quoted(id FailureID, what, detail string, next NextAction, nextText string) *Failure {
+	return &Failure{ID: id, What: what, Detail: detail, Next: next, NextText: nextText}
 }
 
 // Quoting returns the failure with somebody else's sentence attached.
@@ -512,6 +520,16 @@ func (u *UI) ExitCode(err error) int {
 		// notice when it stops holding.
 		u.Fail(noAnswerFailure)
 		return 1
+	}
+
+	// A CLOSED DOOR IS NOT A FAILURE, and it is read before the Failure
+	// branches because it is neither one. It costs the scoped closed-door
+	// code — the run deployed nothing, so a script must be able to tell —
+	// and it renders its own copy. See Closed.
+	var closed *Closed
+	if errors.As(err, &closed) {
+		fmt.Fprint(u.err, u.renderClosed(closed))
+		return ExitServerClosed
 	}
 
 	// A Failure carries its own copy, written by whoever owns the check

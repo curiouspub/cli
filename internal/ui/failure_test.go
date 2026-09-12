@@ -366,7 +366,7 @@ func TestExitCode(t *testing.T) {
 			// spelling and the compiler enforces it; this row is the
 			// floor under that.
 			name:       "a Failure a caller constructed renders its own copy",
-			err:        NewFailure("Something specific went wrong.", "Because of this.", NextGiveUp, "Do that."),
+			err:        NewFailure(IDInternalFault, "Something specific went wrong.", "Because of this.", NextGiveUp, "Do that."),
 			wantCode:   1,
 			wantOnErr:  "Something specific went wrong.",
 			wantAbsent: internalWhat,
@@ -411,7 +411,7 @@ func TestExitCode(t *testing.T) {
 			// render serverClosedFailure unconditionally instead of the
 			// caller's copy. This row reds on the missing copy.
 			name:       "a marked Failure keeps its own copy and still costs the code",
-			err:        ServerClosed(NewFailure("We're full for today.", "Because of this.", NextGiveUp, "Come back at 12:15.")),
+			err:        ServerClosed(NewFailure(IDInternalFault, "We're full for today.", "Because of this.", NextGiveUp, "Come back at 12:15.")),
 			wantCode:   ExitServerClosed,
 			wantOnErr:  "Come back at 12:15.",
 			wantAbsent: internalWhat,
@@ -421,7 +421,7 @@ func TestExitCode(t *testing.T) {
 			// to an error on its way up, which is the only reason
 			// errors.Is is the right question to ask about it.
 			name:      "a wrapped closed door is still a closed door",
-			err:       fmt.Errorf("verifying the code: %w", ServerClosed(NewFailure("Full.", "Why.", NextGiveUp, "Next."))),
+			err:       fmt.Errorf("verifying the code: %w", ServerClosed(NewFailure(IDInternalFault, "Full.", "Why.", NextGiveUp, "Next."))),
 			wantCode:  ExitServerClosed,
 			wantOnErr: "Full.",
 		},
@@ -432,7 +432,7 @@ func TestExitCode(t *testing.T) {
 			// are not, and the scope would be described rather than
 			// asserted.
 			name:       "a stop that is not a closed door costs the ordinary code",
-			err:        NewFailure("Too many requests from here.", "Because of this.", NextGiveUp, "Try later."),
+			err:        NewFailure(IDInternalFault, "Too many requests from here.", "Because of this.", NextGiveUp, "Try later."),
 			wantCode:   1,
 			wantAbsent: internalWhat,
 			wantOnErr:  "Too many requests from here.",

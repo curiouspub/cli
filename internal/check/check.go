@@ -116,6 +116,16 @@ const (
 // serious it is, and what to tell the person or agent running the
 // deploy.
 type Finding struct {
+	// FailureID is the family id the failure built from this finding
+	// carries, when this finding is a hard stop.
+	//
+	// IT IS ON THE FINDING RATHER THAN DERIVED FROM CheckID, because a
+	// check is not a family: astro-dep is one check over five conditions
+	// with five different remedies, and a reader who hit one of them
+	// needs the entry for that one. Empty on a warning or a note, which
+	// never become a failure.
+	FailureID string
+
 	CheckID  string
 	Severity Severity
 	Message  string
@@ -362,3 +372,36 @@ func (s Severity) Declared() bool {
 	}
 	return false
 }
+
+// FailureFamily is a family id as the CHECK side names it, so a hard-stop
+// producer can state which family its finding becomes without importing
+// the rendering package.
+//
+// IT IS A STRING TYPE RATHER THAN THE ui CONSTANT because internal/check
+// sits under internal/ui in the dependency order and must stay there: the
+// checks are what produce findings, and the renderer is what turns some of
+// them into failures. A guard asserts the two vocabularies agree, which is
+// the same shape as every other pair of numbers in this estate that must
+// match and live in two files.
+type FailureFamily string
+
+// The hard-stop families the checks produce. A check with exactly ONE
+// failure uses its own id; a check with several uses <check>-<cause>,
+// and its own id is never one of them.
+const (
+	FamilyAstroDepMissing     FailureFamily = "astro-dep-missing"
+	FamilyAstroDepUnreadable  FailureFamily = "astro-dep-unreadable"
+	FamilyAstroDepInvalidJSON FailureFamily = "astro-dep-invalid-json"
+	FamilyAstroDepNotObject   FailureFamily = "astro-dep-not-object"
+	FamilyAstroDepAbsent      FailureFamily = "astro-dep-absent"
+
+	FamilyLockfileUnsupported FailureFamily = "lockfile-unsupported"
+	FamilyLockfileWorkspace   FailureFamily = "lockfile-workspace"
+	FamilyLockfileMissing     FailureFamily = "lockfile-missing"
+
+	FamilyLimitFiles    FailureFamily = "limit-files"
+	FamilyLimitFileSize FailureFamily = "limit-file-size"
+	FamilyLimitTotal    FailureFamily = "limit-total"
+	FamilyLimitPacked   FailureFamily = "limit-packed"
+	FamilyPathCharset   FailureFamily = "path-charset"
+)

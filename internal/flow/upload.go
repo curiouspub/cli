@@ -157,11 +157,12 @@ func (r *storeRefused) Unwrap() error { return r.failure }
 // a quotation rather than joined into this program's prose, so a line
 // break inside it cannot become a paragraph in ours. Empty where there
 // is nothing to quote.
-func uploadFailed(host string, status int, detail, why string,
+func uploadFailed(id ui.FailureID, host string, status int, detail, why string,
 	action ui.NextAction, next string) error {
 	return &storeRefused{
 		Status: status,
 		failure: ui.NewFailure(
+			id,
 			"curious couldn't upload the archive to "+host+".",
 			why+uploadLeftBehind, action,
 			next).Quoting(detail),
@@ -244,7 +245,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 
 	file, err := os.Open(deps.ArchivePath)
 	if err != nil {
-		return uploadFailed(host, 0, err.Error(),
+		return uploadFailed(ui.IDArchiveUnreadable, host, 0, err.Error(),
 			"The archive curious packed could not be opened to send it.",
 			ui.NextFreshDeploy, "Check that the temporary directory is readable, then run\n"+
 				"`curious deploy` again.")
@@ -296,7 +297,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 	if err != nil {
 		// THE UNDERLYING ERROR IS NOT WRAPPED, because net/http builds
 		// this one out of the URL it was handed.
-		return uploadFailed(host, 0, "",
+		return uploadFailed(ui.IDUploadAddressUnusable, host, 0, "",
 			"curious could not build the upload request for that address.",
 			ui.NextFreshDeploy, "Run `curious deploy` again. If it keeps happening, please report it.")
 	}
@@ -324,7 +325,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 		// builds its message from scratch and none of them touches err.
 		switch cause := context.Cause(reqCtx); {
 		case errors.Is(cause, errUploadStalled):
-			return uploadFailed(host, 0, "",
+			return uploadFailed(ui.IDUploadStalled, host, 0, "",
 				fmt.Sprintf("%s: no data was sent for %s. The connection is open but\n"+
 					"nothing is moving across it, so curious stopped rather than wait\n"+
 					"indefinitely.", uploadStalled, stall),
@@ -336,17 +337,17 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 			// window — exactly what having no ceiling of our own
 			// avoids — and the two could disagree.
 			why, next := expiredCopy()
-			return uploadFailed(host, 0, "", why, ui.NextFreshDeploy, next)
+			return uploadFailed(ui.IDUploadLinkExpired, host, 0, "", why, ui.NextFreshDeploy, next)
 
 		case sent.Load() == 0:
-			return uploadFailed(host, 0, "",
+			return uploadFailed(ui.IDUploadHostUnreachable, host, 0, "",
 				"curious "+couldNotReach+" "+host+" to send the archive. That usually\n"+
 					"means the connection dropped, or something between here and there\n"+
 					"is blocking it.",
 				ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
 		}
 
-		return uploadFailed(host, 0, "",
+		return uploadFailed(ui.IDUploadConnectionLost, host, 0, "",
 			connectionDropped+". It had reached "+host+" and\n"+
 				"was part way through when the connection failed.",
 			ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
@@ -358,7 +359,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 		return nil
 
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		return uploadFailed(host, resp.StatusCode, "",
+		return uploadFailed(ui.IDUploadRedirected, host, resp.StatusCode, "",
 			fmt.Sprintf("It answered %d, redirecting the upload somewhere else. curious\n"+
 				"does not follow a redirect when it is sending your project, because\n"+
 				"the address it was given is the only one the server signed.",
@@ -368,10 +369,10 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 
 	case resp.StatusCode == http.StatusForbidden:
 		why, next := refusalCopy(host, deps.ExpiresAt, deps.Now())
-		return uploadFailed(host, resp.StatusCode, "", why, ui.NextFreshDeploy, next)
+		return uploadFailed(ui.IDUploadRefusedUnexplained, host, resp.StatusCode, "", why, ui.NextFreshDeploy, next)
 	}
 
-	return uploadFailed(host, resp.StatusCode, "",
+	return uploadFailed(ui.IDUploadAnswerUnrecognised, host, resp.StatusCode, "",
 		fmt.Sprintf("It answered %d, and that is not an answer this client can\n"+
 			"explain.", resp.StatusCode),
 		ui.NextFreshDeploy, "Run `curious deploy` again. If it keeps happening, please report it\n"+

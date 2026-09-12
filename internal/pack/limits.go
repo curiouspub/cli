@@ -299,11 +299,12 @@ func fileCountFinding(files []File) (check.Finding, bool) {
 	}
 
 	return check.Finding{
-		CheckID:  check.IDLimitFiles,
-		Severity: check.SeverityHardStop,
-		Message:  headline,
-		What:     b.String(),
-		Why:      alreadyExcluded(),
+		CheckID:   check.IDLimitFiles,
+		FailureID: string(check.FamilyLimitFiles),
+		Severity:  check.SeverityHardStop,
+		Message:   headline,
+		What:      b.String(),
+		Why:       alreadyExcluded(),
 		Next: "Add whatever the site does not need to .gitignore, then run " +
 			"`curious deploy` again.",
 	}, true
@@ -337,9 +338,10 @@ func fileSizeFinding(files []File) (check.Finding, bool) {
 
 	listed := capped(over)
 	return check.Finding{
-		CheckID:  check.IDLimitFileSize,
-		Severity: check.SeverityHardStop,
-		Message:  headline,
+		CheckID:   check.IDLimitFileSize,
+		FailureID: string(check.FamilyLimitFileSize),
+		Severity:  check.SeverityHardStop,
+		Message:   headline,
 		// THE TABLE IS NOT WRITTEN HERE ANY MORE. This used to lay the
 		// offenders out in What and also set Paths, so the renderer
 		// printed them twice — once measured, once bare. The facts now
@@ -388,13 +390,14 @@ func totalSizeFinding(files []File) (check.Finding, bool) {
 
 	listed := capped(largest)
 	return check.Finding{
-		CheckID:  check.IDLimitTotal,
-		Severity: check.SeverityHardStop,
-		Message:  headline,
-		What:     headline + "\n\nThe largest files:" + andMore(len(largest)),
-		Paths:    check.NewPaths(pathsOfFiles(listed)...),
-		Sizes:    sizesOfFiles(listed),
-		Why:      alreadyExcluded(),
+		CheckID:   check.IDLimitTotal,
+		FailureID: string(check.FamilyLimitTotal),
+		Severity:  check.SeverityHardStop,
+		Message:   headline,
+		What:      headline + "\n\nThe largest files:" + andMore(len(largest)),
+		Paths:     check.NewPaths(pathsOfFiles(listed)...),
+		Sizes:     sizesOfFiles(listed),
+		Why:       alreadyExcluded(),
 		Next: "Add whatever the site does not need to .gitignore, or move large assets " +
 			"out of the project, then run `curious deploy` again.",
 	}, true
@@ -454,13 +457,14 @@ func packedFinding(fsys FS, root string, files []File, archive Archive) check.Fi
 	}
 
 	return check.Finding{
-		CheckID:  check.IDLimitPacked,
-		Severity: check.SeverityHardStop,
-		Message:  headline,
-		What:     b.String(),
-		Paths:    check.NewPaths(paths...),
-		Sizes:    sizes,
-		Why:      alreadyExcluded(),
+		CheckID:   check.IDLimitPacked,
+		FailureID: string(check.FamilyLimitPacked),
+		Severity:  check.SeverityHardStop,
+		Message:   headline,
+		What:      b.String(),
+		Paths:     check.NewPaths(paths...),
+		Sizes:     sizes,
+		Why:       alreadyExcluded(),
 		Next: "Remove one of those files, convert it to a format that compresses, or add " +
 			"it to .gitignore if the site does not need it, then run `curious deploy` again.",
 	}

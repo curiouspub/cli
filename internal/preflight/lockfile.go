@@ -95,7 +95,7 @@ func CheckLockfile(fsys FS, root string) Result {
 
 	if found := presentLockfiles(fsys, root, otherLockfiles); len(found) > 0 {
 		names := joinWithAnd(found)
-		return hardStop(check.IDLockfile,
+		return hardStop(check.IDLockfile, check.FamilyLockfileUnsupported,
 			fmt.Sprintf("The only lockfile here is %s, which curious can't install from.", names),
 			"No lockfile curious can install from.",
 			fmt.Sprintf("curious installs from package-lock.json, npm-shrinkwrap.json or\n"+
@@ -112,7 +112,7 @@ func CheckLockfile(fsys FS, root string) Result {
 	// What was wrong was only the instruction: telling somebody to
 	// create a file they already have, three directories up.
 	if marker, found := workspaceAbove(fsys, root); found {
-		return hardStop(check.IDLockfile,
+		return hardStop(check.IDLockfile, check.FamilyLockfileWorkspace,
 			"This is a package inside a workspace, and workspace projects aren't supported yet.",
 			"This looks like a package inside a workspace.",
 			fmt.Sprintf("curious deploys one standalone project. %s sits above this\n"+
@@ -134,7 +134,7 @@ func CheckLockfile(fsys FS, root string) Result {
 	// project carrying only an npm-shrinkwrap.json builds perfectly
 	// well, and a message naming two of them would tell its owner they
 	// have no lockfile.
-	return hardStop(check.IDLockfile, "No lockfile found.",
+	return hardStop(check.IDLockfile, check.FamilyLockfileMissing, "No lockfile found.",
 		"No lockfile found.",
 		"curious installs your dependencies from a lockfile, so it builds the\n"+
 			"exact versions you tested. Your project has package.json but no\n"+
