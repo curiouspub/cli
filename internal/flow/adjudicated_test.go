@@ -227,9 +227,9 @@ func TestAHardStopCarriesItsCheckFamilyIntoTheFailure(t *testing.T) {
 	}{
 		{"a producer that wrote its own next step",
 			"Add astro to package.json and run it again.",
-			ui.FailureID(check.FamilyAstroDepAbsent)},
+			ui.FailureID("astro-dep-absent")},
 		{"a producer that wrote none", "",
-			ui.FailureID(check.FamilyLockfileMissing)},
+			ui.FailureID("lockfile-missing")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := ownCopy(check.Finding{
@@ -273,7 +273,7 @@ func TestABlankNextStepFallsBackAndANonBlankOneIsKeptExactly(t *testing.T) {
 	}{
 		{"empty", "", false},
 		{"whitespace only", "   \n\t ", false},
-		{"non-blank is preserved byte for byte", "Do the specific thing.", true},
+		{"non-blank is preserved byte for byte", " \tDo the specific thing.\n ", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := ownCopy(check.Finding{
