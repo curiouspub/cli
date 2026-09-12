@@ -6,3 +6,5 @@ There is 1 thing to fix before this project will deploy:
 
 Fix what's listed above and run `curious deploy` again. Nothing has
 been uploaded.
+
+Failure ID: project-not-ready
