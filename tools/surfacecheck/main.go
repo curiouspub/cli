@@ -20,11 +20,26 @@
 //
 //   - A release note, which is authored after the tag and is not a git
 //     object at all.
+//
 //   - A message hand-edited in the merge button at the moment of merging.
 //     The push check on the default branch sees it AFTER publication,
 //     which is detection plus repair rather than enforcement, and calling
 //     it enforcement would be the claim this check exists because
 //     somebody made once already.
+//
+//   - A PULL REQUEST'S TITLE AND BODY, ON A PUSH-EVENT RUN. There are no
+//     pull request surfaces in a push event, so this job examines the
+//     commit range and nothing else, and passes. THE pull_request RUN IS
+//     THE VERDICT for those two surfaces; a green push run says nothing
+//     about them and must not be read as though it did.
+//
+//     Instance, 2026-09-12: a pull request's title and body carried a
+//     private task id, an epic number and a path into the private paper
+//     repository — three findings, all correct. The push-event run on the
+//     same commit was GREEN on this same check, because it had no title
+//     or body to read. Taken as the verdict it would have waved the leak
+//     through on a tick from a run structurally unable to see it, which
+//     is the same shape as a test that measures less than its name.
 //
 // Both are hand-checked, and a narrowed hand-check that names its scope
 // is a different artefact from a blanket one nobody performs.

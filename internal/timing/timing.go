@@ -1508,13 +1508,41 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 				StatedPace: 15 * time.Millisecond, Flushes: 36,
 				WorstFixtureGap: 38010583, ValidGapMin: 16393708,
 				ValidGapMedian: 16641500, ValidGapMax: 38010583}},
-		// 16.6084ms under the detector, 28.8472ms without it.
-		Windows: {WorstGap: 16656000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
+		// RETAKEN 2026-09-12, and this is the first windows record that
+		// keeps the WORSE OF TWO rather than the one that happened to be
+		// readable: 16.4248ms under the detector, 16.1268ms without it,
+		// twenty runs each. Runs is 40 because two passes stand behind
+		// it.
+		//
+		// WHAT PROMPTED THE RETAKE IS NOT WHAT THE RETAKE FOUND, and the
+		// excursion is kept here rather than discarded. A plain pass on
+		// 2026-09-12 reported 16.656ms exceeded with a worst gap of
+		// 31.708ms, and the probe said so itself: "the record is the one
+		// that is stale, not this run." Two fresh passes then came in at
+		// 16.4248ms and 16.1268ms, so the excursion did not reproduce —
+		// it was a runner, not a shift. It is written down because a
+		// number seen once on a hosted leg is still a number seen, and a
+		// record that silently drops it would re-arm the same warning the
+		// next time the runner hiccups while looking like the retake had
+		// settled something.
+		//
+		// EVEN THE EXCURSION CLEARS THE WINDOW BY 7×, which is why the
+		// window is unchanged at 230ms. Had 31.708ms been reproducible
+		// the margin would still hold; the retake is about the RECORD
+		// being honest, not about the bound being at risk.
+		//
+		// ValidGapMin and ValidGapMedian are reconstructed from the
+		// published ratios (1.05/1.06 of the 15ms pace), which carry two
+		// decimals — so they are good to about ±0.15ms, unlike every
+		// other field here, which the probe prints exactly. Said out loud
+		// because a reconstructed figure sitting in a column of measured
+		// ones is indistinguishable from a measured one.
+		Windows: {WorstGap: 16424800 * time.Nanosecond, Runs: 40, Date: "2026-09-12",
+			Integrity: &PaceIntegrity{Attempts: 40, Valid: 40, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 16287100, ValidGapMin: 15723400,
-				ValidGapMedian: 15844500, ValidGapMax: 16287100}},
+				WorstFixtureGap: 16264400, ValidGapMin: 15750000,
+				ValidGapMedian: 15900000, ValidGapMax: 16264400}},
 	},
 	SetBy: Darwin,
 }
