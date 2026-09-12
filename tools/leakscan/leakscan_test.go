@@ -5,8 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/rulefile"
 )
 
 // A TOY VOCABULARY IN A TOY REPOSITORY. Every row here needs content the
@@ -191,10 +194,10 @@ func TestTheUniverseIsOriginsRefsAndNotThisClones(t *testing.T) {
 	side := f.commitAt("2026-01-03T00:00:00Z", "rewritten", "rewritten.txt")
 	f.publish("refs/original/refs/heads/side", side)
 
-	// And a pull-request ref, which is checked before it can be merged.
+	// And a pull-request ref in the exact namespace excluded by ruling.
 	f.write("proposed.txt", toyMatch+" in a proposed commit\n")
 	proposed := f.commitAt("2026-01-04T00:00:00Z", "proposed", "proposed.txt")
-	f.publish("refs/remotes/origin/pull/1/head", proposed)
+	f.publish("refs/pull/1/head", proposed)
 
 	f.git("checkout", "--quiet", "main")
 	f.git("branch", "--quiet", "-D", "side")
@@ -210,6 +213,71 @@ func TestTheUniverseIsOriginsRefsAndNotThisClones(t *testing.T) {
 		if strings.Contains(stdout, out) {
 			t.Errorf("%s is in the universe and must not be:\n%s", out, stdout)
 		}
+	}
+}
+
+// TestObjectMembershipIncludesATagPointingDirectlyAtATree is the
+// permanent regression row for using a commit walk as the universe. The
+// matching blob has no commit at all: only a published tree tag reaches
+// it, so rev-list without --objects reports clean.
+func TestObjectMembershipIncludesATagPointingDirectlyAtATree(t *testing.T) {
+	f := newFixture(t)
+	f.write("clean.txt", "ordinary\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "clean", "clean.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	f.write("tree-only.txt", toyMatch+"\n")
+	f.git("add", "--", "tree-only.txt")
+	tree := strings.TrimSpace(f.git("write-tree"))
+	f.publish("refs/tags/tree-release", tree)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d — a tree tag's blob was omitted\n%s\n%s",
+			code, exitFindings, stdout, stderr)
+	}
+	for _, want := range []string{"public:marker-id", "tree-only.txt"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the tree-tag finding does not name %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// A direct blob tag has no tree path, but it is still a published object
+// and must still be handed to the engine. Empty path is the established
+// representation of a surface that is not a file.
+func TestObjectMembershipIncludesATagPointingDirectlyAtABlob(t *testing.T) {
+	f := newFixture(t)
+	f.write("uncommitted.txt", toyMatch+"\n")
+	blob := strings.TrimSpace(f.git("hash-object", "-w", "uncommitted.txt"))
+	f.publish("refs/tags/blob-release", blob)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d — a direct blob tag was not examined\n%s\n%s",
+			code, exitFindings, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "public:marker-id") {
+		t.Errorf("the direct blob finding is absent:\n%s", stdout)
+	}
+}
+
+// TestPullInTheMiddleOfALegalTagNameIsNotARefNamespace is the exact-
+// prefix row. `pull` is ordinary text after refs/tags/releases/ and does
+// not turn the tag into refs/pull/*.
+func TestPullInTheMiddleOfALegalTagNameIsNotARefNamespace(t *testing.T) {
+	f := newFixture(t)
+	f.write("clean.txt", "ordinary\n")
+	clean := f.commitAt("2026-01-01T00:00:00Z", "clean", "clean.txt")
+	f.publish("refs/remotes/origin/main", clean)
+	f.write("tag-only.txt", toyMatch+"\n")
+	head := f.commitAt("2026-01-02T00:00:00Z", "tagged", "tag-only.txt")
+	f.publish("refs/tags/releases/pull/v1", head)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings || !strings.Contains(stdout, "tag-only.txt") {
+		t.Fatalf("a legal tag containing /pull/ was excluded: exit %d\n%s\n%s",
+			code, stdout, stderr)
 	}
 }
 
@@ -299,24 +367,22 @@ func TestAUniverseWithNothingInItIsNotAPass(t *testing.T) {
 	}
 }
 
-// TestANULSkipIsSaidInWords keeps the deliberate binary policy visible
-// in a clean report. A count alone does not tell a reader that those
-// blobs were not examined or that UTF-16 text falls on the skipped side.
-func TestANULSkipIsSaidInWords(t *testing.T) {
+// TestANULDoesNotMakeTheRestOfABlobDisappear inverts the old binary-skip
+// row. The ordinary literal comes before a NUL, and remains a finding.
+func TestANULDoesNotMakeTheRestOfABlobDisappear(t *testing.T) {
 	f := newFixture(t)
-	f.write("plain.txt", "an ordinary line\n")
-	f.write("wide.txt", "w\x00i\x00d\x00e\x00\n\x00")
-	head := f.commitAt("2026-01-01T00:00:00Z", "text and nul", "plain.txt", "wide.txt")
+	f.write("clean.txt", "ordinary content\n")
+	f.write("mixed.bin", toyMatch+"\x00ordinary bytes after it\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "text and nul", "clean.txt", "mixed.bin")
 	f.publish("refs/remotes/origin/main", head)
 
 	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
-	if code != exitClean {
-		t.Fatalf("exit %d, want %d\n%s\n%s", code, exitClean, stdout, stderr)
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d — NUL suppressed an ordinary match\n%s\n%s",
+			code, exitFindings, stdout, stderr)
 	}
-	for _, want := range []string{"1 NUL-containing blob(s) were not examined", "UTF-16 text"} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("the report does not say %q:\n%s", want, stdout)
-		}
+	if !strings.Contains(stdout, "public:marker-id") || !strings.Contains(stdout, "2 read") {
+		t.Errorf("the NUL-containing blob was not fully counted and reported:\n%s", stdout)
 	}
 }
 
@@ -342,6 +408,161 @@ func TestTheFetchFlagReachesGitAndItsFailureIsNotAPass(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "could not be fetched") {
 		t.Errorf("the refusal does not say what failed: %s", stderr)
+	}
+}
+
+func TestAShallowBoundaryIsNotTheEndOfHistory(t *testing.T) {
+	f := newFixture(t)
+	f.write("plain.txt", "ordinary\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "plain", "plain.txt")
+	f.publish("refs/remotes/origin/main", head)
+	f.write(filepath.Join(".git", "shallow"), head+"\n")
+
+	code, _, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitUndetermined || !strings.Contains(stderr, "shallow repository") {
+		t.Fatalf("a shallow boundary was treated as complete history: exit %d\n%s", code, stderr)
+	}
+}
+
+func TestTheParallelTreeWalkReturnsEveryJobAndAnyError(t *testing.T) {
+	f := newFixture(t)
+	f.write("plain.txt", "ordinary\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "plain", "plain.txt")
+	r := repo{dir: f.dir}
+
+	roots := make([]string, 25)
+	for i := range roots {
+		roots[i] = head
+	}
+	trees, err := r.walkTrees(roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trees) != len(roots) {
+		t.Fatalf("the worker pool returned %d jobs, want %d", len(trees), len(roots))
+	}
+	for i, tree := range trees {
+		if tree == "" {
+			t.Errorf("job %d was dropped", i)
+		}
+	}
+	if _, err := r.walkTrees(append(roots, strings.Repeat("0", 40))); err == nil {
+		t.Error("a worker error was discarded and enumeration continued")
+	}
+}
+
+func TestEveryParentAndTheMergeTreeAreWalked(t *testing.T) {
+	f := newFixture(t)
+	f.write("root.txt", "ordinary\n")
+	root := f.commitAt("2026-01-01T00:00:00Z", "root", "root.txt")
+
+	f.git("checkout", "--quiet", "-b", "left", root)
+	f.write("left.txt", "ZZQ-1\n")
+	f.commitAt("2026-01-02T00:00:00Z", "left", "left.txt")
+	f.git("checkout", "--quiet", "-b", "right", root)
+	f.write("right.txt", "ZZQ-2\n")
+	right := f.commitAt("2026-01-03T00:00:00Z", "right", "right.txt")
+	f.git("checkout", "--quiet", "left")
+	f.git("merge", "--quiet", "--no-commit", right)
+	f.write("merge-only.txt", "ZZQ-3\n")
+	merged := f.commitAt("2026-01-04T00:00:00Z", "merge", "merge-only.txt")
+	f.publish("refs/remotes/origin/main", merged)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d\n%s\n%s", code, exitFindings, stdout, stderr)
+	}
+	for _, path := range []string{"left.txt", "right.txt", "merge-only.txt"} {
+		if !strings.Contains(stdout, path) {
+			t.Errorf("%s was not reached through the merge graph:\n%s", path, stdout)
+		}
+	}
+}
+
+func TestSymlinkBytesAreBlobsAndGitlinksAreNot(t *testing.T) {
+	f := newFixture(t)
+	if err := os.Symlink(toyMatch, filepath.Join(f.dir, "pointer")); err != nil {
+		t.Fatal(err)
+	}
+	head := f.commitAt("2026-01-01T00:00:00Z", "symlink", "pointer")
+	f.git("update-index", "--add", "--cacheinfo", "160000,"+head+",nested")
+	head = f.commitAt("2026-01-02T00:00:00Z", "gitlink")
+	f.publish("refs/remotes/origin/main", head)
+
+	refs, err := (repo{dir: f.dir}).Refs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, err := (repo{dir: f.dir}).Blobs(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range blobs {
+		for _, path := range b.Paths {
+			if path == "nested" {
+				t.Fatal("a gitlink commit entry was classified as a blob")
+			}
+		}
+	}
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings || !strings.Contains(stdout, "pointer") {
+		t.Fatalf("symlink target bytes were not scanned: exit %d\n%s\n%s", code, stdout, stderr)
+	}
+}
+
+func TestTreePathsPreserveCaseWithoutConsultingTheCheckout(t *testing.T) {
+	f := newFixture(t)
+	f.write("source.txt", toyMatch+"\n")
+	blob := strings.TrimSpace(f.git("hash-object", "-w", "source.txt"))
+	f.git("update-index", "--add", "--cacheinfo", "100644,"+blob+",Case.txt")
+	f.git("update-index", "--add", "--cacheinfo", "100644,"+blob+",case.txt")
+	head := f.commitAt("2026-01-01T00:00:00Z", "two cases")
+	f.publish("refs/remotes/origin/main", head)
+
+	refs, _ := (repo{dir: f.dir}).Refs()
+	blobs, err := (repo{dir: f.dir}).Blobs(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range blobs {
+		if b.SHA == blob {
+			want := []string{"Case.txt", "case.txt"}
+			if !reflect.DeepEqual(b.Paths, want) {
+				t.Fatalf("case-distinct paths became %q, want %q", b.Paths, want)
+			}
+			return
+		}
+	}
+	t.Fatal("the shared case-distinct blob was not enumerated")
+}
+
+func TestMissingGraphObjectsAndBlobContentAreErrors(t *testing.T) {
+	for _, object := range []string{"commit", "tree"} {
+		t.Run(object, func(t *testing.T) {
+			f := newFixture(t)
+			f.write("plain.txt", "ordinary\n")
+			head := f.commitAt("2026-01-01T00:00:00Z", "plain", "plain.txt")
+			f.publish("refs/remotes/origin/main", head)
+			sha := head
+			if object == "tree" {
+				sha = strings.TrimSpace(f.git("rev-parse", "HEAD^{tree}"))
+			}
+			if err := os.Remove(filepath.Join(f.dir, ".git", "objects", sha[:2], sha[2:])); err != nil {
+				t.Fatal(err)
+			}
+			refs, _ := (repo{dir: f.dir}).Refs()
+			if _, err := (repo{dir: f.dir}).Blobs(refs); err == nil {
+				t.Fatalf("a missing %s was accepted as complete traversal", object)
+			}
+		})
+	}
+
+	f := newFixture(t)
+	missing := strings.Repeat("0", 40)
+	if err := (repo{dir: f.dir}).contents([]string{missing}, func(string, []byte) error {
+		return nil
+	}); err == nil {
+		t.Fatal("missing blob content was treated as an examined blob")
 	}
 }
 
@@ -521,6 +742,25 @@ func TestTheLedgerIsExercisedPerEntry(t *testing.T) {
 	}
 }
 
+func TestLedgerPathsRoundTripEveryGitPathByteTheFormatCanCarry(t *testing.T) {
+	want := []entry{{
+		finding: finding{Blob: strings.Repeat("a", 40), PatternID: "public:marker-id"},
+		Reason:  "rewrite-ineligible",
+		Paths:   []string{"two words.txt", "a,b.txt", "a\ttab.txt", "a\nline.txt"},
+	}}
+	path := filepath.Join(t.TempDir(), "ledger.txt")
+	if err := os.WriteFile(path, []byte(renderBaseline("# ledger\n", want)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadBaseline(path)
+	if err != nil {
+		t.Fatalf("the ledger rejected its own output: %v", err)
+	}
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Paths, want[0].Paths) {
+		t.Errorf("paths round-tripped as %q, want %q", got[0].Paths, want[0].Paths)
+	}
+}
+
 // TestAnEntryThatMatchesNothingIsAFailure, in both of its forms: a blob
 // that is no longer reachable, and one that no longer matches the rule
 // its entry names. A ledger that accumulates lines nobody can check is a
@@ -530,8 +770,8 @@ func TestAnEntryThatMatchesNothingIsAFailure(t *testing.T) {
 	for _, row := range []struct {
 		name, swap string
 	}{
-		{"a blob that is not reachable", "0000000000000000000000000000000000000000 marker-id rewrite-ineligible leak.txt"},
-		{"a rule that does not fire on it", "%s term-01 rewrite-ineligible leak.txt"},
+		{"a blob that is not reachable", "0000000000000000000000000000000000000000 public:marker-id rewrite-ineligible leak.txt"},
+		{"a rule that does not fire on it", "%s public:term-01 rewrite-ineligible leak.txt"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			f, ledger := baselined(t)
@@ -707,7 +947,7 @@ func TestThePrivateLedgerContainsOnlyTheDeltaFromThePublicLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].PatternID != "estate-box" {
+	if len(entries) != 1 || entries[0].PatternID != "private:estate-box" {
 		t.Errorf("the private ledger contains %+v, want only the inventory finding", entries)
 	}
 	data, err := os.ReadFile(privateLedger)
@@ -717,6 +957,133 @@ func TestThePrivateLedgerContainsOnlyTheDeltaFromThePublicLedger(t *testing.T) {
 	if strings.Contains(string(data), "-public -write-baseline") ||
 		!strings.Contains(string(data), "-inventory <path> -write-baseline") {
 		t.Errorf("the private ledger's producer header names the wrong mode:\n%s", data)
+	}
+}
+
+// TestARetiredPublicIDCannotEraseAPrivateFinding is the namespace attack
+// in its smallest form. The public ledger remembers an id no active
+// public rule owns; an inventory later reuses the raw handle. Its
+// private: identity is different and must remain a finding.
+func TestARetiredPublicIDCannotEraseAPrivateFinding(t *testing.T) {
+	setup := func(t *testing.T, ledgerID string) (*fixture, string) {
+		t.Helper()
+		f := newFixture(t)
+		f.write("estate.txt", "zzq-retired-value\n")
+		head := f.commitAt("2026-01-01T00:00:00Z", "published", "estate.txt")
+		f.publish("refs/remotes/origin/main", head)
+		blob := strings.TrimSpace(f.git("rev-parse", "HEAD:estate.txt"))
+		f.write(publicBaselinePath, blob+" "+ledgerID+" rewrite-ineligible estate.txt\n")
+		inventory := filepath.Join(t.TempDir(), "inventory.txt")
+		if err := os.WriteFile(inventory, []byte("retired-rule  zzq-retired-value\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return f, inventory
+	}
+
+	t.Run("the old unnamespaced attack is refused", func(t *testing.T) {
+		f, inventory := setup(t, "retired-rule")
+		code, _, stderr := scanned(t, "-repo", f.dir, "-inventory", inventory)
+		if code != exitUndetermined || !strings.Contains(stderr, "outside the public namespace") {
+			t.Fatalf("an old public identity was allowed to subtract: exit %d\n%s", code, stderr)
+		}
+	})
+
+	t.Run("the same raw handle has a different origin", func(t *testing.T) {
+		f, inventory := setup(t, "public:retired-rule")
+		code, stdout, stderr := scanned(t, "-repo", f.dir, "-inventory", inventory)
+		if code != exitFindings {
+			t.Fatalf("exit %d, want %d — a retired public id erased a private finding\n%s\n%s",
+				code, exitFindings, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "private:retired-rule") {
+			t.Errorf("the private identity was not reported:\n%s", stdout)
+		}
+	})
+}
+
+// TestThePublicLedgerOwnsOnlyPublicIdentities covers both entrances: a
+// hand-edited ledger is refused when loaded, and the generator refuses
+// before it writes a private identity into the public file.
+func TestThePublicLedgerOwnsOnlyPublicIdentities(t *testing.T) {
+	f := newFixture(t)
+	f.write("plain.txt", "ordinary\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "plain", "plain.txt")
+	f.publish("refs/remotes/origin/main", head)
+	blob := strings.TrimSpace(f.git("rev-parse", "HEAD:plain.txt"))
+	f.write(publicBaselinePath, blob+" private:wrong-home rewrite-ineligible plain.txt\n")
+
+	code, _, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitUndetermined || !strings.Contains(stderr, "outside the public namespace") {
+		t.Fatalf("a private identity in the public ledger was accepted: exit %d\n%s", code, stderr)
+	}
+
+	ledger := filepath.Join(t.TempDir(), "public-ledger.txt")
+	found := map[finding]map[string]bool{
+		{Blob: blob, PatternID: "private:wrong-home"}: {"plain.txt": true},
+	}
+	var stdout, errs bytes.Buffer
+	if got := writeLedger(&stdout, &errs, ledger, found, "fixture", true); got != exitUndetermined {
+		t.Fatalf("generator exit %d, want %d", got, exitUndetermined)
+	}
+	if _, err := os.Stat(ledger); !os.IsNotExist(err) {
+		t.Errorf("the generator created the public ledger before refusing: %v", err)
+	}
+
+	inventory := filepath.Join(t.TempDir(), "inventory.txt")
+	if err := os.WriteFile(inventory, []byte("estate-box  zzq-estate-box\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	canonical := filepath.Join(f.dir, filepath.FromSlash(publicBaselinePath))
+	code, _, stderr = scanned(t, "-repo", f.dir, "-inventory", inventory,
+		"-baseline", canonical, "-write-baseline")
+	if code != exitUndetermined || !strings.Contains(stderr, "cannot use the public ledger") {
+		t.Errorf("an inventory run could target the public ledger: exit %d\n%s", code, stderr)
+	}
+}
+
+// TestAPrivateLiteralInAPublishedPathLivesOnlyInThePrivateLedger is the
+// precise property-4 row. Paths remain useful public context, but only
+// the private scan has the inventory that recognizes this path as a
+// finding, and only its outside ledger may record that identity.
+func TestAPrivateLiteralInAPublishedPathLivesOnlyInThePrivateLedger(t *testing.T) {
+	f := newFixture(t)
+	const publishedPath = "zzq-private-box.txt"
+	f.write(publishedPath, "ordinary content\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "named", publishedPath)
+	f.publish("refs/remotes/origin/main", head)
+
+	if code, stdout, stderr := scanned(t, "-repo", f.dir, "-public", "-write-baseline"); code != exitUndetermined {
+		t.Fatalf("public recording exited %d\n%s\n%s", code, stdout, stderr)
+	}
+	publicLedger := filepath.Join(f.dir, filepath.FromSlash(publicBaselinePath))
+	publicData, err := os.ReadFile(publicLedger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(publicData), publishedPath) {
+		t.Fatalf("the public ledger copied a private-path finding:\n%s", publicData)
+	}
+
+	outside := t.TempDir()
+	inventory := filepath.Join(outside, "inventory.txt")
+	if err := os.WriteFile(inventory, []byte("estate-box  zzq-private-box\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-inventory", inventory)
+	if code != exitFindings || !strings.Contains(stdout, "private:estate-box") {
+		t.Fatalf("the private scan missed the published path: exit %d\n%s\n%s", code, stdout, stderr)
+	}
+	if code, stdout, stderr = scanned(t, "-repo", f.dir, "-inventory", inventory,
+		"-write-baseline"); code != exitUndetermined {
+		t.Fatalf("private recording exited %d\n%s\n%s", code, stdout, stderr)
+	}
+	privateData, err := os.ReadFile(filepath.Join(outside, privateBaselineName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(privateData), "private:estate-box") ||
+		!strings.Contains(string(privateData), publishedPath) {
+		t.Errorf("the private ledger did not record the path finding:\n%s", privateData)
 	}
 }
 
@@ -740,5 +1107,134 @@ func TestAnInventoryIDCannotCollideWithAPublicID(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "could not be distinguished") {
 		t.Errorf("the refusal does not explain the identity collision: %s", stderr)
+	}
+}
+
+func TestFindingIdentityIsExactlyBlobAndNamespacedPatternID(t *testing.T) {
+	f := newFixture(t)
+	f.write(citationPatternsPath, "first-id  \\bZZQ-[0-9]+\\b\nsecond-id  \\bZZQ-[0-9]+\\b\n")
+	f.write("one.txt", toyMatch+"\n")
+	f.write("two.txt", toyMatch+"\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "copies", "one.txt", "two.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	rules, _, err := vocabulary(repo{dir: f.dir}, true, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, _ := (repo{dir: f.dir}).Refs()
+	blobs, err := (repo{dir: f.dir}).Blobs(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, _, _, err := scan(repo{dir: f.dir}, rules, blobs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("one blob under two rules produced %d identities, want 2: %+v", len(found), found)
+	}
+	for _, id := range []string{"public:first-id", "public:second-id"} {
+		var seen bool
+		for finding, paths := range found {
+			if finding.PatternID == id {
+				seen = true
+				if len(paths) != 2 {
+					t.Errorf("%s became %d path identities, want one finding with two paths", id, len(paths))
+				}
+			}
+		}
+		if !seen {
+			t.Errorf("missing identity for %s", id)
+		}
+	}
+}
+
+func TestBothPublicContentManifestsDriveMatching(t *testing.T) {
+	f := newFixture(t)
+	f.write("pattern.txt", toyMatch+"\n")
+	f.write("term.txt", "zzqcloud\n")
+	head := f.commitAt("2026-01-01T00:00:00Z", "both", "pattern.txt", "term.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d\n%s\n%s", code, exitFindings, stdout, stderr)
+	}
+	for _, id := range []string{"public:marker-id", "public:term-01"} {
+		if !strings.Contains(stdout, id) {
+			t.Errorf("the finding from %s is absent:\n%s", id, stdout)
+		}
+	}
+}
+
+func TestTheIDMigrationPreservedEveryRuleText(t *testing.T) {
+	r := repo{dir: filepath.Clean("../..")}
+	for _, path := range []string{citationPatternsPath, vendorTermsPath} {
+		before, err := r.run("show", "97cdb9d^:"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		afterData, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeRules := rulefile.ParseHistorical(path+" before ids", before)
+		afterRules, err := rulefile.Parse(path, string(afterData))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var beforeText, afterText []string
+		for _, rule := range beforeRules {
+			beforeText = append(beforeText, rule.Text)
+		}
+		for _, rule := range afterRules {
+			afterText = append(afterText, rule.Text)
+		}
+		if !reflect.DeepEqual(beforeText, afterText) {
+			t.Errorf("%s changed rule text during the id migration", path)
+		}
+	}
+}
+
+func TestCIIncludesOnlyThePublicHistoryScan(t *testing.T) {
+	root := filepath.Clean("../..")
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(makefile), "ci: guard-a-branch-to-work-on fmt vet build leak-scan test lint") {
+		t.Error("ci no longer includes the public leak scan")
+	}
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(workflow), "leak-scan-private") {
+		t.Error("the private target is reachable from the public CI workflow")
+	}
+}
+
+func TestNoBaselinedBlobOccursInHEAD(t *testing.T) {
+	r := repo{dir: filepath.Clean("../..")}
+	entries, err := loadBaseline(filepath.Join(r.dir, filepath.FromSlash(publicBaselinePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := r.run("ls-tree", "-r", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	headBlobs := map[string]bool{}
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[1] == "blob" {
+			headBlobs[fields[2]] = true
+		}
+	}
+	for _, entry := range entries {
+		if headBlobs[entry.Blob] {
+			t.Errorf("baselined blob %s still occurs in HEAD", short(entry.Blob))
+		}
 	}
 }

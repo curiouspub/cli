@@ -80,7 +80,14 @@ func New(patterns, vendorTerms []rulefile.Rule) (Rules, error) {
 		r.patterns = append(r.patterns, pattern{id: rule.ID, re: re})
 	}
 	for _, rule := range vendorTerms {
-		r.vendor[strings.ToLower(rule.Text)] = rule.ID
+		term := strings.ToLower(rule.Text)
+		tokens := citations.IdentifierTokens(rule.Text)
+		if len(tokens) != 1 || !tokens[term] {
+			return Rules{}, fmt.Errorf("the provider rule %s is not one identifier token; "+
+				"inline comments, separators and invisible characters would make it a map key "+
+				"that content can never match", rule.ID)
+		}
+		r.vendor[term] = rule.ID
 	}
 	return r, nil
 }

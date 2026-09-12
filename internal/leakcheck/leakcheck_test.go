@@ -213,6 +213,29 @@ func TestAPatternThatCannotCompileIsNamedByItsId(t *testing.T) {
 	}
 }
 
+// TestAProviderRuleMustBeOneReachableToken closes a loader gap where an
+// inline note or invisible BOM became part of the map key. The manifest
+// parsed, but no content could ever produce that exact token.
+func TestAProviderRuleMustBeOneReachableToken(t *testing.T) {
+	patterns := []rulefile.Rule{{ID: "pattern", Text: "x"}}
+	for _, row := range []struct {
+		name, text string
+	}{
+		{"an inline note", "zzqcloud # note"},
+		{"a BOM after the separator", "\ufeffzzqcloud"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			_, err := leakcheck.New(patterns, []rulefile.Rule{{ID: "term-01", Text: row.text}})
+			if err == nil {
+				t.Fatal("an unreachable provider map key was accepted")
+			}
+			if !strings.Contains(err.Error(), "term-01") || strings.Contains(err.Error(), row.text) {
+				t.Errorf("the refusal should name the id without reproducing its text: %q", err)
+			}
+		})
+	}
+}
+
 // TestTheGoSumExemptionIsAColumn. The module path beside a checksum is
 // somebody's choice and go.sum keeps entries for modules no longer in the
 // graph, so excusing the whole line hides exactly the half worth reading.

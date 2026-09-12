@@ -34,7 +34,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -56,6 +55,11 @@ const (
 	exitClean        = 0
 	exitFindings     = 1
 	exitUndetermined = 2
+)
+
+const (
+	publicIDPrefix  = "public:"
+	privateIDPrefix = "private:"
 )
 
 // The manifests the public half of this scan reads. They are the two the
@@ -99,6 +103,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return exitUndetermined
 	}
+	canonicalPublicLedger := filepath.Join(r.dir, filepath.FromSlash(publicBaselinePath))
+	if *inventory != "" && samePath(ledgerPath, canonicalPublicLedger) {
+		fmt.Fprintf(stderr, "the private scan cannot use the public ledger at %s; private "+
+			"identities are recorded beside the inventory, never in the repository\n", ledgerPath)
+		return exitUndetermined
+	}
 
 	if *fetch {
 		if err := r.Fetch(); err != nil {
@@ -127,7 +137,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	enumerated := time.Since(started)
 
-	found, read, skipped, bytesRead, err := scan(r, rules, blobs)
+	found, read, bytesRead, err := scan(r, rules, blobs, *inventory != "")
 	if err != nil {
 		fmt.Fprintf(stderr, "the history could not be read: %v\n", err)
 		return exitUndetermined
@@ -145,12 +155,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUndetermined
 	}
 
-	fmt.Fprintf(stdout, "%d ref(s), %d blob(s), %d read (%d skipped as binary), %d byte(s)\n",
-		len(refs), len(blobs), read, skipped, bytesRead)
-	if skipped > 0 {
-		fmt.Fprintf(stdout, "%d NUL-containing blob(s) were not examined; UTF-16 text is "+
-			"included in that skipped count.\n", skipped)
-	}
+	fmt.Fprintf(stdout, "%d ref(s), %d blob(s), %d read, %d byte(s)\n",
+		len(refs), len(blobs), read, bytesRead)
 	fmt.Fprintf(stdout, "enumerated in %s, read and matched in %s\n",
 		enumerated.Round(time.Millisecond), (matched - enumerated).Round(time.Millisecond))
 
@@ -158,6 +164,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return exitUndetermined
+	}
+	if *public {
+		if err := requireNamespace(ledgerPath, ledger, publicIDPrefix); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return exitUndetermined
+		}
 	}
 	if *inventory != "" {
 		// THE PRIVATE LEDGER OWNS ONLY THE PRIVATE DELTA. Public matches
@@ -170,6 +182,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "%v\n", err)
 			return exitUndetermined
 		}
+		if err := requireNamespace(publicLedger, publicEntries, publicIDPrefix); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return exitUndetermined
+		}
 		found = withoutRecorded(found, publicEntries)
 	}
 
@@ -178,9 +194,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if *inventory != "" {
 			producer = "go run ./tools/leakscan -inventory <path> -write-baseline"
 		}
-		return writeLedger(stdout, stderr, ledgerPath, found, producer)
+		return writeLedger(stdout, stderr, ledgerPath, found, producer, *public)
 	}
 	return check(r, refs, stdout, ledgerPath, ledger, found, started, matchedAt)
+}
+
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && filepath.Clean(absA) == filepath.Clean(absB)
 }
 
 // vocabulary builds the rules for the mode that was asked for, and
@@ -231,6 +253,8 @@ func vocabulary(r repo, public bool, inventory, baselinePath string) (leakcheck.
 		}
 	}
 
+	patterns = namespaceRules(patterns, publicIDPrefix)
+	terms = namespaceRules(terms, publicIDPrefix)
 	ledgerPath := filepath.Join(r.dir, filepath.FromSlash(publicBaselinePath))
 	if inventory != "" {
 		// REFUSING WHEN IT CANNOT LOOK, and this is where that principle
@@ -258,7 +282,7 @@ func vocabulary(r repo, public bool, inventory, baselinePath string) (leakcheck.
 					"could not be distinguished from the public one", rule.ID, first)
 			}
 		}
-		patterns = append(patterns, declared...)
+		patterns = append(patterns, namespaceRules(declared, privateIDPrefix)...)
 		ledgerPath = defaultPrivateBaseline(baselinePath, inventory)
 	}
 	if baselinePath != "" {
@@ -275,6 +299,15 @@ func vocabulary(r repo, public bool, inventory, baselinePath string) (leakcheck.
 			len(patterns), len(terms))
 	}
 	return rules, ledgerPath, nil
+}
+
+func namespaceRules(rules []rulefile.Rule, prefix string) []rulefile.Rule {
+	out := make([]rulefile.Rule, len(rules))
+	for i, rule := range rules {
+		rule.ID = prefix + rule.ID
+		out[i] = rule
+	}
+	return out
 }
 
 // defaultPrivateBaseline puts the private ledger beside the inventory it
@@ -312,7 +345,7 @@ func manifest(r repo, name string) ([]rulefile.Rule, error) {
 // finding under one name and exempt under another — and content published
 // at a path where it is a finding is published, whatever else it was also
 // called.
-func scan(r repo, rules leakcheck.Rules, blobs []blob) (map[finding]map[string]bool, int, int, int64, error) {
+func scan(r repo, rules leakcheck.Rules, blobs []blob, scanPrivatePaths bool) (map[finding]map[string]bool, int, int64, error) {
 	found := map[finding]map[string]bool{}
 	shas := make([]string, 0, len(blobs))
 	paths := map[string][]string{}
@@ -321,31 +354,40 @@ func scan(r repo, rules leakcheck.Rules, blobs []blob) (map[finding]map[string]b
 		paths[b.SHA] = b.Paths
 	}
 
-	read, skipped := 0, 0
+	read := 0
 	var bytesRead int64
 	err := r.contents(shas, func(sha string, content []byte) error {
-		// A BLOB WITH A NUL BYTE IS NOT TEXT, and the engine reads lines.
-		// The count is reported rather than swallowed: a blob nobody read
-		// is not a blob that came back clean.
-		if bytes.IndexByte(content, 0) >= 0 {
-			skipped++
-			return nil
-		}
+		// EVERY BYTE IS EXAMINED. NUL is data, not permission to skip the
+		// rest of a blob; the engine's line logic can still find ordinary
+		// text on either side of it.
 		read++
 		bytesRead += int64(len(content))
 		text := string(content)
 		for _, path := range paths[sha] {
 			for _, m := range rules.Check(path, text) {
-				f := finding{Blob: sha, PatternID: m.PatternID}
-				if found[f] == nil {
-					found[f] = map[string]bool{}
+				addFinding(found, finding{Blob: sha, PatternID: m.PatternID}, path)
+			}
+			if scanPrivatePaths && path != "" {
+				// A published path is published text too. Only private rules are
+				// applied here: the public scan owns public findings, while the
+				// private scan must catch an inventory literal used as a name.
+				for _, m := range rules.Check("", path) {
+					if strings.HasPrefix(m.PatternID, privateIDPrefix) {
+						addFinding(found, finding{Blob: sha, PatternID: m.PatternID}, path)
+					}
 				}
-				found[f][path] = true
 			}
 		}
 		return nil
 	})
-	return found, read, skipped, bytesRead, err
+	return found, read, bytesRead, err
+}
+
+func addFinding(found map[finding]map[string]bool, f finding, path string) {
+	if found[f] == nil {
+		found[f] = map[string]bool{}
+	}
+	found[f][path] = true
 }
 
 // check compares what was found against the ledger and decides the exit
@@ -402,7 +444,10 @@ func check(r repo, refs []string, stdout io.Writer, ledgerPath string, ledger []
 
 	for _, f := range unrecorded {
 		where := strings.Join(sortedPaths(found[f]), ", ")
-		earliest := "no commit in the universe contains it, which should be impossible"
+		if where == "" {
+			where = "a directly referenced blob"
+		}
+		earliest := "no commit in the universe contains it; a selected ref reaches it directly"
 		if sha, ok := attribution[f.Blob]; ok {
 			earliest = "earliest commit containing it: " + short(sha)
 		}
@@ -443,7 +488,16 @@ func check(r repo, refs []string, stdout io.Writer, ledgerPath string, ledger []
 // checked anything. Spelling that as a pass would make "write the
 // baseline" a way to turn the gate green.
 func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]map[string]bool,
-	producer string) int {
+	producer string, publicLedger bool) int {
+	if publicLedger {
+		for f := range found {
+			if !strings.HasPrefix(f.PatternID, publicIDPrefix) {
+				fmt.Fprintf(stderr, "refusing to write private identity %s to the public ledger %s\n",
+					f.PatternID, ledgerPath)
+				return exitUndetermined
+			}
+		}
+	}
 	entries := make([]entry, 0, len(found))
 	for f, paths := range found {
 		entries = append(entries, entry{
@@ -463,8 +517,8 @@ func writeLedger(stdout, stderr io.Writer, ledgerPath string, found map[finding]
 # The same content at another path under the same rule is the same
 # finding; a different rule firing on the same content is a new one.
 #
-# Four fields: the blob, the rule's id, the reason it stays, and the
-# comma-separated paths it was seen at when this line was written. The
+# Four fields: the blob, the namespaced rule id, the reason it stays, and
+# a JSON array of paths it was seen at when this line was written. The
 # paths are CONTEXT — they are what makes a line readable a year later —
 # and they are not part of what is compared.
 #
@@ -495,9 +549,21 @@ func withoutRecorded(found map[finding]map[string]bool, recorded []entry) map[fi
 		out[f] = paths
 	}
 	for _, e := range recorded {
-		delete(out, e.finding)
+		if strings.HasPrefix(e.PatternID, publicIDPrefix) {
+			delete(out, e.finding)
+		}
 	}
 	return out
+}
+
+func requireNamespace(path string, entries []entry, prefix string) error {
+	for _, e := range entries {
+		if !strings.HasPrefix(e.PatternID, prefix) {
+			return fmt.Errorf("%s:%d records identity %s outside the %s namespace",
+				path, e.Line, e.PatternID, strings.TrimSuffix(prefix, ":"))
+		}
+	}
+	return nil
 }
 
 func sortedPaths(set map[string]bool) []string {

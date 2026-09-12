@@ -46,8 +46,13 @@ var universeRefs = []string{"refs/remotes/origin/", "refs/tags/"}
 type repo struct{ dir string }
 
 func (r repo) run(args ...string) (string, error) {
+	return r.runInput("", args...)
+}
+
+func (r repo) runInput(input string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.dir
+	cmd.Stdin = strings.NewReader(input)
 	var out, errs bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errs
@@ -89,7 +94,7 @@ func (r repo) Refs() ([]string, error) {
 		switch {
 		case name == "":
 		case name == "refs/remotes/origin/HEAD":
-		case strings.Contains(name, "/pull/"):
+		case strings.HasPrefix(name, "refs/pull/"):
 		default:
 			refs = append(refs, name)
 		}
@@ -119,27 +124,122 @@ type blob struct {
 // merge diffs and walks one ancestry. Merge commits are included here by
 // construction, because a blob is a blob however it entered.
 func (r repo) Blobs(refs []string) ([]blob, error) {
-	listed, err := r.run(append([]string{"rev-list"}, refs...)...)
+	shallow, err := r.run("rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(shallow) == "true" {
+		return nil, fmt.Errorf("this is a shallow repository, so reachable history ends at an " +
+			"artificial boundary; fetch the full history before scanning")
+	}
+
+	// MEMBERSHIP COMES FROM THE OBJECT WALK. A commit walk can supply
+	// attribution and every historical path, but it cannot even start at
+	// a tag that points directly at a tree or blob. rev-list --objects can,
+	// and therefore owns the answer to "which blobs are published?".
+	listed, err := r.runInput(strings.Join(refs, "\n")+"\n", "rev-list", "--objects",
+		"--no-object-names", "--stdin")
+	if err != nil {
+		return nil, err
+	}
+	var objects []string
+	seenObject := map[string]bool{}
+	for _, sha := range strings.Fields(listed) {
+		if !seenObject[sha] {
+			seenObject[sha] = true
+			objects = append(objects, sha)
+		}
+	}
+	types, sizes, err := r.batchCheck(objects)
 	if err != nil {
 		return nil, err
 	}
 
-	commits := strings.Fields(listed)
-	trees := make([]string, len(commits))
+	var order, commits []string
+	for _, sha := range objects {
+		switch types[sha] {
+		case "blob":
+			order = append(order, sha)
+		case "commit":
+			commits = append(commits, sha)
+		}
+	}
+
+	// Paths come from commit trees, independently of membership. Add any
+	// selected ref rooted directly at a tree: it has no commit to walk, but
+	// the paths in that published tree are still exact public names.
+	treeRoots := append([]string(nil), commits...)
+	for _, ref := range refs {
+		peeled, err := r.run("rev-parse", ref+"^{}")
+		if err != nil {
+			return nil, err
+		}
+		sha := strings.TrimSpace(peeled)
+		if types[sha] == "tree" {
+			treeRoots = append(treeRoots, sha)
+		}
+	}
+	trees, err := r.walkTrees(treeRoots)
+	if err != nil {
+		return nil, err
+	}
+
+	paths := map[string][]string{}
+	seen := map[string]map[string]bool{}
+	for _, sha := range order {
+		seen[sha] = map[string]bool{}
+	}
+	for _, tree := range trees {
+		// ls-tree -z is load-bearing: Git's quoted, newline-delimited form
+		// does not preserve arbitrary path bytes, and case folding through a
+		// checkout would erase two distinct public names on some filesystems.
+		for _, record := range strings.Split(tree, "\x00") {
+			meta, path, named := strings.Cut(record, "\t")
+			fields := strings.Fields(meta)
+			if !named || len(fields) != 3 || fields[1] != "blob" {
+				continue
+			}
+			sha := fields[2]
+			if seen[sha] == nil || seen[sha][path] {
+				continue
+			}
+			seen[sha][path] = true
+			paths[sha] = append(paths[sha], path)
+		}
+	}
+
+	var out []blob
+	for _, sha := range order {
+		sort.Strings(paths[sha])
+		if len(paths[sha]) == 0 {
+			// A tag may point directly at a blob. Empty path is the engine's
+			// established spelling for a published surface that is not a file.
+			paths[sha] = []string{""}
+		}
+		out = append(out, blob{SHA: sha, Size: sizes[sha], Paths: paths[sha]})
+	}
+	return out, nil
+}
+
+// walkTrees lists each commit/tree root concurrently and returns every
+// result in input order. Workers own no shared map: their only write is a
+// single buffered result, and one error makes the enumeration fail.
+func (r repo) walkTrees(roots []string) ([]string, error) {
+	trees := make([]string, len(roots))
 	type result struct {
 		at      int
 		listing string
 		err     error
 	}
-	jobs := make(chan int, len(commits))
-	results := make(chan result, len(commits))
-	for i := range commits {
+	jobs := make(chan int, len(roots))
+	results := make(chan result, len(roots))
+	for i := range roots {
 		jobs <- i
 	}
 	close(jobs)
 	workers := 8
-	if len(commits) < workers {
-		workers = len(commits)
+	if len(roots) < workers {
+		workers = len(roots)
 	}
 	var group sync.WaitGroup
 	for range workers {
@@ -147,7 +247,7 @@ func (r repo) Blobs(refs []string) ([]blob, error) {
 		go func() {
 			defer group.Done()
 			for i := range jobs {
-				listing, err := r.run("ls-tree", "-r", "-z", "--full-tree", commits[i])
+				listing, err := r.run("ls-tree", "-r", "-z", "--full-tree", roots[i])
 				results <- result{at: i, listing: listing, err: err}
 			}
 		}()
@@ -161,43 +261,7 @@ func (r repo) Blobs(refs []string) ([]blob, error) {
 		trees[result.at] = result.listing
 	}
 
-	paths := map[string][]string{}
-	seen := map[string]map[string]bool{}
-	var order []string
-	for _, tree := range trees {
-		// rev-list --objects gives an object ONE convenient name, not
-		// every path at which a blob is published. Walk every reachable
-		// commit's tree instead. Repeated trees and blobs are cheap here:
-		// only their names are revisited, and content is still streamed
-		// exactly once below.
-		for _, record := range strings.Split(tree, "\x00") {
-			meta, path, named := strings.Cut(record, "\t")
-			fields := strings.Fields(meta)
-			if !named || path == "" || len(fields) != 3 || fields[1] != "blob" {
-				continue
-			}
-			sha := fields[2]
-			if seen[sha] == nil {
-				seen[sha] = map[string]bool{}
-				order = append(order, sha)
-			}
-			if !seen[sha][path] {
-				seen[sha][path] = true
-				paths[sha] = append(paths[sha], path)
-			}
-		}
-	}
-
-	_, sizes, err := r.batchCheck(order)
-	if err != nil {
-		return nil, err
-	}
-	var out []blob
-	for _, sha := range order {
-		sort.Strings(paths[sha])
-		out = append(out, blob{SHA: sha, Size: sizes[sha], Paths: paths[sha]})
-	}
-	return out, nil
+	return trees, nil
 }
 
 // batchCheck asks git what each object is, in ONE process rather than one
@@ -206,6 +270,9 @@ func (r repo) Blobs(refs []string) ([]blob, error) {
 // afford to run on every push is a check that moves to a nightly job and
 // then to nowhere.
 func (r repo) batchCheck(shas []string) (map[string]string, map[string]int64, error) {
+	if len(shas) == 0 {
+		return map[string]string{}, map[string]int64{}, nil
+	}
 	cmd := exec.Command("git", "cat-file", "--batch-check")
 	cmd.Dir = r.dir
 	cmd.Stdin = strings.NewReader(strings.Join(shas, "\n") + "\n")
@@ -230,6 +297,11 @@ func (r repo) batchCheck(shas []string) (map[string]string, map[string]int64, er
 		types[fields[0]] = fields[1]
 		sizes[fields[0]] = size
 	}
+	for _, sha := range shas {
+		if types[sha] == "" {
+			return nil, nil, fmt.Errorf("git did not classify reachable object %s", sha)
+		}
+	}
 	return types, sizes, nil
 }
 
@@ -240,6 +312,9 @@ func (r repo) batchCheck(shas []string) (map[string]string, map[string]int64, er
 // a blob nobody looked at, and the whole point of the three exit codes is
 // that "I could not look" is not "I looked and found nothing".
 func (r repo) contents(shas []string, visit func(sha string, content []byte) error) error {
+	if len(shas) == 0 {
+		return nil
+	}
 	cmd := exec.Command("git", "cat-file", "--batch")
 	cmd.Dir = r.dir
 	cmd.Stdin = strings.NewReader(strings.Join(shas, "\n") + "\n")
@@ -252,32 +327,42 @@ func (r repo) contents(shas []string, visit func(sha string, content []byte) err
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	defer func() { _ = cmd.Wait() }()
+	abort := func(err error) error {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
 
 	reader := bufio.NewReaderSize(stdout, 1<<16)
 	for range shas {
 		header, err := reader.ReadString('\n')
 		if err != nil {
-			return fmt.Errorf("reading an object header: %w: %s", err, strings.TrimSpace(errs.String()))
+			return abort(fmt.Errorf("reading an object header: %w: %s", err,
+				strings.TrimSpace(errs.String())))
 		}
 		fields := strings.Fields(strings.TrimSpace(header))
 		if len(fields) != 3 {
-			return fmt.Errorf("git answered %q, which is not an object header", strings.TrimSpace(header))
+			return abort(fmt.Errorf("git answered %q, which is not an object header",
+				strings.TrimSpace(header)))
 		}
 		size, err := strconv.ParseInt(fields[2], 10, 64)
 		if err != nil {
-			return fmt.Errorf("git reported the size of %s as %q", fields[0], fields[2])
+			return abort(fmt.Errorf("git reported the size of %s as %q", fields[0], fields[2]))
 		}
 		content := make([]byte, size)
 		if _, err := io.ReadFull(reader, content); err != nil {
-			return fmt.Errorf("reading %s: %w", fields[0], err)
+			return abort(fmt.Errorf("reading %s: %w", fields[0], err))
 		}
 		if _, err := reader.Discard(1); err != nil {
-			return fmt.Errorf("reading past %s: %w", fields[0], err)
+			return abort(fmt.Errorf("reading past %s: %w", fields[0], err))
 		}
 		if err := visit(fields[0], content); err != nil {
-			return err
+			return abort(err)
 		}
+	}
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("reading %d object(s): %w: %s", len(shas), err,
+			strings.TrimSpace(errs.String()))
 	}
 	return nil
 }
@@ -305,7 +390,28 @@ type commit struct {
 // committer date, then topological position, then the object id, which
 // cannot tie.
 func (r repo) attributionOrder(refs []string) ([]commit, error) {
-	out, err := r.run(append([]string{"rev-list", "--topo-order", "--format=%at %ct"}, refs...)...)
+	var roots []string
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		sha, err := r.run("rev-parse", ref+"^{}")
+		if err != nil {
+			return nil, err
+		}
+		sha = strings.TrimSpace(sha)
+		types, _, err := r.batchCheck([]string{sha})
+		if err != nil {
+			return nil, err
+		}
+		if types[sha] == "commit" && !seen[sha] {
+			seen[sha] = true
+			roots = append(roots, sha)
+		}
+	}
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	out, err := r.runInput(strings.Join(roots, "\n")+"\n", "rev-list", "--topo-order",
+		"--format=%at %ct", "--stdin")
 	if err != nil {
 		return nil, err
 	}

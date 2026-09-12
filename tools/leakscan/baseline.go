@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -65,16 +66,16 @@ func loadBaseline(path string) ([]entry, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) != 4 {
+		fields, paths, err := baselineFields(line)
+		if err != nil {
 			return nil, fmt.Errorf("%s:%d has %d field(s) and an entry has four: the blob, "+
-				"the rule's id, the reason it stays, and the comma-separated paths it was "+
-				"seen at", path, lineNumber, len(fields))
+				"the rule's id, the reason it stays, and its encoded path list: %v",
+				path, lineNumber, len(fields), err)
 		}
 		e := entry{
 			finding: finding{Blob: fields[0], PatternID: fields[1]},
 			Reason:  fields[2],
-			Paths:   strings.Split(fields[3], ","),
+			Paths:   paths,
 			Line:    lineNumber,
 		}
 		if first, ok := seen[e.finding]; ok {
@@ -87,6 +88,32 @@ func loadBaseline(path string) ([]entry, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// baselineFields accepts the original whitespace/comma format so the
+// committed ledger can migrate in place, and uses tab-separated JSON for
+// every newly rendered line. JSON preserves spaces, commas, tabs and
+// newlines in Git paths without letting a path create another ledger row.
+func baselineFields(line string) ([]string, []string, error) {
+	if strings.Contains(line, "\t") {
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) != 4 {
+			return fields, nil, fmt.Errorf("the tab-separated form is incomplete")
+		}
+		var paths []string
+		if err := json.Unmarshal([]byte(fields[3]), &paths); err != nil {
+			return fields, nil, fmt.Errorf("decoding paths: %w", err)
+		}
+		if len(paths) == 0 {
+			return fields, nil, fmt.Errorf("the path list is empty")
+		}
+		return fields, paths, nil
+	}
+	fields := strings.Fields(line)
+	if len(fields) != 4 {
+		return fields, nil, fmt.Errorf("the legacy whitespace-separated form is incomplete")
+	}
+	return fields, strings.Split(fields[3], ","), nil
 }
 
 // renderBaseline writes a ledger back out, sorted, so that two runs
@@ -103,7 +130,14 @@ func renderBaseline(header string, entries []entry) string {
 	var b strings.Builder
 	b.WriteString(header)
 	for _, e := range sorted {
-		fmt.Fprintf(&b, "%s %s %s %s\n", e.Blob, e.PatternID, e.Reason, strings.Join(e.Paths, ","))
+		paths, err := json.Marshal(e.Paths)
+		if err != nil {
+			// A []string is always JSON-encodable. Keep the impossible case
+			// loud if that type changes rather than silently writing a broken
+			// ledger.
+			panic(err)
+		}
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", e.Blob, e.PatternID, e.Reason, paths)
 	}
 	return b.String()
 }

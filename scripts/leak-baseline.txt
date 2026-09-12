@@ -4,8 +4,8 @@
 # The same content at another path under the same rule is the same
 # finding; a different rule firing on the same content is a new one.
 #
-# Four fields: the blob, the rule's id, the reason it stays, and the
-# comma-separated paths it was seen at when this line was written. The
+# Four fields: the blob, the namespaced rule id, the reason it stays, and
+# a JSON array of paths it was seen at when this line was written. The
 # paths are CONTEXT — they are what makes a line readable a year later —
 # and they are not part of what is compared.
 #
@@ -20,35 +20,35 @@
 # FAILS, so this file cannot fill up with lines that mean nothing.
 #
 # Produced by: go run ./tools/leakscan -public -write-baseline
-039f2f7f2af8bb664fd5f79b7e606de4e4ba15b5 vendor-01 rewrite-ineligible CLAUDE.md
-0731cdf45b1a35c5a39cc37f76f4b60bef92ac07 private-artefact-phrase rewrite-ineligible internal/api/calls_test.go
-169ccb8e0e3ab58633c95a2f1467b0b317848b08 vendor-01 rewrite-ineligible CLAUDE.md
-2b13b9a4d7c317e791e5545648f53a427b540d03 private-register-name rewrite-ineligible internal/api/address_guard_test.go
-39ef5a144da10b9a698d756f68f46d04b2faf4d6 round-id rewrite-ineligible internal/timing/guard_test.go
-3ffcf575ea9d37c637f51bde1fad9b240bdb8efd vendor-01 rewrite-ineligible CLAUDE.md
-428a760aa07284f4972b53cc00702276aceae817 vendor-04 rewrite-ineligible scripts/citation-patterns.txt
-5382b5ae7beb70a32c750943c1f1690e4835a1a0 round-id rewrite-ineligible Makefile
-54d8e00906e172fa243a76f40a7008aa90db24c0 vendor-01 rewrite-ineligible CLAUDE.md
-54f78642f0ad3aed7628358c76a2e2c3767f18c8 round-id rewrite-ineligible internal/flow/deploy_test.go
-5e1ef97674b1a7f2f33eb81b4f44375e03d83fd8 section-sign rewrite-ineligible scripts/citation-patterns.txt
-5e1ef97674b1a7f2f33eb81b4f44375e03d83fd8 vendor-04 rewrite-ineligible scripts/citation-patterns.txt
-6282cd50b878ccafc801d90aabace28715f09f8f vendor-01 rewrite-ineligible internal/guard/guard_test.go
-66ecb8e0bb6812999736040d38ebda2109c3c141 private-artefact-phrase rewrite-ineligible internal/api/proxy_test.go
-69cc0a56e02ec1abde4c78aeaa9f3e655a8ea237 private-artefact-phrase rewrite-ineligible internal/api/client_test.go
-69cc0a56e02ec1abde4c78aeaa9f3e655a8ea237 private-possessive-phrase rewrite-ineligible internal/api/client_test.go
-7699ff96de82ee6ce937d3355de0379cddfe74b6 vendor-01 rewrite-ineligible internal/guard/guard_test.go
-7699ff96de82ee6ce937d3355de0379cddfe74b6 vendor-16 rewrite-ineligible internal/guard/guard_test.go
-7699ff96de82ee6ce937d3355de0379cddfe74b6 vendor-31 rewrite-ineligible internal/guard/guard_test.go
-7699ff96de82ee6ce937d3355de0379cddfe74b6 vendor-34 rewrite-ineligible internal/guard/guard_test.go
-7699ff96de82ee6ce937d3355de0379cddfe74b6 vendor-38 rewrite-ineligible internal/guard/guard_test.go
-7e6e626ec6602bb8cacdbfe970b864a7b0ff2e75 vendor-01 rewrite-ineligible CLAUDE.md
-82cbc6ebc10fd7d3e5f24a0f09da24520ba23b6d vendor-01 rewrite-ineligible internal/guard/guard_test.go
-9650c65085d2c8c6581a62ae1c8a5fe3259f7e85 vendor-01 rewrite-ineligible internal/guard/guard_test.go
-af0e6aad4bbc2f42861885b4de1028fb05aa4e4a task-id rewrite-ineligible internal/guard/wrapper_test.go
-b133c467cfb2562cce1ebedda8f31753ba1ebc6d round-id rewrite-ineligible internal/timing/registry_test.go
-b76a3b464279809dc605c1f9529edbb075f1dde9 vendor-01 rewrite-ineligible CLAUDE.md
-c9ed62aea8d52d9874aa2e31fc205f3a0e2997a5 round-id rewrite-ineligible internal/flow/socketpin_test.go
-ccedd995562178dd20dcb3f0e6a5574953f42355 section-sign rewrite-ineligible pkg/wire/wire.go
-e85efce05b5563c1f8fff6ff25c53d87cee3c187 private-artefact-phrase rewrite-ineligible internal/api/token_leak_test.go
-ff4947df8c453c98e0645c0ea8c4bc8c9ff11c35 vendor-04 rewrite-ineligible scripts/citation-patterns.txt
-ffaa8adbab670833cf9588f4302fa007c54e1aef vendor-01 rewrite-ineligible internal/guard/guard_test.go
+039f2f7f2af8bb664fd5f79b7e606de4e4ba15b5	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
+0731cdf45b1a35c5a39cc37f76f4b60bef92ac07	public:private-artefact-phrase	rewrite-ineligible	["internal/api/calls_test.go"]
+169ccb8e0e3ab58633c95a2f1467b0b317848b08	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
+2b13b9a4d7c317e791e5545648f53a427b540d03	public:private-register-name	rewrite-ineligible	["internal/api/address_guard_test.go"]
+39ef5a144da10b9a698d756f68f46d04b2faf4d6	public:round-id	rewrite-ineligible	["internal/timing/guard_test.go"]
+3ffcf575ea9d37c637f51bde1fad9b240bdb8efd	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
+428a760aa07284f4972b53cc00702276aceae817	public:vendor-04	rewrite-ineligible	["scripts/citation-patterns.txt"]
+5382b5ae7beb70a32c750943c1f1690e4835a1a0	public:round-id	rewrite-ineligible	["Makefile"]
+54d8e00906e172fa243a76f40a7008aa90db24c0	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
+54f78642f0ad3aed7628358c76a2e2c3767f18c8	public:round-id	rewrite-ineligible	["internal/flow/deploy_test.go"]
+5e1ef97674b1a7f2f33eb81b4f44375e03d83fd8	public:section-sign	rewrite-ineligible	["scripts/citation-patterns.txt"]
+5e1ef97674b1a7f2f33eb81b4f44375e03d83fd8	public:vendor-04	rewrite-ineligible	["scripts/citation-patterns.txt"]
+6282cd50b878ccafc801d90aabace28715f09f8f	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]
+66ecb8e0bb6812999736040d38ebda2109c3c141	public:private-artefact-phrase	rewrite-ineligible	["internal/api/proxy_test.go"]
+69cc0a56e02ec1abde4c78aeaa9f3e655a8ea237	public:private-artefact-phrase	rewrite-ineligible	["internal/api/client_test.go"]
+69cc0a56e02ec1abde4c78aeaa9f3e655a8ea237	public:private-possessive-phrase	rewrite-ineligible	["internal/api/client_test.go"]
+7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]
+7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-16	rewrite-ineligible	["internal/guard/guard_test.go"]
+7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-31	rewrite-ineligible	["internal/guard/guard_test.go"]
+7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-34	rewrite-ineligible	["internal/guard/guard_test.go"]
+7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-38	rewrite-ineligible	["internal/guard/guard_test.go"]
+7e6e626ec6602bb8cacdbfe970b864a7b0ff2e75	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
+82cbc6ebc10fd7d3e5f24a0f09da24520ba23b6d	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]
+9650c65085d2c8c6581a62ae1c8a5fe3259f7e85	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]
+af0e6aad4bbc2f42861885b4de1028fb05aa4e4a	public:task-id	rewrite-ineligible	["internal/guard/wrapper_test.go"]
+b133c467cfb2562cce1ebedda8f31753ba1ebc6d	public:round-id	rewrite-ineligible	["internal/timing/registry_test.go"]
+b76a3b464279809dc605c1f9529edbb075f1dde9	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
+c9ed62aea8d52d9874aa2e31fc205f3a0e2997a5	public:round-id	rewrite-ineligible	["internal/flow/socketpin_test.go"]
+ccedd995562178dd20dcb3f0e6a5574953f42355	public:section-sign	rewrite-ineligible	["pkg/wire/wire.go"]
+e85efce05b5563c1f8fff6ff25c53d87cee3c187	public:private-artefact-phrase	rewrite-ineligible	["internal/api/token_leak_test.go"]
+ff4947df8c453c98e0645c0ea8c4bc8c9ff11c35	public:vendor-04	rewrite-ineligible	["scripts/citation-patterns.txt"]
+ffaa8adbab670833cf9588f4302fa007c54e1aef	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]

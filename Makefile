@@ -131,9 +131,11 @@ test-go:
 # runner's own classified figures could not be recovered from a passing
 # job at all.
 #
-# It is on this target alone, not on test-go, because it is these two
-# packages that report measurements and the rest of the suite would
-# only add noise to the same log.
+# tools/leakscan joins the raced pass because its tree walk has a worker
+# pool. Its ordinary suite asserts that no job or error is dropped; the
+# detector asserts the other half, that workers share no mutable map.
+# Only the two timing packages are verbose because their measurements,
+# rather than merely their verdicts, are part of the gate's output.
 # BOTH CONDITIONS ARE RUN HERE, and both print. The rule these packages
 # keep is that a leg's number is the WORSE of the two conditions the
 # gate runs it in — and for as long as only the raced pass carried -v,
@@ -141,6 +143,7 @@ test-go:
 # figure and the other existed nowhere. A rule about two numbers needs
 # both of them on the log.
 test-race:
+	CGO_ENABLED=1 go test -race -count=1 -timeout 25m ./tools/leakscan/
 	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 	go test -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 
@@ -257,10 +260,11 @@ surface-check:
 #
 # WHAT IT COSTS, recorded here because the next person to ask "can we
 # afford this in CI" should have a number instead of an opinion: about
-# eleven seconds over 1,157 blobs, 347 commits and 20 MB, LOCAL, on Apple
-# arm64 — about 1.3 seconds to enumerate every blob-path membership and
-# 9.5 seconds to read and match. The former one-name enumeration took
-# about 0.6 seconds, so complete path membership adds about 0.7 seconds.
+# 10.8 seconds over 1,157 blobs and 20 MB, LOCAL, on Apple arm64,
+# measured 2026-09-12 after object-walk membership landed: 1.6 seconds to
+# enumerate every reachable object and blob-path membership, and 9.2
+# seconds to read and match. The former one-name enumeration took about
+# 0.6 seconds; complete membership and paths therefore add about a second.
 # A hosted runner is unmeasured; the first CI run records it per leg, and
 # the figure decays, because the cost grows with the history.
 #
