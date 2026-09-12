@@ -155,3 +155,20 @@ var ActiveFailureIDs = []FailureID{
 
 	IDNeedsATerminal, IDAnswerNotUnderstood, IDInternalFault,
 }
+
+// validAction reports whether an action is one of the four declared
+// values.
+//
+// IT IS MEMBERSHIP AND NOT INEQUALITY, and the difference is a defect
+// this estate shipped for a day. The rule it replaced was
+// `Next != NextNone`, which admits the ZERO VALUE — NextNone is the
+// string "None", so an unset field passed a test written to catch
+// exactly that, three lines under the comment explaining why the fourth
+// value exists.
+func validAction(a NextAction) bool {
+	switch a {
+	case NextNone, NextFreshDeploy, NextWait, NextGiveUp:
+		return true
+	}
+	return false
+}

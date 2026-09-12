@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/check"
 	"time"
 
 	"github.com/curiouspub/cli/internal/api"
@@ -180,6 +182,99 @@ func TestAnAnswerThisBuildCannotReadWaits(t *testing.T) {
 			// with no reason is advice a reader cannot act on twice.
 			if !strings.Contains(f.NextText, "older than the server") {
 				t.Errorf("the copy does not name the likely cause:\n%s", f.NextText)
+			}
+		})
+	}
+}
+
+// TestAHardStopCarriesItsCheckFamilyIntoTheFailure is the scenario the
+// contract checker cannot establish statically.
+//
+// ownCopy turns a check.Finding into a ui.Failure, and BOTH the family
+// id and the next-step copy arrive at run time off the finding. No
+// analysis of that call site can say which id it carries — the answer
+// depends on which producer made the finding — so the checker reports it
+// unresolved and points here.
+//
+// # Why a check is not a family
+//
+// astro-dep is ONE check over five conditions with five different
+// remedies. If the failure took its identity from the CheckID, a reader
+// who hit "package.json isn't valid JSON" and a reader who hit "astro
+// isn't a dependency" would be sent to the same troubleshooting entry,
+// which can only carry one fix. The family travels on the finding for
+// exactly that reason.
+func TestAHardStopCarriesItsCheckFamilyIntoTheFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		next string
+		want ui.FailureID
+	}{
+		{"a producer that wrote its own next step",
+			"Add astro to package.json and run it again.",
+			ui.FailureID(check.FamilyAstroDepAbsent)},
+		{"a producer that wrote none", "",
+			ui.FailureID(check.FamilyLockfileMissing)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := ownCopy(check.Finding{
+				CheckID:   check.IDAstroDep,
+				FailureID: string(tc.want),
+				Severity:  check.SeverityHardStop,
+				Message:   "something to fix",
+				What:      "Something to fix.",
+				Why:       "Because of a reason.",
+				Next:      tc.next,
+			})
+			if f.ID != tc.want {
+				t.Errorf("id = %q, want %q — the family travels on the finding, "+
+					"because one check covers several remedies", f.ID, tc.want)
+			}
+			// AND THE COPY IS NEVER BLANK, which is the other half the
+			// checker could not establish here. A producer that wrote no
+			// next step gets the standing one; a producer that wrote one
+			// keeps it byte for byte.
+			if strings.TrimSpace(f.NextText) == "" {
+				t.Error("the failure carries a blank next step")
+			}
+			if tc.next != "" && f.NextText != tc.next {
+				t.Errorf("the producer's own words were changed:\n got %q\nwant %q",
+					f.NextText, tc.next)
+			}
+		})
+	}
+}
+
+// TestABlankNextStepFallsBackAndANonBlankOneIsKeptExactly covers the
+// ruled predicate change: blank, not empty.
+//
+// A producer supplying whitespace used to pass the old `== ""` test and
+// hand a failure a next-step paragraph made of spaces, which renders as
+// a blank line and tells a reader nothing.
+func TestABlankNextStepFallsBackAndANonBlankOneIsKeptExactly(t *testing.T) {
+	for _, tc := range []struct {
+		name, next string
+		wantOwn    bool
+	}{
+		{"empty", "", false},
+		{"whitespace only", "   \n\t ", false},
+		{"non-blank is preserved byte for byte", "Do the specific thing.", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := ownCopy(check.Finding{
+				CheckID: check.IDLockfile, FailureID: string(check.FamilyLockfileMissing),
+				Severity: check.SeverityHardStop, Message: "m",
+				What: "W.", Why: "Y.", Next: tc.next,
+			})
+			switch {
+			case tc.wantOwn && f.NextText != tc.next:
+				t.Errorf("the producer's copy was altered:\n got %q\nwant %q",
+					f.NextText, tc.next)
+			case !tc.wantOwn && f.NextText == tc.next:
+				t.Errorf("a blank next step was kept as %q rather than falling back",
+					f.NextText)
+			case strings.TrimSpace(f.NextText) == "":
+				t.Error("the fallback itself is blank")
 			}
 		})
 	}

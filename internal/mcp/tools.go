@@ -186,6 +186,14 @@ func refusalText(err error) string {
 		if failure.Next != "" && failure.Next != ui.NextNone {
 			parts = append(parts, "What to do next: "+string(failure.Next))
 		}
+		// THE ID, for the same reason the terminal prints it and with
+		// more force here: this reader is a program. A headline is prose
+		// that gets reworded; an id is the handle a model can match on,
+		// carry into a follow-up call, and quote to a person without
+		// paraphrasing it into something else.
+		if failure.ID != "" {
+			parts = append(parts, ui.FailureIDLine(failure.ID))
+		}
 		return strings.Join(parts, "\n\n")
 	}
 

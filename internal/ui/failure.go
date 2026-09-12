@@ -315,8 +315,31 @@ func (u *UI) renderFailure(f *Failure) string {
 	if f.What != "" {
 		rendered[0] = u.styled(rendered[0])
 	}
-	return strings.Join(rendered, "\n\n") + "\n"
+	out := strings.Join(rendered, "\n\n") + "\n"
+
+	// THE ID, ON A LINE OF ITS OWN, AFTER THE COPY.
+	//
+	// It is metadata beside the message and never part of it: no authored
+	// paragraph grows an identifier inside it, Error() is unchanged, and
+	// a reader who does not care about the id can stop reading at the
+	// blank line above it.
+	//
+	// WHY PRINT IT AT ALL. An id that exists only in the struct satisfies
+	// every rule the catalog keeps and helps nobody — it is a token for
+	// support and for an agent, and neither can quote a field they never
+	// see. A person who reports "I get upload-link-expired" has said
+	// something exact; one who pastes a headline has said something that
+	// was reworded last month.
+	if f.ID != "" {
+		out += "\n" + failureIDPrefix + string(f.ID) + "\n"
+	}
+	return out
 }
+
+// failureIDPrefix labels the id line on both surfaces. One constant,
+// because a reader who learns to search for it in a terminal should find
+// the same words in an agent's transcript.
+const failureIDPrefix = "Failure ID: "
 
 // Escaped is the failure's parts, in the order they are shown, with
 // every one of them through the escape table.
@@ -564,3 +587,12 @@ func (u *UI) ExitCode(err error) int {
 	u.Internal(err)
 	return 1
 }
+
+// FailureIDLine renders the id line for a surface that assembles its own
+// paragraphs.
+//
+// IT EXISTS SO THE LABEL IS WRITTEN ONCE. The agent surface builds its
+// text from the failure's parts rather than from renderFailure, and a
+// second copy of "Failure ID: " there would be two strings that agree on
+// the day they are written and not afterwards.
+func FailureIDLine(id FailureID) string { return failureIDPrefix + string(id) }
