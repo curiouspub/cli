@@ -69,7 +69,6 @@ import (
 // surface can tell "no next step" from "nobody filled it in" — and that
 // assertion could not tell them apart.
 var validActions = map[string]bool{
-	"NextNone": true, "NextFreshDeploy": true, "NextWait": true, "NextGiveUp": true,
 	string(ui.NextNone): true, string(ui.NextFreshDeploy): true,
 	string(ui.NextWait): true, string(ui.NextGiveUp): true,
 }
@@ -90,6 +89,7 @@ type obligation struct {
 	chain   string
 	values  []string // resolved possibilities; empty means unresolved
 	problem string   // a structurally forbidden write or address-taking
+	binding string   // reaching definitions for a scenario-covered expression
 }
 
 // summary is one verified helper relationship: the parameter index whose
@@ -127,7 +127,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no published Go file was scanned, so this guard measured nothing")
 	}
-	attachFailureTypeInfo(t, root, fset, files)
+	files = attachFailureTypeInfo(t, root, fset, files)
 
 	text := func(p parsedFile, n ast.Node) string {
 		lo := fset.Position(n.Pos()).Offset
@@ -145,7 +145,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 	for _, p := range files {
 		for _, d := range p.file.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
-				key := packageFuncKey(root, p.path, fd.Name.Name)
+				key := targetFuncKey(p, packageFuncKey(root, p.path, fd.Name.Name))
 				good := allReturnsNonBlankDecl(fd)
 				if old, seen := nonBlankHelpers[key]; seen {
 					nonBlankHelpers[key] = old && good
@@ -166,7 +166,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 			}
 			s, ok := verifySummary(fd, text, p)
 			if ok {
-				summaries[declaredFuncKey(fd, p.info)] = s
+				summaries[targetFuncKey(p, declaredFuncKey(fd, p.info))] = s
 			}
 		}
 	}
@@ -189,6 +189,21 @@ func TestTheFailureContractHolds(t *testing.T) {
 	for _, p := range files {
 		rel := displayPath(root, p.path)
 		ast.Inspect(p.file, func(n ast.Node) bool {
+			if vs, ok := n.(*ast.ValueSpec); ok {
+				zeros := zeroFailureDeclarations(p.info, vs)
+				if zeros > 0 {
+					pos := fset.Position(vs.Pos())
+					site := rel + ":" + itoa(pos.Line)
+					for range zeros {
+						sitesVisited++
+						obs = append(obs,
+							obligation{where: site, field: "ID", expr: "zero ui.Failure declaration"},
+							obligation{where: site, field: "Next", expr: "zero ui.Failure declaration"},
+							obligation{where: site, field: "NextText", expr: "zero ui.Failure declaration"})
+					}
+				}
+				return true
+			}
 			// A COMPOSITE LITERAL IS A CONSTRUCTION TOO, and leaving it
 			// out is how four failures came to carry no id while this
 			// checker reported a clean census. Three of them were the
@@ -207,7 +222,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 				}
 				pos := fset.Position(lit.Pos())
 				site := rel + ":" + itoa(pos.Line)
-				if _, inHelper := summaries[enclosingFuncKey(p, lit.Pos())]; inHelper {
+				if _, inHelper := summaries[targetFuncKey(p, enclosingFuncKey(p, lit.Pos()))]; inHelper {
 					return true
 				}
 				in := enclosingDecl(p.file, lit.Pos())
@@ -238,7 +253,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 			}
 			if as, ok := n.(*ast.AssignStmt); ok {
 				for i, lhs := range as.Lhs {
-					sel, ok := lhs.(*ast.SelectorExpr)
+					sel, ok := unparen(lhs).(*ast.SelectorExpr)
 					if !ok || !isProtectedFailureField(p.info, sel) {
 						continue
 					}
@@ -255,7 +270,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 				return true
 			}
 			if unary, ok := n.(*ast.UnaryExpr); ok && unary.Op == token.AND {
-				if sel, ok := unary.X.(*ast.SelectorExpr); ok && isProtectedFailureField(p.info, sel) {
+				if sel, ok := unparen(unary.X).(*ast.SelectorExpr); ok && isProtectedFailureField(p.info, sel) {
 					pos := fset.Position(unary.Pos())
 					obs = append(obs, obligation{where: rel + ":" + itoa(pos.Line),
 						field: sel.Sel.Name, expr: text(p, unary),
@@ -267,7 +282,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 			if !ok {
 				return true
 			}
-			key := calledFuncKey(call.Fun, enclosingDecl(p.file, call.Pos()), p.info)
+			key := targetFuncKey(p, calledFuncKey(call.Fun, enclosingDecl(p.file, call.Pos()), p.info))
 			s, known := summaries[key]
 			if !known {
 				return true
@@ -286,7 +301,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 			// Callers are what carry obligations, and that is the whole
 			// point: uploadFailed's body is checked once, its nine
 			// callers are checked nine times.
-			if _, isHelper := summaries[enclosingFuncKey(p, call.Pos())]; isHelper {
+			if _, isHelper := summaries[targetFuncKey(p, enclosingFuncKey(p, call.Pos()))]; isHelper {
 				return true
 			}
 			sitesVisited++
@@ -304,13 +319,15 @@ func TestTheFailureContractHolds(t *testing.T) {
 
 	// --- 3. CLASSIFY ---------------------------------------------------
 	var invalid, unresolved []string
+	unresolvedDetails := map[string]obligation{}
 	for _, o := range obs {
 		switch {
 		case o.problem != "":
 			invalid = append(invalid, o.where+" "+o.field+" "+o.problem+": "+o.expr)
 		case len(o.values) == 0:
-			unresolved = append(unresolved,
-				o.where+" "+o.field+" = "+o.expr+" (unsupported form)")
+			message := o.where + " " + o.field + " = " + o.expr + " (unsupported form)"
+			unresolved = append(unresolved, message)
+			unresolvedDetails[message] = o
 		case o.field == "Next":
 			for _, v := range o.values {
 				if !validActions[v] {
@@ -352,13 +369,13 @@ func TestTheFailureContractHolds(t *testing.T) {
 	// test nobody wrote is the mute button this mechanism exists to
 	// avoid.
 	for _, m := range unresolved {
-		if by, ok := scenarioCoverage(m); ok {
+		if by, ok := scenarioCoverage(m, unresolvedDetails[m].binding); ok {
 			t.Logf("unresolved statically, covered by scenario: %s (%s)", m, by)
 			continue
 		}
-		t.Errorf("UNRESOLVED: %s\nAn obligation this checker cannot establish is "+
+		t.Errorf("UNRESOLVED: %s [binding %q]\nAn obligation this checker cannot establish is "+
 			"not an obligation that is satisfied. Use a supported form, extend the "+
-			"checker deliberately, or name the scenario test that covers it.", m)
+			"checker deliberately, or name the scenario test that covers it.", m, unresolvedDetails[m].binding)
 	}
 	// RECORDED FOR THE CENSUS ROW, which compares this against an
 	// independently written count of the tree's constructions. Two
@@ -380,6 +397,13 @@ func packageFuncKey(root, path, name string) string {
 	return pkg + "." + name
 }
 
+func targetFuncKey(p parsedFile, key string) string {
+	if key == "" || p.target == "" {
+		return key
+	}
+	return p.target + "|" + key
+}
+
 // verifySummary establishes a helper's relationship by READING ITS BODY.
 //
 // Two shapes are supported, because two are what this tree uses: a
@@ -391,8 +415,8 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 	p parsedFile) (summary, bool) {
 
 	params := paramNames(fd)
-	s := summary{fn: fd.Name.Name, idArg: -1, act: -1, txt: -1}
-	found := false
+	var candidates []summary
+	mutated := false
 
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -400,6 +424,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 			if !isFailureExpr(p.info, node) {
 				return true
 			}
+			s := summary{fn: fd.Name.Name, idArg: -1, act: -1, txt: -1}
 			for _, elt := range node.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
@@ -415,13 +440,14 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				}
 				switch calleeName(kv.Key) {
 				case "ID":
-					s.idArg, found = i, true
+					s.idArg = i
 				case "Next":
-					s.act, found = i, true
+					s.act = i
 				case "NextText":
-					s.txt, found = i, true
+					s.txt = i
 				}
 			}
+			candidates = append(candidates, s)
 		case *ast.CallExpr:
 			// A FORWARDING HELPER: its own parameters passed straight to
 			// a constructor. uploadFailed is the one in this tree.
@@ -430,6 +456,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				c != modulePath+"/internal/ui.Quoted" {
 				return true
 			}
+			s := summary{fn: fd.Name.Name, idArg: -1, act: -1, txt: -1}
 			for i, arg := range node.Args {
 				id, ok := arg.(*ast.Ident)
 				if !ok {
@@ -442,86 +469,118 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				// Constructor positions: (id, what, why|detail, next, nextText)
 				switch i {
 				case 0:
-					s.idArg, found = j, true
+					s.idArg = j
 				case 3:
-					s.act, found = j, true
+					s.act = j
 				case 4:
-					s.txt, found = j, true
+					s.txt = j
+				}
+			}
+			candidates = append(candidates, s)
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok {
+					_, mutatedParam := params[id.Name]
+					mutated = mutated || mutatedParam
 				}
 			}
 		}
 		return true
 	})
-	if !found || s.idArg < 0 || s.act < 0 || s.txt < 0 {
+	if mutated || len(candidates) == 0 {
 		return summary{}, false
 	}
-	return s, true
+	want := candidates[0]
+	if want.idArg < 0 || want.act < 0 || want.txt < 0 {
+		return summary{}, false
+	}
+	for _, got := range candidates[1:] {
+		if got.idArg != want.idArg || got.act != want.act || got.txt != want.txt {
+			return summary{}, false
+		}
+	}
+	return want, true
 }
 
 type parsedFile = struct {
-	path string
-	file *ast.File
-	src  []byte
-	info *types.Info
+	path   string
+	file   *ast.File
+	src    []byte
+	info   *types.Info
+	target string
 }
 
 // attachFailureTypeInfo type-checks repository packages from their source.
 // The collector then asks about the object or type bound to an AST node,
 // never the unqualified spelling the author chose for it.
-func attachFailureTypeInfo(t *testing.T, root string, fset *token.FileSet, files []parsedFile) {
+func attachFailureTypeInfo(t *testing.T, root string, fset *token.FileSet, files []parsedFile) []parsedFile {
 	t.Helper()
-	allByImport := map[string][]*parsedFile{}
-	for i := range files {
-		rel, err := filepath.Rel(root, filepath.Dir(files[i].path))
-		if err != nil {
-			t.Fatalf("finding package for %s: %v", files[i].path, err)
-		}
-		path := modulePath
-		if rel != "." {
-			path += "/" + filepath.ToSlash(rel)
-		}
-		allByImport[path] = append(allByImport[path], &files[i])
-	}
-	for _, goos := range []string{"darwin", "linux", "windows"} {
+	type target struct{ goos, goarch string }
+	var checked []parsedFile
+	for _, target := range []target{
+		{"darwin", "amd64"}, {"darwin", "arm64"},
+		{"linux", "amd64"}, {"linux", "arm64"},
+		{"windows", "amd64"}, {"windows", "arm64"},
+	} {
 		ctx := build.Default
-		ctx.GOOS = goos
-		if goos != "windows" {
+		ctx.GOOS, ctx.GOARCH = target.goos, target.goarch
+		if target.goos != "windows" {
 			ctx.BuildTags = append(ctx.BuildTags, "unix")
 		}
-		selected := map[string][]*parsedFile{}
-		for path, group := range allByImport {
-			for _, p := range group {
-				matched, err := ctx.MatchFile(filepath.Dir(p.path), filepath.Base(p.path))
-				if err != nil {
-					t.Fatalf("reading build constraints in %s: %v", p.path, err)
-				}
-				if matched {
-					selected[path] = append(selected[path], p)
-				}
+		var targetFiles []parsedFile
+		for _, original := range files {
+			matched, err := ctx.MatchFile(filepath.Dir(original.path), filepath.Base(original.path))
+			if err != nil {
+				t.Fatalf("reading build constraints in %s: %v", original.path, err)
 			}
+			if !matched {
+				continue
+			}
+			f, err := parser.ParseFile(fset, original.path, original.src, 0)
+			if err != nil {
+				t.Fatalf("parsing %s for %s/%s: %v", original.path, target.goos, target.goarch, err)
+			}
+			clone := parsedFile{path: original.path, file: f, src: original.src,
+				target: target.goos + "/" + target.goarch}
+			targetFiles = append(targetFiles, clone)
+		}
+		selected := map[string][]*parsedFile{}
+		for i := range targetFiles {
+			p := &targetFiles[i]
+			rel, err := filepath.Rel(root, filepath.Dir(p.path))
+			if err != nil {
+				t.Fatalf("finding package for %s: %v", p.path, err)
+			}
+			path := modulePath
+			if rel != "." {
+				path += "/" + filepath.ToSlash(rel)
+			}
+			selected[path] = append(selected[path], p)
 		}
 		l := &failureSourceImporter{
 			fset: fset, sources: selected, packages: map[string]*types.Package{},
-			loading: map[string]bool{}, fallback: archiveImporter(fset, root, goos),
+			loading: map[string]bool{}, fallback: archiveImporter(fset, root, target.goos, target.goarch),
 		}
 		for path := range selected {
 			if _, err := l.Import(path); err != nil {
-				t.Fatalf("type-checking %s for %s failure identities: %v", path, goos, err)
+				t.Fatalf("type-checking %s for %s/%s failure identities: %v", path, target.goos, target.goarch, err)
 			}
 		}
+		checked = append(checked, targetFiles...)
 	}
+	return checked
 }
 
-func archiveImporter(fset *token.FileSet, root, goos string) types.Importer {
+func archiveImporter(fset *token.FileSet, root, goos, goarch string) types.Importer {
 	return importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
 		cmd := exec.Command("go", "list", "-export", "-f", "{{.Export}}", path)
 		cmd.Dir = root
 		for _, entry := range os.Environ() {
-			if !strings.HasPrefix(entry, "GOOS=") {
+			if !strings.HasPrefix(entry, "GOOS=") && !strings.HasPrefix(entry, "GOARCH=") {
 				cmd.Env = append(cmd.Env, entry)
 			}
 		}
-		cmd.Env = append(cmd.Env, "GOOS="+goos)
+		cmd.Env = append(cmd.Env, "GOOS="+goos, "GOARCH="+goarch)
 		out, err := cmd.Output()
 		if err != nil {
 			return nil, fmt.Errorf("locating export data for %s: %w", path, err)
@@ -599,7 +658,15 @@ func enclosingFuncKey(p parsedFile, pos token.Pos) string {
 }
 
 func calledFuncKey(fun ast.Expr, within *ast.FuncDecl, info *types.Info) string {
+	return calledFuncKeySeen(fun, within, info, map[types.Object]bool{}, 0)
+}
+
+func calledFuncKeySeen(fun ast.Expr, within *ast.FuncDecl, info *types.Info,
+	seen map[types.Object]bool, depth int) string {
 	if info == nil || fun == nil {
+		return ""
+	}
+	if depth > 8 {
 		return ""
 	}
 	switch f := fun.(type) {
@@ -607,9 +674,20 @@ func calledFuncKey(fun ast.Expr, within *ast.FuncDecl, info *types.Info) string 
 		if fn, ok := info.Uses[f].(*types.Func); ok {
 			return objectKey(fn)
 		}
+		obj := info.Uses[f]
+		if obj == nil {
+			obj = info.Defs[f]
+		}
+		if obj != nil && seen[obj] {
+			return ""
+		}
+		if obj != nil {
+			seen[obj] = true
+			defer delete(seen, obj)
+		}
 		if within != nil {
 			if def, ok := soleDefinition(f.Name, within); ok {
-				return calledFuncKey(def, within, info)
+				return calledFuncKeySeen(def, within, info, seen, depth+1)
 			}
 		}
 	case *ast.SelectorExpr:
@@ -617,7 +695,7 @@ func calledFuncKey(fun ast.Expr, within *ast.FuncDecl, info *types.Info) string 
 			return objectKey(fn)
 		}
 	case *ast.ParenExpr:
-		return calledFuncKey(f.X, within, info)
+		return calledFuncKeySeen(f.X, within, info, seen, depth+1)
 	}
 	return ""
 }
@@ -635,9 +713,42 @@ func isProtectedFailureField(info *types.Info, sel *ast.SelectorExpr) bool {
 	}
 	switch sel.Sel.Name {
 	case "ID", "Next", "NextText":
-		return isFailureExpr(info, sel.X)
+		selection := info.Selections[sel]
+		if selection == nil {
+			return false
+		}
+		typ := selection.Recv()
+		for step, index := range selection.Index() {
+			if ptr, ok := types.Unalias(typ).(*types.Pointer); ok {
+				typ = ptr.Elem()
+			}
+			named, namedOK := types.Unalias(typ).(*types.Named)
+			underlying := typ
+			if namedOK {
+				underlying = named.Underlying()
+			}
+			st, ok := underlying.(*types.Struct)
+			if !ok || index >= st.NumFields() {
+				return false
+			}
+			field := st.Field(index)
+			if step == len(selection.Index())-1 {
+				return namedOK && isFailureValueType(named) && field.Name() == sel.Sel.Name
+			}
+			typ = field.Type()
+		}
 	}
 	return false
+}
+
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
 }
 
 func embeddedZeroFailures(info *types.Info, lit *ast.CompositeLit) int {
@@ -679,6 +790,14 @@ func embeddedZeroFailures(info *types.Info, lit *ast.CompositeLit) int {
 	return count
 }
 
+func zeroFailureDeclarations(info *types.Info, vs *ast.ValueSpec) int {
+	if info == nil || vs == nil || len(vs.Values) != 0 ||
+		!isFailureValueType(info.TypeOf(vs.Type)) {
+		return 0
+	}
+	return len(vs.Names)
+}
+
 func isFailureType(typ types.Type) bool {
 	if typ == nil {
 		return false
@@ -712,6 +831,7 @@ func typedFailureFixture(t *testing.T, source string) parsedFile {
 	uiSource := `package ui
 		type FailureID string
 		type NextAction string
+		const NextWait NextAction = "Wait"
 		type Failure struct { ID FailureID; Next NextAction; NextText string }
 		func NewFailure(id FailureID, next NextAction, text string) *Failure {
 			return &Failure{ID: id, Next: next, NextText: text}
@@ -751,10 +871,12 @@ func TestFailureRecognitionUsesTypesAcrossAliasesAndElision(t *testing.T) {
 			_ = [1]ui.Failure{{}}
 			_ = struct{ ui.Failure }{}
 			_ = Failure{}
-			makeFailure := ui.NewFailure
+			var makeFailure = ui.NewFailure
 			_ = makeFailure("id", "next", "text")
+			var zero ui.Failure
+			_ = &zero
 		}`)
-	literals, calls := 0, 0
+	literals, calls, declarations := 0, 0, 0
 	ast.Inspect(p.file, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CompositeLit:
@@ -767,11 +889,14 @@ func TestFailureRecognitionUsesTypesAcrossAliasesAndElision(t *testing.T) {
 				modulePath+"/internal/ui.NewFailure" {
 				calls++
 			}
+		case *ast.ValueSpec:
+			declarations += zeroFailureDeclarations(p.info, n)
 		}
 		return true
 	})
-	if literals != 5 || calls != 1 {
-		t.Fatalf("recognised %d failure literals and %d aliased constructor calls, want 5 and 1", literals, calls)
+	if literals != 5 || calls != 1 || declarations != 1 {
+		t.Fatalf("recognised %d failure literals, %d aliased constructor calls, and %d zero declarations; want 5, 1, 1",
+			literals, calls, declarations)
 	}
 }
 
@@ -783,8 +908,11 @@ func TestProtectedWritesAreFoundThroughCopiesAndAddresses(t *testing.T) {
 			f.ID = ""
 			g := f
 			g.Next = ""
-			p := &f.ID
+			(f.Next) = ""
+			p := &(f.ID)
 			*p = ""
+			w := struct{ *ui.Failure }{&f}
+			w.Next = ""
 			f.NextText = "Retry."
 			f.NextText = "\t"
 		}`)
@@ -794,7 +922,7 @@ func TestProtectedWritesAreFoundThroughCopiesAndAddresses(t *testing.T) {
 		switch n := n.(type) {
 		case *ast.AssignStmt:
 			for i, lhs := range n.Lhs {
-				if sel, ok := lhs.(*ast.SelectorExpr); ok && isProtectedFailureField(p.info, sel) {
+				if sel, ok := unparen(lhs).(*ast.SelectorExpr); ok && isProtectedFailureField(p.info, sel) {
 					if sel.Sel.Name == "NextText" {
 						checkedText++
 						if i < len(n.Rhs) {
@@ -810,15 +938,15 @@ func TestProtectedWritesAreFoundThroughCopiesAndAddresses(t *testing.T) {
 			}
 		case *ast.UnaryExpr:
 			if n.Op == token.AND {
-				if sel, ok := n.X.(*ast.SelectorExpr); ok && isProtectedFailureField(p.info, sel) {
+				if sel, ok := unparen(n.X).(*ast.SelectorExpr); ok && isProtectedFailureField(p.info, sel) {
 					forbidden++
 				}
 			}
 		}
 		return true
 	})
-	if forbidden != 4 || checkedText != 2 || !blankText {
-		t.Fatalf("found %d forbidden writes/addresses and %d checked NextText writes (blank found %t), want 4, 2, true",
+	if forbidden != 6 || checkedText != 2 || !blankText {
+		t.Fatalf("found %d forbidden writes/addresses and %d checked NextText writes (blank found %t), want 6, 2, true",
 			forbidden, checkedText, blankText)
 	}
 }
@@ -843,9 +971,155 @@ func TestNonBlankAnalysisDecodesLiteralsAndRejectsNakedReturns(t *testing.T) {
 	if allReturnsNonBlankDecl(fd) {
 		t.Fatal("a helper with a naked blank return was certified non-blank")
 	}
+	f, err = parser.ParseFile(fset, "deferred.go", `package fixture
+		func advice() (s string) { defer func() { s = "" }(); return "Retry." }`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allReturnsNonBlankDecl(f.Decls[0].(*ast.FuncDecl)) {
+		t.Fatal("a deferred mutation of a named result was certified non-blank")
+	}
 	nonBlankHelpers = map[string]bool{"one.advice": false, "two.advice": true}
 	if allReturnsNonBlankAnywhere("one.advice") || !allReturnsNonBlankAnywhere("two.advice") {
 		t.Fatal("same-named helpers in different packages contaminated one another")
+	}
+}
+
+func TestSummaryRequiresEveryConstructionAndUnmutatedParameters(t *testing.T) {
+	for _, body := range []string{
+		`next = ""; return &ui.Failure{ID: id, Next: next, NextText: text}`,
+		`if bad { return &ui.Failure{} }; return &ui.Failure{ID: id, Next: next, NextText: text}`,
+	} {
+		p := typedFailureFixture(t, `package fixture
+			import ui "github.com/curiouspub/cli/internal/ui"
+			func build(id ui.FailureID, next ui.NextAction, text string, bad bool) *ui.Failure {
+				`+body+`
+			}`)
+		fd := p.file.Decls[1].(*ast.FuncDecl)
+		if _, ok := verifySummary(fd, func(parsedFile, ast.Node) string { return "" }, p); ok {
+			t.Fatalf("unsafe helper was summarised: %s", body)
+		}
+	}
+}
+
+func TestResolutionDoesNotInventValuePreservationOrTrustNames(t *testing.T) {
+	p := typedFailureFixture(t, `package fixture
+		import ui "github.com/curiouspub/cli/internal/ui"
+		const NextWait = ui.NextWait
+		func erase(ui.NextAction) ui.NextAction { return "" }
+		func use() {
+			_ = erase(ui.NextWait)
+			NextWait := ui.NextAction("")
+			_ = NextWait
+			_ = ui.NextAction("NextWait")
+		}`)
+	fd := p.file.Decls[3].(*ast.FuncDecl)
+	var expressions []ast.Expr
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Rhs) == 1 &&
+			len(as.Lhs) == 1 && calleeName(as.Lhs[0]) == "_" {
+			expressions = append(expressions, as.Rhs[0])
+		}
+		return true
+	})
+	if len(expressions) != 3 {
+		t.Fatalf("found %d fixture expressions, want 3", len(expressions))
+	}
+	text := func(parsedFile, ast.Node) string { return "fixture" }
+	for i, e := range expressions {
+		o := resolveIn("fixture", "Next", e, text, p, "action", fd, 0)
+		if len(o.values) > 0 && validActions[o.values[0]] {
+			t.Errorf("unsafe expression %d resolved to a valid action: %v", i, o.values)
+		}
+	}
+}
+
+func TestFunctionAliasCyclesFailClosed(t *testing.T) {
+	p := typedFailureFixture(t, `package fixture
+		import ui "github.com/curiouspub/cli/internal/ui"
+		func use() {
+			var a, b = ui.NewFailure, ui.NewFailure
+			a = b
+			b = a
+			_ = a("id", "next", "text")
+		}`)
+	fd := p.file.Decls[1].(*ast.FuncDecl)
+	var call *ast.CallExpr
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && calleeName(c.Fun) == "a" {
+			call = c
+		}
+		return true
+	})
+	if call == nil {
+		t.Fatal("fixture call not found")
+	}
+	if got := calledFuncKey(call.Fun, fd, p.info); got != "" {
+		t.Fatalf("cyclic alias resolved as %q, want unresolved", got)
+	}
+}
+
+func TestBuildTargetsKeepTheirOwnTypeInfoAndIncludeArm64(t *testing.T) {
+	root := t.TempDir()
+	sources := map[string]string{
+		"action_windows.go": "//go:build windows\npackage fixture\nconst action = \"Wait\"\n",
+		"action_other.go":   "//go:build !windows\npackage fixture\nconst action = \"\"\n",
+		"arch_arm64.go":     "//go:build arm64\npackage fixture\nconst arm64Present = true\n",
+		"common.go":         "package fixture\nvar observed = action\n",
+	}
+	fset := token.NewFileSet()
+	var files []parsedFile
+	for name, source := range sources {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := parser.ParseFile(fset, path, source, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, parsedFile{path: path, file: f, src: []byte(source)})
+	}
+	checked := attachFailureTypeInfo(t, root, fset, files)
+	seenCommon, seenArm64 := map[string]string{}, map[string]bool{}
+	helperKeys := map[string]bool{}
+	for _, p := range checked {
+		switch filepath.Base(p.path) {
+		case "common.go":
+			helperKeys[targetFuncKey(p, "fixture.helper")] = true
+			ast.Inspect(p.file, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok || id.Name != "action" {
+					return true
+				}
+				if c, ok := p.info.Uses[id].(*types.Const); ok {
+					seenCommon[p.target] = constant.StringVal(c.Val())
+				}
+				return true
+			})
+		case "arch_arm64.go":
+			seenArm64[p.target] = true
+		}
+	}
+	if len(seenCommon) != 6 {
+		t.Fatalf("common file was checked in %d targets, want 6: %v", len(seenCommon), seenCommon)
+	}
+	if len(helperKeys) != 6 {
+		t.Fatalf("helper summaries collapse to %d target keys, want 6: %v", len(helperKeys), helperKeys)
+	}
+	for target, value := range seenCommon {
+		want := ""
+		if strings.HasPrefix(target, "windows/") {
+			want = "Wait"
+		}
+		if value != want {
+			t.Errorf("%s reused another target's type info: action = %q, want %q", target, value, want)
+		}
+	}
+	for _, target := range []string{"darwin/arm64", "linux/arm64", "windows/arm64"} {
+		if !seenArm64[target] {
+			t.Errorf("arm64-only file was not checked for %s", target)
+		}
 	}
 }
 
@@ -872,43 +1146,34 @@ func resolveIn(site, field string, e ast.Expr, text func(parsedFile, ast.Node) s
 	}
 	o.expr = text(p, e)
 
-	// A NAME IS NOT A VALUE UNTIL IT IS ONE. An identifier this checker
-	// cannot tie to a declared constant is UNRESOLVED, never invalid: a
-	// local variable holding a perfectly good action would otherwise be
-	// reported as an illegal action, which sends a reader to fix code
-	// that is right. The first run of this checker did exactly that to
-	// the upload refusal's `action` variable.
-	known := func(name string) bool {
-		return validActions[name] || strings.HasPrefix(name, "ID")
-	}
-	if kind != "text" && p.info != nil {
-		if tv, ok := p.info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
-			o.values = []string{constant.StringVal(tv.Value)}
+	if p.info != nil {
+		if value, ok := typedStringConstant(p.info, e); ok {
+			if kind == "text" {
+				if strings.TrimSpace(value) == "" {
+					o.values = []string{"blank"}
+				} else {
+					o.values = []string{"nonblank"}
+				}
+			} else {
+				o.values = []string{value}
+			}
 			return o
 		}
 	}
 	switch v := e.(type) {
 	case *ast.SelectorExpr: // ui.NextWait, ui.IDUploadStalled
-		if known(v.Sel.Name) {
-			o.values = []string{v.Sel.Name}
-		}
+		// Only typed constants resolve above. Spelling is not evidence: a
+		// field or local may have the same name as a catalog constant.
 	case *ast.Ident: // NextWait inside package ui, or a name to trace
-		if known(v.Name) {
-			o.values = []string{v.Name}
-			break
-		}
-		// A PACKAGE-LEVEL CONSTANT resolves to its own value.
-		if def := packageConst(v.Name, p.file); def != nil {
-			return resolveIn(site, field, def, text, p, kind, within, depth+1)
-		}
 		// A LOCAL NAME resolves to its reaching definition, when there is
 		// exactly one. More than one assignment and it stays unresolved:
 		// this checker unions branches it can see and refuses what it
 		// cannot.
 		if within != nil {
-			if def, ok := soleDefinition(v.Name, within); ok {
+			if def, ok := soleDefinitionAt(v.Name, within, v.Pos()); ok {
 				return resolveIn(site, field, def, text, p, kind, within, depth+1)
 			}
+			o.binding = definitionFingerprint(v.Name, within, v.Pos(), text, p)
 		}
 	case *ast.BasicLit:
 		if kind == "text" {
@@ -927,8 +1192,8 @@ func resolveIn(site, field string, e ast.Expr, text func(parsedFile, ast.Node) s
 	case *ast.CallExpr:
 		// A CONVERSION PRESERVES ITS VALUE: ui.FailureID(x) where x is
 		// itself resolvable.
-		if len(v.Args) == 1 {
-			if inner := resolve(site, field, v.Args[0], text, p, kind); len(inner.values) > 0 {
+		if len(v.Args) == 1 && p.info != nil && p.info.Types[v.Fun].IsType() {
+			if inner := resolveIn(site, field, v.Args[0], text, p, kind, within, depth+1); len(inner.values) > 0 {
 				o.values = inner.values
 			}
 		}
@@ -938,12 +1203,36 @@ func resolveIn(site, field string, e ast.Expr, text func(parsedFile, ast.Node) s
 		// to be special-cased: its returns are concatenations containing
 		// authored literals, so the property holds by reading them.
 		if kind == "text" && o.values == nil {
-			if allReturnsNonBlankAnywhere(calledFuncKey(v.Fun, within, p.info)) {
+			if allReturnsNonBlankAnywhere(targetFuncKey(p, calledFuncKey(v.Fun, within, p.info))) {
 				o.values = []string{"nonblank"}
 			}
 		}
 	}
 	return o
+}
+
+func typedStringConstant(info *types.Info, e ast.Expr) (string, bool) {
+	if info == nil || e == nil {
+		return "", false
+	}
+	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
+		return constant.StringVal(tv.Value), true
+	}
+	var obj types.Object
+	switch v := unparen(e).(type) {
+	case *ast.Ident:
+		obj = info.Uses[v]
+		if obj == nil {
+			obj = info.Defs[v]
+		}
+	case *ast.SelectorExpr:
+		obj = info.Uses[v.Sel]
+	}
+	c, ok := obj.(*types.Const)
+	if !ok || c.Val().Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(c.Val()), true
 }
 
 // containsNonBlankLiteral is the bounded string analysis: a concatenation
@@ -1005,6 +1294,10 @@ func allReturnsNonBlankDecl(fd *ast.FuncDecl) bool {
 	saw := false
 	ok := true
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if _, deferred := n.(*ast.DeferStmt); deferred {
+			ok = false
+			return true
+		}
 		ret, is := n.(*ast.ReturnStmt)
 		if !is {
 			return true
@@ -1024,28 +1317,6 @@ func allReturnsNonBlankDecl(fd *ast.FuncDecl) bool {
 	return saw && ok
 }
 
-// packageConst finds a package-level constant's value in this file.
-func packageConst(name string, f *ast.File) ast.Expr {
-	for _, d := range f.Decls {
-		gen, ok := d.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for i, n := range vs.Names {
-				if n.Name == name && i < len(vs.Values) {
-					return vs.Values[i]
-				}
-			}
-		}
-	}
-	return nil
-}
-
 // soleDefinition returns the expression a local name is assigned, but
 // ONLY when it is assigned exactly once.
 //
@@ -1053,9 +1324,42 @@ func packageConst(name string, f *ast.File) ast.Expr {
 // carries two possible values and this checker unions what it can see
 // rather than guessing which reached the call.
 func soleDefinition(name string, fd *ast.FuncDecl) (ast.Expr, bool) {
+	return soleDefinitionAt(name, fd, fd.End())
+}
+
+func soleDefinitionAt(name string, fd *ast.FuncDecl, before token.Pos) (ast.Expr, bool) {
 	var found ast.Expr
 	count := 0
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if n != nil && n.Pos() >= before {
+			return false
+		}
+		if decl, ok := n.(*ast.DeclStmt); ok {
+			gen, ok := decl.Decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				return true
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, id := range vs.Names {
+					if id.Name != name {
+						continue
+					}
+					count++
+					if len(vs.Values) == len(vs.Names) {
+						found = vs.Values[i]
+					} else if len(vs.Values) == 1 && len(vs.Names) == 1 {
+						found = vs.Values[0]
+					} else {
+						found = nil
+					}
+				}
+			}
+			return true
+		}
 		as, ok := n.(*ast.AssignStmt)
 		if !ok {
 			return true
@@ -1079,6 +1383,52 @@ func soleDefinition(name string, fd *ast.FuncDecl) (ast.Expr, bool) {
 		return true
 	})
 	return found, count == 1 && found != nil
+}
+
+func definitionFingerprint(name string, fd *ast.FuncDecl, before token.Pos,
+	text func(parsedFile, ast.Node) string, p parsedFile) string {
+	var definitions []string
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if n != nil && n.Pos() >= before {
+			return false
+		}
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range node.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == name {
+					rhs := "<multi-value>"
+					if len(node.Rhs) == len(node.Lhs) {
+						rhs = text(p, node.Rhs[i])
+					} else if len(node.Rhs) == 1 {
+						rhs = text(p, node.Rhs[0]) + "#" + itoa(i)
+					}
+					definitions = append(definitions, rhs)
+				}
+			}
+		case *ast.DeclStmt:
+			gen, ok := node.Decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				return true
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, id := range vs.Names {
+					if id.Name == name {
+						rhs := "<zero>"
+						if len(vs.Values) == len(vs.Names) {
+							rhs = text(p, vs.Values[i])
+						}
+						definitions = append(definitions, rhs)
+					}
+				}
+			}
+		}
+		return true
+	})
+	return strings.Join(definitions, " | ")
 }
 
 func enclosingDecl(f *ast.File, p token.Pos) *ast.FuncDecl {
@@ -1126,7 +1476,16 @@ var scenarioCoveredExpression = map[string]string{
 	"internal/flow/upload.go:372 NextText":    "next",
 }
 
-func scenarioCoverage(message string) (string, bool) {
+var scenarioCoveredBinding = map[string]string{
+	"internal/flow/preflight.go:223 ID":       "",
+	"internal/flow/preflight.go:223 NextText": "f.Next | standingAction",
+	"internal/flow/upload.go:340 NextText":    "expiredCopy()#1",
+	"internal/flow/upload.go:372 ID":          "refusalCopy(host, deps.ExpiresAt, deps.Now())#0",
+	"internal/flow/upload.go:372 Next":        "refusalCopy(host, deps.ExpiresAt, deps.Now())#1",
+	"internal/flow/upload.go:372 NextText":    "expiredCopy()#1 | refusalCopy(host, deps.ExpiresAt, deps.Now())#3",
+}
+
+func scenarioCoverage(message, binding string) (string, bool) {
 	key := keyOf(message)
 	by, ok := scenarioCovered[key]
 	if !ok {
@@ -1141,16 +1500,22 @@ func scenarioCoverage(message string) (string, bool) {
 		return "", false
 	}
 	got, _, ok := strings.Cut(strings.TrimPrefix(message, prefix), " (unsupported form)")
-	return by, ok && got == want
+	wantBinding, bound := scenarioCoveredBinding[key]
+	return by, ok && got == want && bound && binding == wantBinding
 }
 
 func TestAScenarioWaiverBelongsToItsExpression(t *testing.T) {
 	key := "internal/flow/upload.go:372 Next"
-	if _, ok := scenarioCoverage(key + " = changedAtRuntime() (unsupported form)"); ok {
+	if _, ok := scenarioCoverage(key+" = changedAtRuntime() (unsupported form)",
+		"refusalCopy(host, deps.ExpiresAt, deps.Now())#1"); ok {
 		t.Fatal("a different expression inherited the scenario waiver at the same location")
 	}
-	if by, ok := scenarioCoverage(key + " = action (unsupported form)"); !ok || by == "" {
+	wantBinding := "refusalCopy(host, deps.ExpiresAt, deps.Now())#1"
+	if by, ok := scenarioCoverage(key+" = action (unsupported form)", wantBinding); !ok || by == "" {
 		t.Fatal("the expression the scenario actually covers lost its waiver")
+	}
+	if _, ok := scenarioCoverage(key+" = action (unsupported form)", wantBinding+" | \"\""); ok {
+		t.Fatal("an expression with an additional reaching definition inherited the waiver")
 	}
 }
 

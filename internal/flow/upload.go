@@ -210,7 +210,7 @@ type uploadDeps struct {
 
 	// Transport is the API client's own transport, so a proxy or extra
 	// trust material configured for this run applies here too.
-	Transport *http.Transport
+	Transport http.RoundTripper
 
 	// Now is the clock the window is compared against.
 	Now func() time.Time

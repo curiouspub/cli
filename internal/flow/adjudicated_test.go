@@ -1,7 +1,12 @@
 package flow
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,9 +50,23 @@ import (
 // do the one thing the sentence above it explains cannot help.
 func TestARefusalInsideTheWindowSaysGiveUp(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	// The window is still open, which is what makes the diagnosis a
-	// mismatch rather than an expiry.
-	id, action, why, nextText := refusalCopy("store.example", now.Add(time.Hour), now)
+	archive := filepath.Join(t.TempDir(), "archive.tgz")
+	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := uploadArchive(context.Background(), uploadDeps{
+		URL: "https://store.example/archive", ArchivePath: archive, Bytes: 7,
+		ExpiresAt: now.Add(time.Hour), Now: func() time.Time { return now },
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden,
+				Body: io.NopCloser(strings.NewReader("store refusal")), Header: make(http.Header)}, nil
+		}),
+	})
+	var failure *ui.Failure
+	if !errors.As(err, &failure) {
+		t.Fatalf("uploadArchive returned %T, want a ui.Failure in the chain", err)
+	}
+	id, action, why, nextText := failure.ID, failure.Next, failure.Why, failure.NextText
 
 	if id != ui.IDUploadSignatureMismatch {
 		t.Errorf("id = %q, want %q — a mismatch inside the window is not the "+
@@ -71,6 +90,10 @@ func TestARefusalInsideTheWindowSaysGiveUp(t *testing.T) {
 		t.Errorf("the why no longer names this as our fault:\n%s", why)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // TestTheOtherTwoRefusalBranchesKeepTheirOwnFamilies is the control for
 // the row above: a correction that collapsed all three branches onto one
@@ -148,6 +171,10 @@ func TestRateLimitingWaitsEverywhere(t *testing.T) {
 					"may be tried again, and GiveUp means it never can be",
 					f.Next, ui.NextWait)
 			}
+			if want := "Try again after 12:01 UTC (+00:00) — in about 2 minutes. " +
+				"Nothing has been uploaded and nothing has been deployed."; f.NextText != want {
+				t.Errorf("next-step copy = %q, want %q", f.NextText, want)
+			}
 		})
 	}
 }
@@ -172,12 +199,19 @@ func TestAnAnswerThisBuildCannotReadWaits(t *testing.T) {
 	unknown := &api.APIError{Code: wire.ErrorCode("teapot"), Message: "I am a teapot"}
 
 	for _, tc := range []struct {
-		name string
-		err  error
+		name     string
+		err      error
+		wantNext string
 	}{
-		{"at the publish", publishStopFailure(unknown, "dpl-abc", now)},
-		{"at the start", startFailure(unknown)},
-		{"at the stream", streamRefusedFailure(unknown)},
+		{"at the publish", publishStopFailure(unknown, "dpl-abc", now),
+			"Try again in a moment. If it keeps happening, updating curious may\n" +
+				"help — this build may be older than the server."},
+		{"at the start", startFailure(unknown),
+			"Try again in a moment. If it keeps happening, updating curious may\n" +
+				"help — this build may be older than the server."},
+		{"at the stream", streamRefusedFailure(unknown),
+			"Try again in a moment. If it keeps happening, updating curious may\n" +
+				"help — this build may be older than the server."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var f *ui.Failure
@@ -195,8 +229,9 @@ func TestAnAnswerThisBuildCannotReadWaits(t *testing.T) {
 			}
 			// AND THE COPY CARRIES THE LIKELY CAUSE, because "try again"
 			// with no reason is advice a reader cannot act on twice.
-			if !strings.Contains(f.NextText, "older than the server") {
-				t.Errorf("the copy does not name the likely cause:\n%s", f.NextText)
+			if f.NextText != tc.wantNext {
+				t.Errorf("next-step copy = %q, want the complete approved instruction %q",
+					f.NextText, tc.wantNext)
 			}
 		})
 	}

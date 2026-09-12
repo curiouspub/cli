@@ -249,7 +249,7 @@ func exportedNamedStringConstants(t *testing.T, dir, typeName string) map[string
 	if err != nil {
 		t.Fatal(err)
 	}
-	conf := types.Config{Importer: archiveImporter(fset, moduleRoot(t), build.Default.GOOS)}
+	conf := types.Config{Importer: archiveImporter(fset, moduleRoot(t), build.Default.GOOS, build.Default.GOARCH)}
 	pkg, err := conf.Check(modulePath+"/"+filepath.ToSlash(path), fset, files, nil)
 	if err != nil {
 		t.Fatalf("type-checking %s: %v", dir, err)

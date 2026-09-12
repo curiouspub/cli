@@ -63,7 +63,7 @@ func TestTheCheckerVisitsEveryConstruction(t *testing.T) {
 		}
 		files = append(files, parsedFile{path: path, file: f, src: src})
 	}
-	attachFailureTypeInfo(t, root, fset, files)
+	files = attachFailureTypeInfo(t, root, fset, files)
 
 	helperKeys := map[string]bool{
 		modulePath + "/internal/ui.NewFailure":     true,
@@ -81,6 +81,12 @@ func TestTheCheckerVisitsEveryConstruction(t *testing.T) {
 
 		ast.Inspect(p.file, func(n ast.Node) bool {
 			switch node := n.(type) {
+			case *ast.ValueSpec:
+				for range zeroFailureDeclarations(p.info, node) {
+					site := at(node)
+					census = append(census, site)
+					visitable = append(visitable, site)
+				}
 			case *ast.CompositeLit:
 				isFailure := isFailureExpr(p.info, node)
 				embeddedZeros := embeddedZeroFailures(p.info, node)
