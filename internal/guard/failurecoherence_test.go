@@ -136,3 +136,47 @@ func contractObligations(t *testing.T) []obligation {
 	}
 	return got
 }
+
+// EVERY OBLIGATION-LEDGER KEY MUST MATCH A DISCOVERED SITE.
+//
+// The ledger's sibling row proves each entry names a real test that
+// asserts the named field. Nothing proved the other end: that the KEY
+// corresponds to an obligation the checker actually found. An entry
+// matching nothing is not inert — it is a discharge that never fires,
+// so the obligation it was written for goes unresolved and reds
+// somewhere else entirely.
+//
+// That is not hypothetical. The keys embed a repository-relative path,
+// `filepath.Rel` returns the host's separator, and on windows-latest
+// every site rendered with backslashes while the six keys were written
+// with forward slashes. The gate reported FORTY unresolved obligations
+// across two files and said nothing about a ledger that had stopped
+// matching — a red that named the symptom on a leg the author's machine
+// cannot produce. The separator is fixed at the source now; this row is
+// the part that makes the next mismatch legible, whatever causes it.
+//
+// It also catches the ordinary case the separator bug dramatised: a site
+// that moves by one line leaves its ledger entry pointing at nothing.
+func TestEveryObligationLedgerKeyMatchesADiscoveredSite(t *testing.T) {
+	if len(obligationLedger) == 0 {
+		t.Skip("the obligation ledger is empty, so there is nothing to match")
+	}
+	sites := map[string]bool{}
+	for _, o := range contractObligations(t) {
+		sites[o.where+" "+o.field] = true
+	}
+	if len(sites) == 0 {
+		t.Fatal("no obligation site was discovered, so every ledger key would " +
+			"trivially look unmatched and this row would be measuring nothing")
+	}
+	for key := range obligationLedger {
+		if !sites[key] {
+			t.Errorf("obligation-ledger key %q matches no discovered site.\n"+
+				"A ledger entry is a discharge for an obligation the checker "+
+				"found; one that matches nothing discharges nothing, and the "+
+				"obligation it was written for will red elsewhere as though it "+
+				"had never been accounted for. Either the site moved, or the "+
+				"key is spelled in a way this host does not produce.", key)
+		}
+	}
+}
