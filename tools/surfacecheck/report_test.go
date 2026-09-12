@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
-	"regexp"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/leakcheck"
+	"github.com/curiouspub/cli/internal/rulefile"
 )
 
 // renderReport runs the real report writer and returns what a workflow
@@ -14,25 +17,6 @@ func renderReport(t *testing.T, findings []Finding, narrowings []Narrowing) stri
 	var out bytes.Buffer
 	report(&out, findings, narrowings)
 	return out.String()
-}
-
-// withoutTheMatches returns the same findings with the matched text
-// replaced, and nothing else changed.
-//
-// It is how the row below asks its question without having to guess what
-// a coincidence looks like. Searching the report for a short matched term
-// cannot tell a leak from that term happening to sit inside an ordinary
-// word of the report's own prose; rendering the SAME findings twice, once
-// with the real text and once with text that shares none of it, can — the
-// two are byte-identical exactly when the matched text does not reach the
-// page.
-func withoutTheMatches(findings []Finding) []Finding {
-	out := make([]Finding, len(findings))
-	for i, f := range findings {
-		f.Match = "\x01stand-in\x01"
-		out[i] = f
-	}
-	return out
 }
 
 // TestTheReportNamesThePlaceAndNeverTheTextThatTrippedIt is the row for
@@ -55,19 +39,25 @@ func withoutTheMatches(findings []Finding) []Finding {
 // making the check useless. The report must still name the surface, the
 // line and the rule, or an author cannot act on it.
 //
-// MUTATION RUN, and what actually reddened: restoring `(matched %q)` to
-// Finding.String —
+// THE ROW CHANGED SHAPE WHEN THE FIELD WENT, and the new shape is the
+// stronger claim. It used to render the same findings twice — once with
+// the real matched text and once with a stand-in — and require the two
+// pages to be byte-identical, which is how you ask "did this text reach
+// the page" without guessing what a coincidence looks like. That oracle
+// needed a field holding the text. There is no such field now: a Finding
+// carries the surface, the line and the rule's id, so the renderer
+// CANNOT print what matched, and no caller written later can either.
+// What is asserted here instead is that absence, at the type, plus the
+// behaviour that follows from it.
 //
-//	--- FAIL: TestTheReportNamesThePlaceAndNeverTheTextThatTrippedIt/the_matched_text_does_not_reach_the_page
-//	    report_test.go:88: the rendered report changes when only the matched text changes, so
-//	    it carries that text into the log.
-//
-// and nothing else in the package moved, which is the measurement that
-// says no other row could see this.
+// MUTATION RUN, and what actually reddened: adding a Match field back to
+// Finding and restoring `(matched %q)` to Finding.String reds the first
+// subtest naming the extra field, and reds the second when the fixture's
+// own text appears on the page. Nothing else in the package moved.
 func TestTheReportNamesThePlaceAndNeverTheTextThatTrippedIt(t *testing.T) {
 	rules := realRules(t)
 	phrase, rule := aCitedPhrase(t, rules)
-	term, _ := aForbiddenName(t, rules)
+	term, _, _ := aForbiddenName(t, rules)
 
 	// A real scan, not hand-built findings: the property is about what
 	// the pipeline renders, and a fixture assembled here would prove it
@@ -84,13 +74,41 @@ func TestTheReportNamesThePlaceAndNeverTheTextThatTrippedIt(t *testing.T) {
 
 	rendered := renderReport(t, findings, nil)
 
-	t.Run("the matched text does not reach the page", func(t *testing.T) {
-		if standIn := renderReport(t, withoutTheMatches(findings), nil); rendered != standIn {
-			t.Errorf("the rendered report changes when only the matched text changes, so it "+
-				"carries that text into the log.\nA finding's match is the private citation or "+
-				"the provider name this check exists to keep out of published text, and a run's "+
-				"log is more public than the message it came from.\ngot:\n%s\nwith the text "+
-				"replaced:\n%s", rendered, standIn)
+	t.Run("a finding cannot hold the text that tripped it", func(t *testing.T) {
+		// THE STRUCTURAL HALF, and it is the one that holds for callers
+		// nobody has written. A renderer can be trusted not to print a
+		// field; it cannot be trusted forever, and the next reader of
+		// these findings is a different program.
+		want := map[string]bool{"Subject": true, "Line": true, "PatternID": true,
+			"Infrastructure": true}
+		typ := reflect.TypeOf(Finding{})
+		for i := 0; i < typ.NumField(); i++ {
+			if name := typ.Field(i).Name; !want[name] {
+				t.Errorf("Finding carries a field %q that this row does not know about.\n"+
+					"The text a rule matched IS the private citation or the provider name, "+
+					"and every consumer of a finding writes somewhere public — a run's log "+
+					"on a fork's pull request, or a committed record. A struct that cannot "+
+					"hold the string cannot leak it; if this field is meant to be here, it "+
+					"is this row that has to change, deliberately.", name)
+			}
+			delete(want, typ.Field(i).Name)
+		}
+		for name := range want {
+			t.Errorf("Finding no longer has a field %q, so the rows below are asserting "+
+				"about a shape that has moved", name)
+		}
+	})
+
+	t.Run("and the page carries neither of the fixture's own strings", func(t *testing.T) {
+		// THE BEHAVIOURAL FLOOR. The row above says the text cannot be
+		// carried; this one says nothing reconstructed it on the way out.
+		for _, secret := range []string{phrase, spelled} {
+			if strings.Contains(rendered, secret) {
+				t.Errorf("the rendered report reproduces text from the surface it read.\n"+
+					"A run's log is more public than the message it came from, so a report "+
+					"carrying what it caught publishes it to a wider audience than the "+
+					"surface it was defending.\n%s", rendered)
+			}
 		}
 	})
 
@@ -178,15 +196,16 @@ func TestTheNarrowingOutputSaysWhatHappensNext(t *testing.T) {
 func TestTheSelfTestSaysHowToRepairItself(t *testing.T) {
 	r := repo{dir: moduleRoot(t)}
 
-	blind := Rules{
-		patterns: []pattern{{
-			id: "matches-nothing",
-			re: regexp.MustCompile(`zzz-this-pattern-matches-nothing-zzz`),
-		}},
-		vendor: map[string]string{"zzzthistermmatchesnothingzzz": "term-matches-nothing"},
+	engine, err := leakcheck.New(
+		[]rulefile.Rule{{ID: "matches-nothing", Text: `zzz-this-pattern-matches-nothing-zzz`}},
+		[]rulefile.Rule{{ID: "term-matches-nothing", Text: "zzzthistermmatchesnothingzzz"}},
+	)
+	if err != nil {
+		t.Fatalf("building a vocabulary that matches nothing: %v", err)
 	}
+	blind := Rules{Rules: engine}
 	var out bytes.Buffer
-	err := selfTest(r, blind, &out)
+	err = selfTest(r, blind, &out)
 	if err == nil {
 		t.Fatal("a vocabulary that catches nothing passed the self-test, so the control " +
 			"that must red on demand cannot")

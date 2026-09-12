@@ -89,11 +89,12 @@ func aCitedPhrase(t *testing.T, rules Rules) (phrase, rule string) {
 // of the control: "draws" carries a forbidden name inside it and is not
 // one, so it must pass — and the row is worthless unless the containment
 // is real, which is asserted here rather than assumed.
-func aForbiddenName(t *testing.T, rules Rules) (term, ordinary string) {
+func aForbiddenName(t *testing.T, rules Rules) (term, id, ordinary string) {
 	t.Helper()
 	const word = "draws"
+	vocabulary := rules.VendorTerms()
 	var terms []string
-	for candidate := range rules.vendor {
+	for candidate := range vocabulary {
 		if strings.Contains(word, candidate) {
 			terms = append(terms, candidate)
 		}
@@ -104,7 +105,7 @@ func aForbiddenName(t *testing.T, rules Rules) (term, ordinary string) {
 			"tokenisation control below proves nothing about substring matching — a word "+
 			"merely adjacent in meaning is not the shape this row needs", word)
 	}
-	return terms[0], word
+	return terms[0], vocabulary[terms[0]], word
 }
 
 // ---------------------------------------------------------------------
@@ -120,7 +121,7 @@ func aForbiddenName(t *testing.T, rules Rules) (term, ordinary string) {
 func TestScanReadsThePublishedSurfaces(t *testing.T) {
 	rules := realRules(t)
 	phrase, rule := aCitedPhrase(t, rules)
-	term, ordinary := aForbiddenName(t, rules)
+	term, termID, ordinary := aForbiddenName(t, rules)
 
 	t.Run("a message carrying a private citation is reported with the pattern that caught it",
 		func(t *testing.T) {
@@ -163,9 +164,14 @@ func TestScanReadsThePublishedSurfaces(t *testing.T) {
 			// above is passing because the vocabulary is off.
 			spelled := "handoff to " + strings.ToUpper(term[:1]) + term[1:] + "Runtime"
 			found := rules.Scan("commit abcdef0", spelled)
-			if len(found) != 1 || !found[0].Infrastructure || found[0].Match != term {
-				t.Errorf("the same term spelled as a subword produced %v, want one vendor "+
-					"finding matching %q", found, term)
+			// NAMED BY ITS ID, which is the whole of what a finding now
+			// carries about which rule fired. The term itself is not on
+			// the struct: the text that matched IS the thing this check
+			// exists to keep out of published places, and a report is a
+			// published place.
+			if len(found) != 1 || !found[0].Infrastructure || found[0].PatternID != termID {
+				t.Errorf("the same term spelled as a subword produced %v, want one "+
+					"infrastructure finding under %s", found, termID)
 			}
 		})
 

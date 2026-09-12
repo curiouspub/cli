@@ -382,8 +382,11 @@ func describe(stdout io.Writer, findings []Finding, narrowings []Narrowing) bool
 // could not already read here, and unlike the generic label it replaced
 // it says WHICH entry of the vocabulary fired.
 //
-// Match stays on the struct: it is what the counting is done on, and a
-// row can assert on it in memory without any of it reaching a page.
+// AND THE STRUCT NO LONGER HOLDS IT AT ALL. This used to be a promise
+// made by the renderer about a field it was carrying; it is now a
+// property of the type. A Finding has the surface, the line and the
+// rule's id, so there is nothing here to print by accident and nothing
+// for a consumer written later to reach for.
 func (f Finding) String() string {
 	where := f.Subject
 	if f.Line > 0 {

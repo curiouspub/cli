@@ -50,6 +50,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/curiouspub/cli/internal/leakcheck"
 	"github.com/curiouspub/cli/internal/rulefile"
 )
 
@@ -506,7 +507,7 @@ func loadProviderAuthActions(t *testing.T, root string) []string {
 // guard QUIETER, so both directions are asserted: the file is in the set,
 // and a file that merely sits beside it is not.
 func TestProviderActionListIsTreatedAsARuleFile(t *testing.T) {
-	set := ruleFileNames()
+	set := leakcheck.RuleFileNames()
 	if !set["scripts/provider-auth-actions.txt"] {
 		t.Error("the provider list is not a rule file, so the vendor check reds on the " +
 			"entries it has to spell in order to match them — and the fastest way out of " +
@@ -525,10 +526,10 @@ func TestProviderActionListIsTreatedAsARuleFile(t *testing.T) {
 		}
 	}
 	// And the waiver is still per-line and per-check where it does apply.
-	if text, ok := vendorScanLine("scripts/provider-auth-actions.txt", "some-owner/some-action", true); ok {
+	if text, ok := leakcheck.VendorScanLine("scripts/provider-auth-actions.txt", "some-owner/some-action"); ok {
 		t.Errorf("a data line in the provider list is scanned by the vendor check (as %q)", text)
 	}
-	if _, ok := vendorScanLine("scripts/provider-auth-actions.txt", "# some-owner/some-action", true); !ok {
+	if _, ok := leakcheck.VendorScanLine("scripts/provider-auth-actions.txt", "# some-owner/some-action"); !ok {
 		t.Error("a comment line in the provider list is not scanned; the prose explaining a " +
 			"rule has no need to name what the rule forbids")
 	}

@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/curiouspub/cli/internal/leakcheck"
 	"github.com/curiouspub/cli/internal/rulefile"
 )
 
@@ -68,18 +68,12 @@ func LoadRules(base, head end) (Rules, []Narrowing, error) {
 		return Rules{}, nil, err
 	}
 
-	rules := Rules{vendor: map[string]string{}}
-	for _, rule := range patternRules {
-		re, err := regexp.Compile(rule.Text)
-		if err != nil {
-			return Rules{}, nil, fmt.Errorf("%s declares %s, which is not a pattern this "+
-				"check can compile: %w", citationPatternsPath, rule.ID, err)
-		}
-		rules.patterns = append(rules.patterns, pattern{id: rule.ID, re: re})
+	engine, err := leakcheck.New(patternRules, vendorRules)
+	if err != nil {
+		return Rules{}, nil, fmt.Errorf("the union of %s and %s across the range: %w",
+			citationPatternsPath, vendorTermsPath, err)
 	}
-	for _, rule := range vendorRules {
-		rules.vendor[strings.ToLower(rule.Text)] = rule.ID
-	}
+	rules := Rules{Rules: engine}
 
 	// THE EMPTY-INPUT REFUSAL. A vocabulary that lost its contents passes
 	// everything and says nothing, which is indistinguishable from a
@@ -89,7 +83,7 @@ func LoadRules(base, head end) (Rules, []Narrowing, error) {
 		return Rules{}, nil, fmt.Errorf("the union of %s and %s across the range declares "+
 			"%d pattern(s) and %d term(s) — with either at zero this check would pass "+
 			"everything silently",
-			citationPatternsPath, vendorTermsPath, len(rules.patterns), len(rules.vendor))
+			citationPatternsPath, vendorTermsPath, len(patternRules), len(vendorRules))
 	}
 
 	return rules, append(patternNarrowings, vendorNarrowings...), nil
