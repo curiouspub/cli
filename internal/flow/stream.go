@@ -665,8 +665,8 @@ func startFailure(err error) error {
 	return ui.Quoted(
 		ui.IDServerAnswerUnrecognised,
 		"The server wouldn't start the build.",
-		apiErr.Message, ui.NextFreshDeploy,
-		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
+		apiErr.Message, ui.NextWait,
+		"Try again in a moment. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.")
 }
 
@@ -684,8 +684,9 @@ func streamRefusedFailure(apiErr *api.APIError) error {
 	return ui.Quoted(
 		ui.IDServerAnswerUnrecognised,
 		"The server wouldn't send the build log.",
-		apiErr.Message, ui.NextFreshDeploy,
-		"Run `curious deploy` again. If it keeps happening, please report it.")
+		apiErr.Message, ui.NextWait,
+		"Try again in a moment. If it keeps happening, updating curious may\n"+
+			"help — this build may be older than the server.")
 }
 
 // streamLostFailure is what a build log that could not be picked up again

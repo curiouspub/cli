@@ -368,8 +368,8 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 				"`curious deploy` again.")
 
 	case resp.StatusCode == http.StatusForbidden:
-		why, next := refusalCopy(host, deps.ExpiresAt, deps.Now())
-		return uploadFailed(ui.IDUploadRefusedUnexplained, host, resp.StatusCode, "", why, ui.NextFreshDeploy, next)
+		id, action, why, next := refusalCopy(host, deps.ExpiresAt, deps.Now())
+		return uploadFailed(id, host, resp.StatusCode, "", why, action, next)
 	}
 
 	return uploadFailed(ui.IDUploadAnswerUnrecognised, host, resp.StatusCode, "",
@@ -389,20 +389,38 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 // other is a fault that reproduces forever. Nothing in the response can
 // tell them apart, and the announced window is the one thing both ends
 // already share a vocabulary for.
-func refusalCopy(host string, expiresAt, now time.Time) (why, next string) {
+// IT RETURNS THE FAMILY AND THE ACTION TOO, because the three branches
+// are three different diagnoses and the caller cannot know which one ran.
+// Passing one id and one action for all three — which is what this did
+// before the catalog — filed a signature mismatch under the family for
+// "we could not tell", and told a reader to deploy again about a fault
+// that reproduces forever.
+func refusalCopy(host string, expiresAt, now time.Time) (
+	id ui.FailureID, action ui.NextAction, why, next string) {
 	switch {
 	case expiresAt.IsZero():
-		return mayHaveExpired + ", or something about the archive did not\n" +
+		return ui.IDUploadRefusedUnexplained, ui.NextFreshDeploy,
+			mayHaveExpired + ", or something about the archive did not\n" +
 				"match what the server signed. This server does not yet say when an\n" +
 				"upload link stops working, so curious cannot tell you which it was.",
 			"Run `curious deploy` again. If it fails the same way twice, please\n" +
 				"report it."
 
 	case !now.Before(expiresAt):
-		return expiredCopy()
+		why, next := expiredCopy()
+		return ui.IDUploadLinkExpired, ui.NextFreshDeploy, why, next
 	}
 
-	return "The link had not run out yet, so " + refusedInsideWindow + ". Something\n" +
+	// ADJUDICATED 2026-09-12, correction #1: the copy was right and the
+	// ACTION was wrong. This branch is a signature mismatch inside the
+	// window — a fault that reproduces forever — and its words have
+	// always said so, asking only for a report and the version. The
+	// action said FreshDeploy, which told a reader to do the one thing
+	// the sentence above it explains will not help. The words stay
+	// exactly as they were; the action is GiveUp, which is what
+	// ui.NextGiveUp means.
+	return ui.IDUploadSignatureMismatch, ui.NextGiveUp,
+		"The link had not run out yet, so " + refusedInsideWindow + ". Something\n" +
 			"about the archive did not match what the server signed for it, which\n" +
 			"is a fault in curious rather than anything about your project.",
 		"Please report this, and say which version you are on — `curious version`\n" +

@@ -231,7 +231,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		return ui.Quoted(
 			ui.IDRateLimited,
 			"Too many requests from here.",
-			apiErr.Message, ui.NextGiveUp,
+			apiErr.Message, ui.NextWait,
 			retryAdvice(apiErr.RetryAfter, now))
 
 	case wire.CodeBadRequest:

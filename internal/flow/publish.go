@@ -555,8 +555,8 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	return ui.NewFailure(
 		ui.IDServerAnswerUnrecognised,
 		"The server wouldn't give this deploy an address.",
-		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextFreshDeploy,
-		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
+		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
+		"Try again in a moment. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.").Quoting(apiErr.Message)
 }
 

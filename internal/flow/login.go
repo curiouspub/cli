@@ -692,7 +692,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		return ui.Quoted(
 			ui.IDRateLimited,
 			"Too many requests from here.",
-			apiErr.Message, ui.NextGiveUp,
+			apiErr.Message, ui.NextWait,
 			retryAdvice(apiErr.RetryAfter, now))
 
 	case wire.CodeCapacityClosed:
