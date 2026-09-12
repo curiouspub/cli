@@ -768,11 +768,45 @@ var contractSitesVisited int
 
 func contractSiteCount(t *testing.T) int {
 	t.Helper()
-	if contractSitesVisited == 0 {
-		// THE CENSUS ROW MUST NOT PASS BY RUNNING FIRST. Go orders tests
-		// within a package by declaration, and a row that silently read a
-		// zero would compare nothing against nothing and report clean.
-		TestTheFailureContractHolds(t)
+	if contractSitesVisited > 0 {
+		return contractSitesVisited
 	}
+	// THE CENSUS ROW MUST NOT PASS BY RUNNING FIRST. Go orders tests
+	// within a package by declaration, and a row that silently read a
+	// zero would compare nothing against nothing and report clean.
+	//
+	// IT RUNS THE COLLECTION, NOT THE TEST. Calling the contract test
+	// under this row's own *testing.T attributed every contract failure
+	// to the census as well, so one defect printed two reds and the
+	// census's was a passing count sitting under a failure. Measured
+	// while mutating an id away: two rows red, one of them saying
+	// nothing true about itself.
+	contractSitesVisited = collectedSiteCount(t)
 	return contractSitesVisited
+}
+
+// collectedSiteCount runs the contract checker's own collection and
+// returns how many construction sites it visits, WITHOUT asserting
+// anything about them.
+//
+// It is the checker's enumeration and deliberately so: the census row
+// compares it against a census written separately, and the thing being
+// compared has to be the number the checker actually uses. What must not
+// be shared is the CENSUS, and that is written from the type rather than
+// from the checker's rules.
+func collectedSiteCount(t *testing.T) int {
+	t.Helper()
+	// The contract test records the count as a side effect; running it
+	// under a throwaway T keeps its assertions off this row's ledger
+	// while still producing the number.
+	before := contractSitesVisited
+	contractSitesVisited = 0
+	TestTheFailureContractHolds(&testing.T{})
+	got := contractSitesVisited
+	if got == 0 {
+		contractSitesVisited = before
+		t.Fatal("the contract checker visited no site, so the census below would " +
+			"compare against nothing")
+	}
+	return got
 }
