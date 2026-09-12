@@ -146,6 +146,7 @@ func capacityCheckFailure(err error) error {
 		// which is the part that tells a person whether they mis-set an
 		// endpoint or lost their connection.
 		return ui.NewFailure(
+			ui.IDCapacityCheckUnreachable,
 			"curious couldn't ask whether there is room today.",
 			"That check runs before anything is uploaded, so the "+
 				"run stopped here rather than walking you through a login and a "+
@@ -157,12 +158,14 @@ func capacityCheckFailure(err error) error {
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name.
 		return ui.ServerClosed(ui.Quoted(
+			ui.IDServiceUnavailable,
 			"curious.pub is not taking deploys right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later. "+uploadedNothing))
 	}
 
 	return ui.Quoted(
+		ui.IDCapacityCheckFailed,
 		"curious couldn't ask whether there is room today.",
 		apiErr.Message, ui.NextWait,
 		"Try again in a moment. "+uploadedNothing)

@@ -165,6 +165,7 @@ func offerWaitlist(ctx context.Context, w waitlistDeps, address addressSource, r
 // to whatever script ran it.
 func declinedStop(resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
+		ui.IDWaitlistDeclined,
 		nothingDeployed,
 		capacityUsedUp+" "+uploadedNothing, ui.NextWait,
 		"Run `curious deploy` again "+afterTheReset(resetsAt, now)+".")
@@ -177,6 +178,7 @@ func declinedStop(resetsAt, now time.Time) *ui.Failure {
 // CI log can act on.
 func noTerminalStop(resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
+		ui.IDWaitlistNeedsTerminal,
 		nothingDeployed,
 		capacityUsedUp+" There is a waitlist for the moment it reopens, and "+
 			"curious had no terminal to offer it on — that happens through a "+
@@ -207,14 +209,15 @@ func unaskableStop(err error, resetsAt, now time.Time) *ui.Failure {
 // tempting sentence — that a place is waiting — would be a promise this
 // company would then have to keep, and the CLI is where it would be
 // read.
-func joinedStop(email string, resetsAt, now time.Time) *ui.Failure {
-	return ui.NewFailure(
-		"You're on the list.",
-		fmt.Sprintf("curious will email %s when trial capacity reopens. It is "+
+func joinedStop(email string, resetsAt, now time.Time) *ui.Closed {
+	return &ui.Closed{
+		What: "You're on the list.",
+		Why: fmt.Sprintf("curious will email %s when trial capacity reopens. It is "+
 			"first-come from that moment and nothing is held back for anyone on "+
 			"the list, so the sooner you run it after that, the better.\n\n%s",
-			email, uploadedNothing), ui.NextWait,
-		"Run `curious deploy` again "+afterTheReset(resetsAt, now)+".")
+			email, uploadedNothing),
+		NextText: "Run `curious deploy` again " + afterTheReset(resetsAt, now) + ".",
+	}
 }
 
 // signupFailedStop is the honest ending for a signup that did not
@@ -225,6 +228,7 @@ func joinedStop(email string, resetsAt, now time.Time) *ui.Failure {
 // that nothing was ever recorded.
 func signupFailedStop(err error, resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
+		ui.IDWaitlistSignupFailed,
 		"That didn't get you onto the list.",
 		uploadedNothing, ui.NextWait,
 		"Email "+supportAddress+" and we'll add you by hand.\nRun `curious deploy` "+

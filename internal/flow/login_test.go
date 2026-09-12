@@ -425,7 +425,7 @@ func newLoginRun(t *testing.T) *loginRun {
 			run.offer.resetsAt = resetsAt
 			carried, _ := ctx.Value(ctxMarker{}).(string)
 			run.offer.ctxCarried = carried == "carried"
-			return ui.NewFailure("Capacity is closed.", "stub", ui.NextGiveUp, "stub")
+			return ui.NewFailure(ui.IDInternalFault, "Capacity is closed.", "stub", ui.NextGiveUp, "stub")
 		},
 	}
 	return run
@@ -452,6 +452,14 @@ func rendered(err error) string {
 		// fields here is how this helper came to report a server message
 		// as missing from output that contained it.
 		return strings.Join(f.Paragraphs(), "\n")
+	}
+	// A CLOSED DOOR IS NOT A FAILURE and renders through its own path, so
+	// a helper that only knew about Failure reported its copy as absent
+	// from output that contained it — the same defect this helper's own
+	// comment above describes, arriving through a second type.
+	var closed *ui.Closed
+	if errors.As(err, &closed) {
+		return strings.Join([]string{closed.What, closed.Why, closed.NextText}, "\n")
 	}
 	return err.Error()
 }
@@ -1695,7 +1703,7 @@ func TestTheTokenIsNeverPrintedOnAnyPath(t *testing.T) {
 		prompt := &scriptedPrompt{}
 		prompt.Step("%s", token)
 		planted := prompt.out.String() + "\n" +
-			rendered(ui.NewFailure(token, token, ui.NextGiveUp, token))
+			rendered(ui.NewFailure(ui.IDInternalFault, token, token, ui.NextGiveUp, token))
 		if n := strings.Count(planted, token); n != 4 {
 			t.Fatalf("a planted value was found %d times across the narration "+
 				"buffer and the rendered failure, want 4 — the assertions below "+
@@ -2023,7 +2031,7 @@ func TestTheOfferKeepsItsWordsAndTheFlowKeepsTheCost(t *testing.T) {
 	run.prompt.lines = []answer{says("111111")}
 	run.prompt.confirms = []answer{no()}
 	run.deps.Offer = func(context.Context, string, time.Time) error {
-		return ui.NewFailure("Want a nudge when a slot frees up?", "Because.", ui.NextGiveUp, "Say yes.")
+		return ui.NewFailure(ui.IDInternalFault, "Want a nudge when a slot frees up?", "Because.", ui.NextGiveUp, "Say yes.")
 	}
 	run.script.verifyOutcomes = []outcome{
 		fails(http.StatusServiceUnavailable, wire.CodeCapacityClosed, "full").after("900"),

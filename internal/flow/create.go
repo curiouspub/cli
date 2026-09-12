@@ -184,6 +184,7 @@ func createDeploy(ctx context.Context, deps createDeps) (*wire.DeployCreateRespo
 // must not, and that difference is the point of it.
 func createUnansweredFailure(err error) error {
 	return ui.NewFailure(
+		ui.IDServerUnanswered,
 		"curious didn't hear back after asking for somewhere to upload.",
 		deployMayExist+" — curious cannot tell whether the\n"+
 			"request arrived. Nothing has been uploaded to it either way, and an\n"+
@@ -200,6 +201,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// spend another of the sends the server allows in an hour on a
 		// run that is not going to end differently.
 		return ui.NewFailure(
+			ui.IDFreshLoginRefused,
 			authenticationFailed,
 			"curious logged in again and the server still would not "+
 				"accept the\nrequest, so it stopped rather than keep asking.", ui.NextFreshDeploy,
@@ -210,6 +212,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name.
 		return ui.ServerClosed(ui.Quoted(
+			ui.IDServiceUnavailable,
 			"curious.pub is not taking deploys right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later. "+uploadedNothing))
@@ -226,8 +229,9 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// Pace, not access: no closed-door mark, and the time the
 		// server named is USED rather than dropped.
 		return ui.Quoted(
+			ui.IDRateLimited,
 			"Too many requests from here.",
-			apiErr.Message, ui.NextGiveUp,
+			apiErr.Message, ui.NextWait,
 			retryAdvice(apiErr.RetryAfter, now))
 
 	case wire.CodeBadRequest:
@@ -235,6 +239,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// and the server's own message is the only thing here that
 		// knows which one.
 		return ui.NewFailure(
+			ui.IDClientRequestRejected,
 			"The server wouldn't accept that archive.",
 			"Sending the same thing again would not go any better, "+
 				"so the run\nstopped here.", ui.NextGiveUp,
@@ -247,6 +252,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 	// predates. The contract is additive-only, so the server is entitled
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.Quoted(
+		ui.IDServerAnswerUnrecognised,
 		"curious couldn't start the deploy.",
 		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+

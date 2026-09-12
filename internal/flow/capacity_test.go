@@ -387,8 +387,19 @@ func TestJoiningCostsExactlyWhatDecliningCosts(t *testing.T) {
 			if code := exitCodeFor(t, row.err); code != ui.ExitServerClosed {
 				t.Errorf("exit code %d, want %d", code, ui.ExitServerClosed)
 			}
+			// JOINING IS NOT A FAILURE, and this row is where that shows.
+			// Every other ending on this path is a *ui.Failure; the
+			// waitlist confirmation is a *ui.Closed, because the run did
+			// what was asked. Both cost the same exit code, asserted
+			// above, and the copy is checked the same way below.
 			var f *ui.Failure
-			if !errors.As(row.err, &f) {
+			var closed *ui.Closed
+			switch {
+			case errors.As(row.err, &f):
+			case errors.As(row.err, &closed):
+				f = &ui.Failure{What: closed.What, Why: closed.Why,
+					NextText: closed.NextText}
+			default:
 				t.Fatalf("the stop is a %T, which the program renders as an internal "+
 					"fault", row.err)
 			}

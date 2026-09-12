@@ -157,11 +157,12 @@ func (r *storeRefused) Unwrap() error { return r.failure }
 // a quotation rather than joined into this program's prose, so a line
 // break inside it cannot become a paragraph in ours. Empty where there
 // is nothing to quote.
-func uploadFailed(host string, status int, detail, why string,
+func uploadFailed(id ui.FailureID, host string, status int, detail, why string,
 	action ui.NextAction, next string) error {
 	return &storeRefused{
 		Status: status,
 		failure: ui.NewFailure(
+			id,
 			"curious couldn't upload the archive to "+host+".",
 			why+uploadLeftBehind, action,
 			next).Quoting(detail),
@@ -209,7 +210,7 @@ type uploadDeps struct {
 
 	// Transport is the API client's own transport, so a proxy or extra
 	// trust material configured for this run applies here too.
-	Transport *http.Transport
+	Transport http.RoundTripper
 
 	// Now is the clock the window is compared against.
 	Now func() time.Time
@@ -244,7 +245,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 
 	file, err := os.Open(deps.ArchivePath)
 	if err != nil {
-		return uploadFailed(host, 0, err.Error(),
+		return uploadFailed(ui.IDArchiveUnreadable, host, 0, err.Error(),
 			"The archive curious packed could not be opened to send it.",
 			ui.NextFreshDeploy, "Check that the temporary directory is readable, then run\n"+
 				"`curious deploy` again.")
@@ -296,7 +297,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 	if err != nil {
 		// THE UNDERLYING ERROR IS NOT WRAPPED, because net/http builds
 		// this one out of the URL it was handed.
-		return uploadFailed(host, 0, "",
+		return uploadFailed(ui.IDUploadAddressUnusable, host, 0, "",
 			"curious could not build the upload request for that address.",
 			ui.NextFreshDeploy, "Run `curious deploy` again. If it keeps happening, please report it.")
 	}
@@ -324,7 +325,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 		// builds its message from scratch and none of them touches err.
 		switch cause := context.Cause(reqCtx); {
 		case errors.Is(cause, errUploadStalled):
-			return uploadFailed(host, 0, "",
+			return uploadFailed(ui.IDUploadStalled, host, 0, "",
 				fmt.Sprintf("%s: no data was sent for %s. The connection is open but\n"+
 					"nothing is moving across it, so curious stopped rather than wait\n"+
 					"indefinitely.", uploadStalled, stall),
@@ -336,17 +337,17 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 			// window — exactly what having no ceiling of our own
 			// avoids — and the two could disagree.
 			why, next := expiredCopy()
-			return uploadFailed(host, 0, "", why, ui.NextFreshDeploy, next)
+			return uploadFailed(ui.IDUploadLinkExpired, host, 0, "", why, ui.NextFreshDeploy, next)
 
 		case sent.Load() == 0:
-			return uploadFailed(host, 0, "",
+			return uploadFailed(ui.IDUploadHostUnreachable, host, 0, "",
 				"curious "+couldNotReach+" "+host+" to send the archive. That usually\n"+
 					"means the connection dropped, or something between here and there\n"+
 					"is blocking it.",
 				ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
 		}
 
-		return uploadFailed(host, 0, "",
+		return uploadFailed(ui.IDUploadConnectionLost, host, 0, "",
 			connectionDropped+". It had reached "+host+" and\n"+
 				"was part way through when the connection failed.",
 			ui.NextFreshDeploy, "Check your connection and run `curious deploy` again.")
@@ -358,7 +359,7 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 		return nil
 
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		return uploadFailed(host, resp.StatusCode, "",
+		return uploadFailed(ui.IDUploadRedirected, host, resp.StatusCode, "",
 			fmt.Sprintf("It answered %d, redirecting the upload somewhere else. curious\n"+
 				"does not follow a redirect when it is sending your project, because\n"+
 				"the address it was given is the only one the server signed.",
@@ -367,11 +368,11 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 				"`curious deploy` again.")
 
 	case resp.StatusCode == http.StatusForbidden:
-		why, next := refusalCopy(host, deps.ExpiresAt, deps.Now())
-		return uploadFailed(host, resp.StatusCode, "", why, ui.NextFreshDeploy, next)
+		id, action, why, next := refusalCopy(host, deps.ExpiresAt, deps.Now())
+		return uploadFailed(id, host, resp.StatusCode, "", why, action, next)
 	}
 
-	return uploadFailed(host, resp.StatusCode, "",
+	return uploadFailed(ui.IDUploadAnswerUnrecognised, host, resp.StatusCode, "",
 		fmt.Sprintf("It answered %d, and that is not an answer this client can\n"+
 			"explain.", resp.StatusCode),
 		ui.NextFreshDeploy, "Run `curious deploy` again. If it keeps happening, please report it\n"+
@@ -388,20 +389,38 @@ func uploadArchive(ctx context.Context, deps uploadDeps) error {
 // other is a fault that reproduces forever. Nothing in the response can
 // tell them apart, and the announced window is the one thing both ends
 // already share a vocabulary for.
-func refusalCopy(host string, expiresAt, now time.Time) (why, next string) {
+// IT RETURNS THE FAMILY AND THE ACTION TOO, because the three branches
+// are three different diagnoses and the caller cannot know which one ran.
+// Passing one id and one action for all three — which is what this did
+// before the catalog — filed a signature mismatch under the family for
+// "we could not tell", and told a reader to deploy again about a fault
+// that reproduces forever.
+func refusalCopy(host string, expiresAt, now time.Time) (
+	id ui.FailureID, action ui.NextAction, why, next string) {
 	switch {
 	case expiresAt.IsZero():
-		return mayHaveExpired + ", or something about the archive did not\n" +
+		return ui.IDUploadRefusedUnexplained, ui.NextFreshDeploy,
+			mayHaveExpired + ", or something about the archive did not\n" +
 				"match what the server signed. This server does not yet say when an\n" +
 				"upload link stops working, so curious cannot tell you which it was.",
 			"Run `curious deploy` again. If it fails the same way twice, please\n" +
 				"report it."
 
 	case !now.Before(expiresAt):
-		return expiredCopy()
+		why, next := expiredCopy()
+		return ui.IDUploadLinkExpired, ui.NextFreshDeploy, why, next
 	}
 
-	return "The link had not run out yet, so " + refusedInsideWindow + ". Something\n" +
+	// ADJUDICATED 2026-09-12, correction #1: the copy was right and the
+	// ACTION was wrong. This branch is a signature mismatch inside the
+	// window — a fault that reproduces forever — and its words have
+	// always said so, asking only for a report and the version. The
+	// action said FreshDeploy, which told a reader to do the one thing
+	// the sentence above it explains will not help. The words stay
+	// exactly as they were; the action is GiveUp, which is what
+	// ui.NextGiveUp means.
+	return ui.IDUploadSignatureMismatch, ui.NextGiveUp,
+		"The link had not run out yet, so " + refusedInsideWindow + ". Something\n" +
 			"about the archive did not match what the server signed for it, which\n" +
 			"is a fault in curious rather than anything about your project.",
 		"Please report this, and say which version you are on — `curious version`\n" +

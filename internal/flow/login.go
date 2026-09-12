@@ -681,6 +681,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 	switch apiErr.Code {
 	case wire.CodeBadRequest:
 		return ui.NewFailure(
+			ui.IDClientRequestRejected,
 			"curious sent something this server wouldn't accept.",
 			"Sending it again would not go any better, so the run "+
 				"stopped here rather than spending another of your attempts.", ui.NextGiveUp,
@@ -689,8 +690,9 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 
 	case wire.CodeRateLimited:
 		return ui.Quoted(
+			ui.IDRateLimited,
 			"Too many requests from here.",
-			apiErr.Message, ui.NextGiveUp,
+			apiErr.Message, ui.NextWait,
 			retryAdvice(apiErr.RetryAfter, now))
 
 	case wire.CodeCapacityClosed:
@@ -722,12 +724,14 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		// switch has no reset anybody can honestly name, which is why
 		// the contract does not promise one for it.
 		return ui.ServerClosed(ui.Quoted(
+			ui.IDServiceUnavailable,
 			"curious.pub is not taking logins right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later. Nothing has been uploaded."))
 
 	case wire.CodeForbidden:
 		return ui.Quoted(
+			ui.IDLoginRefused,
 			"That login was refused.",
 			apiErr.Message, ui.NextGiveUp,
 			"If you think this is wrong, please get in touch — there is nothing\n"+
@@ -738,6 +742,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 		// almost always a mis-set endpoint rather than a server fault,
 		// and the endpoint is the thing that can be changed.
 		return ui.NewFailure(
+			ui.IDLoginEndpointMissing,
 			"That server does not answer the login endpoint.",
 			fmt.Sprintf("curious called %s and the route was not there. That usually "+
 				"means\nthe address is wrong rather than that the server is broken.\n"+
@@ -758,6 +763,7 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 // this build.
 func unknownCodeFailure(apiErr *api.APIError) error {
 	return ui.Quoted(
+		ui.IDServerAnswerUnrecognised,
 		"curious couldn't finish logging you in.",
 		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
@@ -804,6 +810,7 @@ func retryAdvice(retryAfter time.Duration, now time.Time) string {
 // either side goes red. Change one end, come to the other.
 func writeFailure(err error) error {
 	return ui.Quoted(
+		ui.IDLoginNotSaved,
 		"Logged in, but the login could not be saved.",
 		err.Error(), ui.NextFreshDeploy,
 		"Check that the folder above exists, is writable and has space, then\n"+

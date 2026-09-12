@@ -770,6 +770,7 @@ func resolveProjectDir(dir string) (string, error) {
 		// deleted checkout, most often — so the path it could not
 		// resolve is the useful half.
 		return "", ui.NewFailure(
+			ui.IDProjectDirUnknown,
 			"curious couldn't work out which directory you mean.",
 			fmt.Sprintf("Resolving %q against the current directory failed: %v.\n\n"+
 				"That usually means the directory this command was started in no "+
@@ -781,18 +782,21 @@ func resolveProjectDir(dir string) (string, error) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", ui.NewFailure(
+			ui.IDProjectDirMissing,
 			"There is nothing at "+abs+".",
 			"curious deploys a directory, and that one does not exist.", ui.NextFreshDeploy,
 			"Check the path and run `curious deploy <dir>` again — or run it with\n"+
 				"no argument at all to deploy the directory you are standing in.")
 	case err != nil:
 		return "", ui.Quoted(
+			ui.IDProjectDirUnreadable,
 			"curious couldn't read "+abs+".",
 			err.Error(), ui.NextFreshDeploy,
 			"Check that the path exists and that you can read it, then run\n"+
 				"`curious deploy` again.")
 	case !info.IsDir():
 		return "", ui.NewFailure(
+			ui.IDProjectPathNotADirectory,
 			abs+" is a file, not a directory.",
 			"curious deploys a project directory — the one holding package.json —\n"+
 				"rather than a single file.", ui.NextFreshDeploy,
@@ -807,6 +811,7 @@ func resolveProjectDir(dir string) (string, error) {
 // every one of those is recoverable by logging in again.
 func configFailure(err error) *ui.Failure {
 	return ui.NewFailure(
+		ui.IDConfigLocationUnusable,
 		"curious couldn't work out where to keep your login.",
 		"The location comes from CURIOUS_CONFIG.", ui.NextFreshDeploy,
 		"Set CURIOUS_CONFIG to the full path of a config file and run\n"+
@@ -818,6 +823,7 @@ func configFailure(err error) *ui.Failure {
 // at, which is the half a person can act on.
 func unreadableProjectFailure(err error) *ui.Failure {
 	return ui.Quoted(
+		ui.IDProjectUnreadable,
 		"curious couldn't read the whole project.",
 		err.Error(), ui.NextFreshDeploy,
 		"Check that every directory in the project is readable, then run\n"+
@@ -835,6 +841,7 @@ func unreadableProjectFailure(err error) *ui.Failure {
 // variable to look at, and that is nameable without printing its value.
 func endpointUnusableFailure() *ui.Failure {
 	return ui.NewFailure(
+		ui.IDAPIAddressUnusable,
 		"curious can't use that API address.",
 		"The endpoint this run was pointed at is not one this client will talk\n"+
 			"to. It has to name a server over https — or a loopback host over http,\n"+
@@ -849,6 +856,7 @@ func endpointUnusableFailure() *ui.Failure {
 // writable.
 func tempDirFailure(err error) *ui.Failure {
 	return ui.Quoted(
+		ui.IDTempDirUnusable,
 		"curious couldn't make a place to write the archive.",
 		err.Error(), ui.NextFreshDeploy,
 		"Check that the temporary directory exists, is writable and has space,\n"+

@@ -1348,3 +1348,56 @@ func TestEveryTerminalSentinelRendersSomethingWrittenForAReader(t *testing.T) {
 		}
 	}
 }
+
+// TestTheIdReachesTheAgentSurface.
+//
+// The terminal prints the id for a person who may quote it. This surface
+// prints it for a reader that is a PROGRAM, and the case is stronger: a
+// headline is prose that gets reworded, and an id is the handle a model
+// can match on, carry into a follow-up call, and repeat to a person
+// without paraphrasing it into something else.
+//
+// It matters most on the refusal path, because that is where a model
+// decides whether to retry, ask, or hand off — and the action alone says
+// what KIND of thing to do, never which thing went wrong.
+//
+// REQUIRED MUTATION, run 2026-09-12: drop the id from refusalText. Reds
+// here alone.
+func TestTheIdReachesTheAgentSurface(t *testing.T) {
+	script := &deployScript{
+		uploadPath: "/object-store/put",
+		deployID:   "dpl-id-on-the-surface",
+		subdomain:  "quick-koala-4f2a",
+		expiresAt:  fixedExpiry,
+		frames: []string{
+			phaseAt(wire.PhaseInstalling),
+			finished(wire.StatusBuilt),
+		},
+		refusePublish: &scriptedRefusal{
+			status:  http.StatusInternalServerError,
+			code:    wire.CodeInternal,
+			message: "the publisher fell over",
+		},
+	}
+	run := newToolsRun(t, script)
+
+	result := run.call(toolDeploySite,
+		fmt.Sprintf(`{"dir":%q}`, project(t, "localhost-hits")))
+	if !result.IsError {
+		t.Fatal("a refused publish answered as a success")
+	}
+	said := text(t, result)
+
+	if !strings.Contains(said, "Failure ID: ") {
+		t.Errorf("the refusal carries no failure id, so a model reading it has "+
+			"the action and no idea which failure it belongs to:\n%s", said)
+	}
+	// THE SAME LABEL AS THE TERMINAL, asserted rather than assumed: a
+	// reader who learns the phrase in one place should find it in the
+	// other, and two copies of a label are two strings that agree on the
+	// day they are written.
+	if !strings.Contains(said, ui.FailureIDLine(ui.IDDeployNotCompletedByServer)) {
+		t.Errorf("the refusal does not name the family this publish refusal "+
+			"belongs to (%s):\n%s", ui.IDDeployNotCompletedByServer, said)
+	}
+}

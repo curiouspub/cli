@@ -465,6 +465,7 @@ func publishStoppedFromOutside(cause error, deployID string) error {
 // https://.curiously.dev and exiting zero.
 func publishUnusableAnswerFailure(deployID string) error {
 	return ui.NewFailure(
+		ui.IDPublishedAddressInvalid,
 		"The server gave this deploy an address that cannot be one.",
 		"The publish itself was accepted, so the deploy may well be live — but\n"+
 			"the label the server sent back is not a label, so curious has no\n"+
@@ -498,6 +499,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// server's business; a client that threw away a time it was
 		// promised would be wrong either way.
 		return ui.NewFailure(
+			ui.IDRateLimited,
 			"The server is asking for a pause.",
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message)
@@ -507,6 +509,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// scoped code exists so a script can tell "come back later" from
 		// "this went wrong".
 		return ui.ServerClosed(ui.NewFailure(
+			ui.IDDailyCapacityClosed,
 			closedHeadline,
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message))
@@ -516,6 +519,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 
 	case wire.CodeNotFound:
 		return ui.NewFailure(
+			ui.IDDeployUnknownToServer,
 			"The server doesn't know that deploy.",
 			ui.Written("The deploy is %s. That usually "+
 				"means it has already\nexpired, or that it belongs to a different login "+
@@ -526,6 +530,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// The kill switch. The build is fine and the archive got there;
 		// the service simply is not taking this step right now.
 		return ui.ServerClosed(ui.NewFailure(
+			ui.IDServiceUnavailable,
 			"curious.pub isn't giving out addresses right now.",
 			nothingDeployed, ui.NextWait,
 			"Try again a little later.").Quoting(apiErr.Message))
@@ -537,6 +542,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// again anyway would be this client contradicting the sentence
 		// printed directly above it.
 		return ui.NewFailure(
+			ui.IDDeployNotCompletedByServer,
 			"The server couldn't finish the deploy.",
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextGiveUp,
 			"There is nothing to fix at this end and nothing here worth retrying.\n"+
@@ -547,9 +553,10 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	// predates. The contract is additive-only, so the server is entitled
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.NewFailure(
+		ui.IDServerAnswerUnrecognised,
 		"The server wouldn't give this deploy an address.",
-		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextFreshDeploy,
-		"Run `curious deploy` again. If it keeps happening, updating curious may\n"+
+		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
+		"Try again in a moment. If it keeps happening, updating curious may\n"+
 			"help — this build may be older than the server.").Quoting(apiErr.Message)
 }
 
@@ -574,6 +581,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 // which the contract routes here on purpose.
 func buildRefusedFailure(deployID string) *ui.Failure {
 	return ui.NewFailure(
+		ui.IDBuildOutputRefused,
 		"The build finished, and the server would not take the result.",
 		"The build log above ended with the build reporting that it had\n"+
 			"finished. What runs after that is a check on what the build actually\n"+
@@ -596,6 +604,7 @@ func buildRefusedFailure(deployID string) *ui.Failure {
 // thing giving up rather than a verdict it was never given.
 func publishNotConfirmedFailure(deployID string) error {
 	return ui.NewFailure(
+		ui.IDPublishNotConfirmed,
 		"The build could not be confirmed in time.",
 		"The build log ended with the build reporting that it had finished, and\n"+
 			"the server was still working on it "+publishConfirmWindow.String()+
@@ -619,6 +628,7 @@ func publishNotConfirmedFailure(deployID string) error {
 // is.
 func publishUnansweredFailure(err error, deployID string) error {
 	return ui.NewFailure(
+		ui.IDServerUnanswered,
 		"curious didn't hear back after asking for the deploy's address.",
 		ui.Written("The deploy may or may not have got one — curious cannot "+
 			"tell whether\nthe request arrived, and it does not ask twice, because "+

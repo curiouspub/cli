@@ -38,24 +38,24 @@ func CheckAstroDep(fsys FS, root string) Result {
 
 	switch pkg.fault {
 	case packageJSONMissing:
-		return hardStop(check.IDAstroDep, "There's no package.json in this directory.",
+		return hardStop(check.IDAstroDep, check.FamilyAstroDepMissing, "There's no package.json in this directory.",
 			noPackageJSONWhat, noPackageJSONWhy, wrongFolderNext)
 
 	case packageJSONUnreadable:
-		return hardStopAbout(check.IDAstroDep, "package.json couldn't be read.",
+		return hardStopAbout(check.IDAstroDep, check.FamilyAstroDepUnreadable, "package.json couldn't be read.",
 			"curious couldn't read package.json.",
 			"It's there, but this run couldn't open it — usually a permissions\n"+
 				"problem on the file itself or on the directory holding it.",
 			"Make package.json readable and run `curious deploy` again.")
 
 	case packageJSONInvalid:
-		return hardStopAbout(check.IDAstroDep, "package.json isn't valid JSON.",
+		return hardStopAbout(check.IDAstroDep, check.FamilyAstroDepInvalidJSON, "package.json isn't valid JSON.",
 			"package.json isn't valid JSON.",
 			invalidJSONWhy(pkg.position),
 			invalidJSONNext(pkg.position))
 
 	case packageJSONNotAnObject:
-		return hardStopAbout(check.IDAstroDep, "package.json isn't a JSON object.",
+		return hardStopAbout(check.IDAstroDep, check.FamilyAstroDepNotObject, "package.json isn't a JSON object.",
 			"package.json isn't a JSON object.",
 			"curious reads package.json to check this is an Astro project, and this\n"+
 				"one holds something else — an array, a string, or a bare null.",
@@ -66,7 +66,7 @@ func CheckAstroDep(fsys FS, root string) Result {
 	if declaresAstro(pkg.fields) {
 		return Result{}
 	}
-	return hardStopAbout(check.IDAstroDep, "package.json doesn't list astro as a dependency.",
+	return hardStopAbout(check.IDAstroDep, check.FamilyAstroDepAbsent, "package.json doesn't list astro as a dependency.",
 		notAnAstroProjectWhat, notAnAstroProjectWhy, wrongFolderNext)
 }
 
@@ -113,14 +113,15 @@ func invalidJSONNext(position string) string {
 
 // hardStop builds a hard-stop result for a finding about the project as
 // a whole — one that names no file to open, because there is none.
-func hardStop(id, message, what, why, next string) Result {
+func hardStop(id string, family check.FailureFamily, message, what, why, next string) Result {
 	return Result{Findings: []check.Finding{{
-		CheckID:  id,
-		Severity: check.SeverityHardStop,
-		Message:  message,
-		What:     what,
-		Why:      why,
-		Next:     next,
+		CheckID:   id,
+		FailureID: string(family),
+		Severity:  check.SeverityHardStop,
+		Message:   message,
+		What:      what,
+		Why:       why,
+		Next:      next,
 	}}}
 }
 
@@ -131,8 +132,8 @@ func hardStop(id, message, what, why, next string) Result {
 // which is what the field is for: one of the surfaces reading these is a
 // machine, and an agent should not have to parse English back out of a
 // sentence to learn which file to open.
-func hardStopAbout(id, message, what, why, next string) Result {
-	res := hardStop(id, message, what, why, next)
+func hardStopAbout(id string, family check.FailureFamily, message, what, why, next string) Result {
+	res := hardStop(id, family, message, what, why, next)
 	res.Findings[0].Paths = check.NewPaths(packageJSONName)
 	return res
 }

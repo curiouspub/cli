@@ -212,10 +212,15 @@ func ownCopy(f check.Finding) *ui.Failure {
 	}
 
 	next := f.Next
-	if next == "" {
+	// BLANK, NOT EMPTY. A producer that supplied whitespace used to pass
+	// this test and hand a failure a next-step paragraph made of spaces,
+	// which renders as a blank line and tells a reader nothing. Ruled
+	// 2026-09-12: every non-blank string is preserved BYTE FOR BYTE, and
+	// only a blank one falls back.
+	if strings.TrimSpace(next) == "" {
 		next = standingAction
 	}
-	return ui.NewFailure(what, why, ui.NextFreshDeploy, next)
+	return ui.NewFailure(ui.FailureID(f.FailureID), what, why, ui.NextFreshDeploy, next)
 }
 
 // synthesised builds one failure out of several summaries.
@@ -237,6 +242,7 @@ func synthesised(hardStops []check.Finding) *ui.Failure {
 	}
 
 	return ui.NewFailure(
+		ui.IDProjectNotReady,
 		"curious can't deploy this project yet.",
 		strings.TrimRight(b.String(), "\n"),
 		ui.NextFreshDeploy, standingAction,

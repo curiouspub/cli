@@ -447,6 +447,35 @@ func (p *pairedScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // and it is the row a reviewer meets when a new one is written.
 //
 // REQUIRED MUTATION, RUN: empty the Next of declinedStop.
+// TestJoiningTheWaitlistIsNotAFailure.
+//
+// "You're on the list." is a SUCCESS: the run did what was asked, the
+// server recorded it, and nothing is wrong with the project or the
+// machine. It was a *ui.Failure only because a Failure was the only
+// shape this package had for "the run stops here and here is why", and
+// that put it in the failure catalog, the troubleshooting section and
+// every census of the ways a deploy goes wrong.
+//
+// It is a ui.Closed now. This row asserts the type, because the type is
+// the whole of what changed — the words a person reads are the same.
+func TestJoiningTheWaitlistIsNotAFailure(t *testing.T) {
+	reset := fixedNowLocal.Add(4 * time.Hour)
+	closed := joinedStop("someone@example.com", reset, fixedNowLocal)
+
+	if closed.What == "" || closed.Why == "" || closed.NextText == "" {
+		t.Errorf("half-filled outcome (what=%q why=%q next=%q)",
+			closed.What, closed.Why, closed.NextText)
+	}
+	// AND IT IS NOT A FAILURE, asserted rather than assumed: the census
+	// the failure catalog is built from counts ui.Failure constructions,
+	// so this ending is only out of the catalog while this stays true.
+	var asFailure *ui.Failure
+	if errors.As(error(closed), &asFailure) {
+		t.Error("the waitlist-joined ending is still a ui.Failure, so it is " +
+			"still in the failure census and still owed a catalog id")
+	}
+}
+
 func TestEveryStopOnThisPathNamesAnAction(t *testing.T) {
 	reset := fixedNowLocal.Add(4 * time.Hour)
 	broken := errors.New("the server said no")
@@ -459,7 +488,6 @@ func TestEveryStopOnThisPathNamesAnAction(t *testing.T) {
 		{"shut, with nothing from the server", closedCapacityFailure("", reset, fixedNowLocal)},
 		{"declined", declinedStop(reset, fixedNowLocal)},
 		{"nobody to ask", noTerminalStop(reset, fixedNowLocal)},
-		{"joined", joinedStop("someone@example.com", reset, fixedNowLocal)},
 		{"the signup failed", signupFailedStop(broken, reset, fixedNowLocal)},
 		{"no reset time to name", declinedStop(time.Time{}, fixedNowLocal)},
 	} {

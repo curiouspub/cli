@@ -64,6 +64,14 @@ const (
 )
 
 type Failure struct {
+	// ID is this failure's stable public identity. See FailureID.
+	//
+	// IT IS NOT DERIVED FROM ANYTHING HERE — not from the wording, not
+	// from the file that raised it. A headline can be improved and a call
+	// site can move; the id is what a troubleshooting entry, a support
+	// answer and an agent all match on, so it survives both.
+	ID FailureID
+
 	What string
 	Why  string
 
@@ -145,16 +153,16 @@ func (f *Failure) Error() string { return f.What }
 // the three parts are named at the call site — a positional
 // Failure{a, b, c} reads as three interchangeable strings, and they are
 // not: the third is the only one the reader can act on.
-func NewFailure(what, why string, next NextAction, nextText string) *Failure {
-	return &Failure{What: what, Why: why, Next: next, NextText: nextText}
+func NewFailure(id FailureID, what, why string, next NextAction, nextText string) *Failure {
+	return &Failure{ID: id, What: what, Why: why, Next: next, NextText: nextText}
 }
 
 // Quoted is a failure whose middle paragraph is somebody else's sentence
 // and nothing of ours — the commonest shape by far, because where the
 // server knows something this client does not, its words are the only
 // thing that carries it.
-func Quoted(what, detail string, next NextAction, nextText string) *Failure {
-	return &Failure{What: what, Detail: detail, Next: next, NextText: nextText}
+func Quoted(id FailureID, what, detail string, next NextAction, nextText string) *Failure {
+	return &Failure{ID: id, What: what, Detail: detail, Next: next, NextText: nextText}
 }
 
 // Quoting returns the failure with somebody else's sentence attached.
@@ -197,6 +205,7 @@ func (f *Failure) Quoting(detail string) *Failure {
 // ErrNotInteractive itself and this is what is left for one that has
 // none.
 var notInteractiveFailure = &Failure{
+	ID:   IDNeedsATerminal,
 	What: "curious needs a terminal for that.",
 	Why: "It had a question to ask you and no way to ask it. That happens when\n" +
 		"curious runs through a pipe, from a script, or inside a tool that\n" +
@@ -219,6 +228,7 @@ var notInteractiveFailure = &Failure{
 // that the answers were not understood, and it names the two words that
 // work. Nothing about it suggests anything is broken, because nothing is.
 var noAnswerFailure = &Failure{
+	ID:   IDAnswerNotUnderstood,
 	What: "Didn't catch that.",
 	Why: "curious asked the same question a few times and couldn't read any of\n" +
 		"the answers, so it stopped rather than keep asking.",
@@ -239,6 +249,12 @@ var noAnswerFailure = &Failure{
 // It names no time to come back, because this sentinel carries none. A
 // caller that knows one says so in the Failure it wraps.
 var serverClosedFailure = &Failure{
+	// THE SAME FAMILY AS THE FIVE STAGE-SPECIFIC ONES, ruled: the kill
+	// switch is our mechanism, not the user's diagnosis, and the stage
+	// that met it is not a family. This is the bare case — reached when
+	// the closed-door marker was used with no copy behind it — and a
+	// reader meeting it has met the same thing.
+	ID:   IDServiceUnavailable,
 	What: "curious.pub isn't taking this right now.",
 	Why: "The server is closed to this run — not because of anything wrong with\n" +
 		"your project, and not because of anything you did.",
@@ -307,8 +323,31 @@ func (u *UI) renderFailure(f *Failure) string {
 	if f.What != "" {
 		rendered[0] = u.styled(rendered[0])
 	}
-	return strings.Join(rendered, "\n\n") + "\n"
+	out := strings.Join(rendered, "\n\n") + "\n"
+
+	// THE ID, ON A LINE OF ITS OWN, AFTER THE COPY.
+	//
+	// It is metadata beside the message and never part of it: no authored
+	// paragraph grows an identifier inside it, Error() is unchanged, and
+	// a reader who does not care about the id can stop reading at the
+	// blank line above it.
+	//
+	// WHY PRINT IT AT ALL. An id that exists only in the struct satisfies
+	// every rule the catalog keeps and helps nobody — it is a token for
+	// support and for an agent, and neither can quote a field they never
+	// see. A person who reports "I get upload-link-expired" has said
+	// something exact; one who pastes a headline has said something that
+	// was reworded last month.
+	if f.ID != "" {
+		out += "\n" + failureIDPrefix + string(f.ID) + "\n"
+	}
+	return out
 }
+
+// failureIDPrefix labels the id line on both surfaces. One constant,
+// because a reader who learns to search for it in a terminal should find
+// the same words in an agent's transcript.
+const failureIDPrefix = "Failure ID: "
 
 // Escaped is the failure's parts, in the order they are shown, with
 // every one of them through the escape table.
@@ -449,6 +488,7 @@ const (
 // that.
 func (u *UI) Internal(err error) {
 	f := &Failure{
+		ID:   IDInternalFault,
 		What: internalWhat,
 		Why:  internalWhy,
 		Next: NextGiveUp,
@@ -514,6 +554,16 @@ func (u *UI) ExitCode(err error) int {
 		return 1
 	}
 
+	// A CLOSED DOOR IS NOT A FAILURE, and it is read before the Failure
+	// branches because it is neither one. It costs the scoped closed-door
+	// code — the run deployed nothing, so a script must be able to tell —
+	// and it renders its own copy. See Closed.
+	var closed *Closed
+	if errors.As(err, &closed) {
+		fmt.Fprint(u.err, u.renderClosed(closed))
+		return ExitServerClosed
+	}
+
 	// A Failure carries its own copy, written by whoever owns the check
 	// that produced it, so it renders as itself rather than as an
 	// internal fault.
@@ -546,3 +596,12 @@ func (u *UI) ExitCode(err error) int {
 	u.Internal(err)
 	return 1
 }
+
+// FailureIDLine renders the id line for a surface that assembles its own
+// paragraphs.
+//
+// IT EXISTS SO THE LABEL IS WRITTEN ONCE. The agent surface builds its
+// text from the failure's parts rather than from renderFailure, and a
+// second copy of "Failure ID: " there would be two strings that agree on
+// the day they are written and not afterwards.
+func FailureIDLine(id FailureID) string { return failureIDPrefix + string(id) }

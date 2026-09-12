@@ -2,6 +2,7 @@ package guard
 
 import (
 	"go/ast"
+	"go/build"
 	"go/constant"
 	"go/importer"
 	"go/parser"
@@ -15,6 +16,48 @@ import (
 
 	"github.com/curiouspub/cli/internal/check"
 )
+
+func TestCheckFailureFamiliesMatchUIFailureIDs(t *testing.T) {
+	root := moduleRoot(t)
+	families := exportedNamedStringConstants(t,
+		filepath.Join(root, "internal", "check"), "FailureFamily")
+	ids := exportedNamedStringConstants(t,
+		filepath.Join(root, "internal", "ui"), "FailureID")
+	for _, problem := range familyVocabularyProblems(families, ids) {
+		t.Error(problem)
+	}
+	if len(families) == 0 {
+		t.Fatal("no check failure families found, so the vocabulary guard measured nothing")
+	}
+}
+
+func familyVocabularyProblems(families, ids map[string]string) []string {
+	var problems []string
+	for familyName, familyValue := range families {
+		suffix := strings.TrimPrefix(familyName, "Family")
+		idName := "ID" + suffix
+		idValue, ok := ids[idName]
+		if !ok {
+			problems = append(problems, familyName+" has no matching ui."+idName)
+			continue
+		}
+		if idValue != familyValue {
+			problems = append(problems, familyName+" = "+familyValue+
+				" but ui."+idName+" = "+idValue)
+		}
+	}
+	return problems
+}
+
+func TestFailureFamilyVocabularyValidationSeesValueDrift(t *testing.T) {
+	problems := familyVocabularyProblems(
+		map[string]string{"FamilyAstroDepAbsent": "renamed"},
+		map[string]string{"IDAstroDepAbsent": "astro-dep-absent"},
+	)
+	if len(problems) != 1 || !strings.Contains(problems[0], "renamed") {
+		t.Fatalf("family value drift was not reported: %v", problems)
+	}
+}
 
 // TestCheckIDConstantsMatchTheDeclaredUniverse asserts that the check
 // ids the result package EXPORTS and the universe it DECLARES are the
@@ -169,6 +212,56 @@ func exportedStringConstants(t *testing.T, dir string) map[string]string {
 		}
 		basic, ok := types.Unalias(obj.Type()).(*types.Basic)
 		if !ok || basic.Info()&types.IsString == 0 {
+			continue
+		}
+		out[name] = constant.StringVal(obj.Val())
+	}
+	return out
+}
+
+func exportedNamedStringConstants(t *testing.T, dir, typeName string) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		matched, err := build.Default.MatchFile(dir, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !matched {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	path, err := filepath.Rel(moduleRoot(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := types.Config{Importer: archiveImporter(fset, moduleRoot(t), build.Default.GOOS, build.Default.GOARCH)}
+	pkg, err := conf.Check(modulePath+"/"+filepath.ToSlash(path), fset, files, nil)
+	if err != nil {
+		t.Fatalf("type-checking %s: %v", dir, err)
+	}
+	out := map[string]string{}
+	for _, name := range pkg.Scope().Names() {
+		obj, ok := pkg.Scope().Lookup(name).(*types.Const)
+		if !ok || !obj.Exported() {
+			continue
+		}
+		named, ok := types.Unalias(obj.Type()).(*types.Named)
+		if !ok || named.Obj().Name() != typeName || obj.Val().Kind() != constant.String {
 			continue
 		}
 		out[name] = constant.StringVal(obj.Val())

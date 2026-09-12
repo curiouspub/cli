@@ -210,11 +210,26 @@ func publishedTextFiles(t *testing.T, root string) []string {
 // displayPath renders path relative to root for a readable failure
 // message, falling back to the absolute path if that fails for some
 // reason (it never should, since every path here came from walking root).
+// displayPath is a site's repository-relative name, and it ALWAYS USES
+// FORWARD SLASHES.
+//
+// filepath.Rel hands back the host's separator, which made every guard
+// key that embeds a path platform-dependent. The obligation ledger is
+// keyed by "internal/flow/upload.go:372"; on Windows the same site
+// rendered as "internal\flow\upload.go:372", every lookup missed, and
+// the contract guard reported forty obligations as UNRESOLVED on
+// windows-latest while darwin and linux were green — a red that named
+// the sites and not the cause. The separator is a property of the host
+// and a site key is a property of the repository, so the key does not
+// get to carry one.
+//
+// On Unix ToSlash is the identity, which is exactly why this went
+// unnoticed: the defect is invisible on the machine it is written on.
 func displayPath(root, path string) string {
 	if rel, err := filepath.Rel(root, path); err == nil {
-		return rel
+		return filepath.ToSlash(rel)
 	}
-	return path
+	return filepath.ToSlash(path)
 }
 
 // ---------------------------------------------------------------------

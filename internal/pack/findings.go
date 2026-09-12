@@ -202,10 +202,11 @@ func charsetFindings(paths []string) []check.Finding {
 			continue
 		}
 		out = append(out, check.Finding{
-			CheckID:  check.IDPathCharset,
-			Severity: check.SeverityHardStop,
-			Message:  fmt.Sprintf("%s can't be published, because %s.", p, reason),
-			Paths:    check.NewPaths(p),
+			CheckID:   check.IDPathCharset,
+			FailureID: string(check.FamilyPathCharset),
+			Severity:  check.SeverityHardStop,
+			Message:   fmt.Sprintf("%s can't be published, because %s.", p, reason),
+			Paths:     check.NewPaths(p),
 			Why: fmt.Sprintf("Every part of a published path may use only letters, digits, "+
 				"and the characters . _ ~ and - , with at most %d bytes in any one part "+
 				"and %d bytes in the whole path.", pathSegmentLimit, pathTotalLimit),

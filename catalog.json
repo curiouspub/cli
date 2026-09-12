@@ -1,0 +1,586 @@
+[
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "answer-not-understood",
+    "stages": [
+      "ui"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "api-address-unusable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "archive-unreadable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "astro-dep-absent",
+    "id": "astro-dep-absent",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "astro-dep-invalid-json",
+    "id": "astro-dep-invalid-json",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "astro-dep-missing",
+    "id": "astro-dep-missing",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "astro-dep-not-object",
+    "id": "astro-dep-not-object",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "astro-dep-unreadable",
+    "id": "astro-dep-unreadable",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "build-failed",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "build-log-lost",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "build-output-refused",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "capacity-check-failed",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "capacity-check-unreachable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "client-request-rejected",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "config-location-unusable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "daily-capacity-closed",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "deploy-not-completed-by-server",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "deploy-unknown-to-server",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "fresh-login-refused",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "internal-fault",
+    "stages": [
+      "ui"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "limit-file-size",
+    "id": "limit-file-size",
+    "stages": [
+      "flow",
+      "pack"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "limit-files",
+    "id": "limit-files",
+    "stages": [
+      "flow",
+      "pack"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "limit-packed",
+    "id": "limit-packed",
+    "stages": [
+      "flow",
+      "pack"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "limit-total",
+    "id": "limit-total",
+    "stages": [
+      "flow",
+      "pack"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "lockfile-missing",
+    "id": "lockfile-missing",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "lockfile-unsupported",
+    "id": "lockfile-unsupported",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "lockfile-workspace",
+    "id": "lockfile-workspace",
+    "stages": [
+      "flow",
+      "preflight"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "login-endpoint-missing",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "login-not-saved",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "login-refused",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "needs-a-terminal",
+    "stages": [
+      "ui"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": "path-charset",
+    "id": "path-charset",
+    "stages": [
+      "flow",
+      "pack"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "project-dir-missing",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "project-dir-unknown",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "project-dir-unreadable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "project-not-ready",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "project-path-not-a-directory",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "project-unreadable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "publish-not-confirmed",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "published-address-invalid",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "rate-limited",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "server-answer-unrecognised",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "server-unanswered",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "service-unavailable",
+    "stages": [
+      "flow",
+      "ui"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "temp-dir-unusable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-address-unusable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-answer-unrecognised",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-connection-lost",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-host-unreachable",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-link-expired",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-redirected",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-refused-unexplained",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "GiveUp"
+    ],
+    "family": null,
+    "id": "upload-signature-mismatch",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "FreshDeploy"
+    ],
+    "family": null,
+    "id": "upload-stalled",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "waitlist-declined",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "waitlist-needs-terminal",
+    "stages": [
+      "flow"
+    ]
+  },
+  {
+    "action": [
+      "Wait"
+    ],
+    "family": null,
+    "id": "waitlist-signup-failed",
+    "stages": [
+      "flow"
+    ]
+  }
+]
