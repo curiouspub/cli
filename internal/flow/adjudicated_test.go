@@ -9,11 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/curiouspub/cli/internal/check"
 	"time"
 
 	"github.com/curiouspub/cli/internal/api"
+	"github.com/curiouspub/cli/internal/check"
 	"github.com/curiouspub/cli/internal/ui"
 	"github.com/curiouspub/cli/pkg/wire"
 )
@@ -39,6 +38,81 @@ import (
 // reddened, because nothing anywhere asserted what action a failure
 // carried. The catalog's general validator now requires an action to be
 // one of the four; these rows require it to be the RIGHT one.
+
+// TestRequestRejectionsKeepTheirApprovedFamilies is the family split
+// adjudicated after the first catalog pass.
+//
+// The second refusal after a fresh login has a materially different recovery
+// contract from a bad request: it asks for a clock check and a fresh deploy.
+// The create and login bad-request sites both say retrying cannot help and keep
+// one family even though they are observed at different stages. Every authored
+// byte is asserted here because the ruling changes only the first site's id.
+func TestRequestRejectionsKeepTheirApprovedFamilies(t *testing.T) {
+	apiMessage := "the server's exact refusal"
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantID   ui.FailureID
+		wantNext ui.NextAction
+		wantWhat string
+		wantWhy  string
+		wantText string
+	}{
+		{
+			name: "fresh login refused at create",
+			err: createStopFailure(&api.APIError{
+				Code: wire.CodeUnauthorized, Message: apiMessage,
+			}, now),
+			wantID:   ui.IDFreshLoginRefused,
+			wantNext: ui.NextFreshDeploy,
+			wantWhat: authenticationFailed,
+			wantWhy: "curious logged in again and the server still would not " +
+				"accept the\nrequest, so it stopped rather than keep asking.",
+			wantText: "Check that this machine's clock is right, then run `curious deploy`\n" +
+				"again. If it keeps happening, please get in touch. " + uploadedNothing,
+		},
+		{
+			name: "bad request at create",
+			err: createStopFailure(&api.APIError{
+				Code: wire.CodeBadRequest, Message: apiMessage,
+			}, now),
+			wantID:   ui.IDClientRequestRejected,
+			wantNext: ui.NextGiveUp,
+			wantWhat: "The server wouldn't accept that archive.",
+			wantWhy: "Sending the same thing again would not go any better, " +
+				"so the run\nstopped here.",
+			wantText: "Check that you are running a current version — `curious version` says\n" +
+				"which one — and please report this if it keeps happening. " + uploadedNothing,
+		},
+		{
+			name: "bad request at login",
+			err: stopFailure(t.Context(), &api.APIError{
+				Code: wire.CodeBadRequest, Message: apiMessage,
+			}, LoginDeps{Endpoint: "https://api.example"}, "someone@example.com", now),
+			wantID:   ui.IDClientRequestRejected,
+			wantNext: ui.NextGiveUp,
+			wantWhat: "curious sent something this server wouldn't accept.",
+			wantWhy: "Sending it again would not go any better, so the run " +
+				"stopped here rather than spending another of your attempts.",
+			wantText: "Check that you are running a current version — `curious version` says\n" +
+				"which one — and please report this if it keeps happening.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got *ui.Failure
+			if !errors.As(tc.err, &got) {
+				t.Fatalf("stop returned %T, want a ui.Failure in the chain", tc.err)
+			}
+			if got.ID != tc.wantID || got.Next != tc.wantNext || got.What != tc.wantWhat ||
+				got.Why != tc.wantWhy || got.NextText != tc.wantText || got.Detail != apiMessage {
+				t.Errorf("failure = %#v, want id %q, action %q, what %q, why %q, next %q, detail %q",
+					got, tc.wantID, tc.wantNext, tc.wantWhat, tc.wantWhy, tc.wantText, apiMessage)
+			}
+		})
+	}
+}
 
 // TestARefusalInsideTheWindowSaysGiveUp is adjudicated correction #1.
 //

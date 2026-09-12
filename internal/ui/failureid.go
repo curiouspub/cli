@@ -1,5 +1,7 @@
 package ui
 
+//go:generate env WRITE_FAILURE_CATALOG=1 go test ../guard -run ^TestCatalogJSONMatchesRegeneration$ -count=1
+
 // FailureID is a failure's stable public identity.
 //
 // # Why a failure needs one
@@ -46,6 +48,7 @@ const (
 	IDDailyCapacityClosed      FailureID = "daily-capacity-closed"
 	IDRateLimited              FailureID = "rate-limited"
 	IDClientRequestRejected    FailureID = "client-request-rejected"
+	IDFreshLoginRefused        FailureID = "fresh-login-refused"
 	IDServerAnswerUnrecognised FailureID = "server-answer-unrecognised"
 
 	// This machine, before anything is sent.
@@ -129,7 +132,7 @@ const (
 var ActiveFailureIDs = []FailureID{
 	IDServerUnanswered, IDServiceUnavailable, IDCapacityCheckUnreachable,
 	IDCapacityCheckFailed, IDDailyCapacityClosed, IDRateLimited,
-	IDClientRequestRejected, IDServerAnswerUnrecognised,
+	IDClientRequestRejected, IDFreshLoginRefused, IDServerAnswerUnrecognised,
 
 	IDProjectDirUnknown, IDProjectDirMissing, IDProjectDirUnreadable,
 	IDProjectPathNotADirectory, IDProjectUnreadable, IDConfigLocationUnusable,

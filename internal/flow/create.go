@@ -201,7 +201,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// spend another of the sends the server allows in an hour on a
 		// run that is not going to end differently.
 		return ui.NewFailure(
-			ui.IDClientRequestRejected,
+			ui.IDFreshLoginRefused,
 			authenticationFailed,
 			"curious logged in again and the server still would not "+
 				"accept the\nrequest, so it stopped rather than keep asking.", ui.NextFreshDeploy,

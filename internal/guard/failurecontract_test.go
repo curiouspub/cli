@@ -43,12 +43,14 @@ import (
 //   - INVALID: a resolved set containing something outside the contract.
 //   - UNRESOLVED: a form this checker cannot establish.
 //
-// CI requires the invalid set AND the unresolved set to be empty, and no
-// discovered site to be unclassified. Recursion, indirect calls and
-// unsupported expressions FAIL CLOSED — they do not become verified
-// because somebody attached a comment or a test name. The checker may
-// conservatively reject a safe future implementation; that
-// implementation uses a supported form or extends this file deliberately.
+// CI requires the invalid set to be empty, every unresolved obligation to be
+// discharged by the obligation ledger, and no discovered site to be
+// unclassified. Recursion, indirect calls and unsupported expressions FAIL
+// CLOSED — they do not become verified because somebody attached a comment or
+// a test name. A ledger entry is accepted only when AST verifies that its named
+// test asserts its named field. The checker may conservatively reject a safe
+// future implementation; that implementation uses a supported form, extends
+// this file deliberately, or justifies a run-time obligation in the ledger.
 //
 // # Summaries are verified, never declared
 //
@@ -89,7 +91,10 @@ type obligation struct {
 	chain   string
 	values  []string // resolved possibilities; empty means unresolved
 	problem string   // a structurally forbidden write or address-taking
-	binding string   // reaching definitions for a scenario-covered expression
+	binding string   // reaching definitions for an obligation-ledger expression
+	source  parsedFile
+	within  *ast.FuncDecl
+	before  token.Pos
 }
 
 // summary is one verified helper relationship: the parameter index whose
@@ -316,6 +321,8 @@ func TestTheFailureContractHolds(t *testing.T) {
 	if len(obs) == 0 {
 		t.Fatal("no obligation was discovered, so this guard asserted nothing")
 	}
+	failureContractFiles = files
+	failureContractObligations = append([]obligation(nil), obs...)
 
 	// --- 3. CLASSIFY ---------------------------------------------------
 	var invalid, unresolved []string
@@ -356,26 +363,27 @@ func TestTheFailureContractHolds(t *testing.T) {
 	for _, m := range invalid {
 		t.Errorf("INVALID: %s", m)
 	}
-	// AN UNRESOLVED OBLIGATION IS EITHER COVERED BY A NAMED SCENARIO OR
-	// IT FAILS. There is no third option and no baseline file.
+	// AN OBLIGATION IS SATISFIED IF IT IS STATICALLY RESOLVED OR DISCHARGED
+	// BY THE OBLIGATION LEDGER. There is no third option and no baseline.
 	//
 	// Six obligations in this tree carry values that arrive at RUN TIME —
 	// a family id read off a finding, and three values taken from a
 	// helper's multiple returns. No static analysis of the call site can
 	// establish those, and pretending otherwise would mean either a
 	// checker that guesses or a rule that quietly skips what it cannot
-	// see. Each is listed here against the test that exercises it, and
-	// that test's existence is asserted below: a covered entry naming a
-	// test nobody wrote is the mute button this mechanism exists to
-	// avoid.
+	// see. Each is listed here against the test that discharges it, and
+	// the AST check below verifies that the named test asserts the named
+	// field. The ledger moves an obligation to a run-time assertion; it
+	// never waives one.
 	for _, m := range unresolved {
-		if by, ok := scenarioCoverage(m, unresolvedDetails[m].binding); ok {
-			t.Logf("unresolved statically, covered by scenario: %s (%s)", m, by)
+		if by, ok := obligationDischarge(m, unresolvedDetails[m].binding); ok {
+			t.Logf("unresolved statically, discharged by obligation ledger: %s (%s)", m, by)
 			continue
 		}
-		t.Errorf("UNRESOLVED: %s [binding %q]\nAn obligation this checker cannot establish is "+
-			"not an obligation that is satisfied. Use a supported form, extend the "+
-			"checker deliberately, or name the scenario test that covers it.", m, unresolvedDetails[m].binding)
+		t.Errorf("UNRESOLVED BY EITHER MECHANISM: %s [binding %q]\nAn obligation must be "+
+			"statically resolved or discharged by an obligation-ledger entry whose "+
+			"named test asserts the named field. Use a supported form, extend the "+
+			"checker deliberately, or add a justified ledger entry.", m, unresolvedDetails[m].binding)
 	}
 	// RECORDED FOR THE CENSUS ROW, which compares this against an
 	// independently written count of the tree's constructions. Two
@@ -1137,13 +1145,14 @@ func resolve(site, field string, e ast.Expr, text func(parsedFile, ast.Node) str
 func resolveIn(site, field string, e ast.Expr, text func(parsedFile, ast.Node) string,
 	p parsedFile, kind string, within *ast.FuncDecl, depth int) obligation {
 
-	o := obligation{where: site, field: field}
+	o := obligation{where: site, field: field, source: p, within: within}
 	if depth > 4 {
 		return o
 	}
 	if e == nil {
 		return o
 	}
+	o.before = e.Pos()
 	o.expr = text(p, e)
 
 	if p.info != nil {
@@ -1447,15 +1456,16 @@ var nonBlankHelpers map[string]bool
 
 func allReturnsNonBlankAnywhere(key string) bool { return key != "" && nonBlankHelpers[key] }
 
-// scenarioCovered names, for each obligation no static analysis of the
-// call site can establish, the test that does establish it.
+// obligationLedger names, for each run-time obligation static analysis cannot
+// resolve, the test that discharges it by asserting the named field.
 //
 // EVERY ENTRY IS A VALUE THAT ARRIVES AT RUN TIME. ownCopy reads its
 // family from a check.Finding; the upload refusal takes its id, action
 // and copy from a helper's multiple returns. The checker refuses to
-// invent a value for either, and these tests supply the coverage the
-// checker cannot.
-var scenarioCovered = map[string]string{
+// invent a value for either. These entries do not waive those obligations:
+// TestEveryObligationLedgerEntryAssertsTheNamedField verifies by AST that the
+// named creditor actually asserts the field it was given.
+var obligationLedger = map[string]string{
 	"internal/flow/preflight.go:223 ID":       "flow.TestAHardStopCarriesItsCheckFamilyIntoTheFailure",
 	"internal/flow/preflight.go:223 NextText": "flow.TestAHardStopCarriesItsCheckFamilyIntoTheFailure",
 	"internal/flow/upload.go:340 NextText":    "flow.TestTheOtherTwoRefusalBranchesKeepTheirOwnFamilies",
@@ -1464,10 +1474,11 @@ var scenarioCovered = map[string]string{
 	"internal/flow/upload.go:372 NextText":    "flow.TestARefusalInsideTheWindowSaysGiveUp",
 }
 
-// scenarioCoveredExpression binds each unchanged waiver above to the exact
-// expression its scenario exercises. A line number says where an expression
-// used to be; it does not prove that replacement code has the same behaviour.
-var scenarioCoveredExpression = map[string]string{
+// obligationLedgerExpression binds each ledger entry above to the exact
+// run-time expression its named test exercises. A line number says where an
+// expression used to be; it does not prove replacement code has the same
+// behaviour.
+var obligationLedgerExpression = map[string]string{
 	"internal/flow/preflight.go:223 ID":       "ui.FailureID(f.FailureID)",
 	"internal/flow/preflight.go:223 NextText": "next",
 	"internal/flow/upload.go:340 NextText":    "next",
@@ -1476,7 +1487,7 @@ var scenarioCoveredExpression = map[string]string{
 	"internal/flow/upload.go:372 NextText":    "next",
 }
 
-var scenarioCoveredBinding = map[string]string{
+var obligationLedgerBinding = map[string]string{
 	"internal/flow/preflight.go:223 ID":       "",
 	"internal/flow/preflight.go:223 NextText": "f.Next | standingAction",
 	"internal/flow/upload.go:340 NextText":    "expiredCopy()#1",
@@ -1485,13 +1496,13 @@ var scenarioCoveredBinding = map[string]string{
 	"internal/flow/upload.go:372 NextText":    "expiredCopy()#1 | refusalCopy(host, deps.ExpiresAt, deps.Now())#3",
 }
 
-func scenarioCoverage(message, binding string) (string, bool) {
+func obligationDischarge(message, binding string) (string, bool) {
 	key := keyOf(message)
-	by, ok := scenarioCovered[key]
+	by, ok := obligationLedger[key]
 	if !ok {
 		return "", false
 	}
-	want, fingerprinted := scenarioCoveredExpression[key]
+	want, fingerprinted := obligationLedgerExpression[key]
 	if !fingerprinted {
 		return "", false
 	}
@@ -1500,27 +1511,27 @@ func scenarioCoverage(message, binding string) (string, bool) {
 		return "", false
 	}
 	got, _, ok := strings.Cut(strings.TrimPrefix(message, prefix), " (unsupported form)")
-	wantBinding, bound := scenarioCoveredBinding[key]
+	wantBinding, bound := obligationLedgerBinding[key]
 	return by, ok && got == want && bound && binding == wantBinding
 }
 
-func TestAScenarioWaiverBelongsToItsExpression(t *testing.T) {
+func TestAnObligationLedgerEntryBelongsToItsExpression(t *testing.T) {
 	key := "internal/flow/upload.go:372 Next"
-	if _, ok := scenarioCoverage(key+" = changedAtRuntime() (unsupported form)",
+	if _, ok := obligationDischarge(key+" = changedAtRuntime() (unsupported form)",
 		"refusalCopy(host, deps.ExpiresAt, deps.Now())#1"); ok {
-		t.Fatal("a different expression inherited the scenario waiver at the same location")
+		t.Fatal("a different expression inherited the ledger discharge at the same location")
 	}
 	wantBinding := "refusalCopy(host, deps.ExpiresAt, deps.Now())#1"
-	if by, ok := scenarioCoverage(key+" = action (unsupported form)", wantBinding); !ok || by == "" {
-		t.Fatal("the expression the scenario actually covers lost its waiver")
+	if by, ok := obligationDischarge(key+" = action (unsupported form)", wantBinding); !ok || by == "" {
+		t.Fatal("the expression the named test asserts lost its ledger discharge")
 	}
-	if _, ok := scenarioCoverage(key+" = action (unsupported form)", wantBinding+" | \"\""); ok {
-		t.Fatal("an expression with an additional reaching definition inherited the waiver")
+	if _, ok := obligationDischarge(key+" = action (unsupported form)", wantBinding+" | \"\""); ok {
+		t.Fatal("an expression with an additional reaching definition inherited the discharge")
 	}
 }
 
 // keyOf is the site and field of an unresolved message, which is what
-// scenarioCovered is keyed by.
+// obligationLedger is keyed by.
 func keyOf(message string) string {
 	parts := strings.Fields(message)
 	if len(parts) < 2 {
@@ -1529,22 +1540,21 @@ func keyOf(message string) string {
 	return parts[0] + " " + parts[1]
 }
 
-// TestEveryScenarioCoverEntryAssertsTheNamedField.
+// TestEveryObligationLedgerEntryAssertsTheNamedField.
 //
 // # The control that was one level too weak
 //
-// Its first form asserted only that the named test EXISTED. That is not
-// coverage, and the gap was found the day after it was written: the
+// Its first form asserted only that the named test EXISTED. That is not a
+// discharge, and the gap was found the day after it was written: the
 // entry for `upload.go:340 NextText` named a test that calls
 // `refusalCopy` as `id, action, _, _ :=` — discarding the copy entirely —
 // and then asserts on the id and the action and nothing else. A test
 // that exists, runs, passes, and never reads the field it is recorded as
-// covering.
+// discharging.
 //
-// An entry naming a test that does not touch its field is the
-// baseline-shaped mute button with one extra step of indirection: the
-// list looks checked because something on the other end has the right
-// name.
+// An entry naming a test that does not touch its field is a mute button with
+// one extra step of indirection: the ledger looks discharged because something
+// on the other end has the right name.
 //
 // So the control reads the named test's BODY and requires an assertion
 // that mentions the field. That is deliberately a low bar — it does not
@@ -1553,10 +1563,10 @@ func keyOf(message string) string {
 //
 // REQUIRED MUTATION, run 2026-09-12: point an entry at a test that does
 // not read its field. Reds here, naming both.
-func TestEveryScenarioCoverEntryAssertsTheNamedField(t *testing.T) {
+func TestEveryObligationLedgerEntryAssertsTheNamedField(t *testing.T) {
 	root := moduleRoot(t)
-	if len(scenarioCovered) == 0 {
-		t.Skip("nothing is scenario-covered, so there is nothing to check")
+	if len(obligationLedger) == 0 {
+		t.Skip("the obligation ledger is empty, so there is nothing to verify")
 	}
 	fset := token.NewFileSet()
 
@@ -1584,11 +1594,11 @@ func TestEveryScenarioCoverEntryAssertsTheNamedField(t *testing.T) {
 		}
 	}
 
-	for obligation, named := range scenarioCovered {
+	for obligation, named := range obligationLedger {
 		fd, ok := bodies[named]
 		if !ok {
-			t.Errorf("%s is recorded as covered by %s, and no such test exists. "+
-				"An entry naming a test nobody wrote reads exactly like coverage "+
+			t.Errorf("%s is assigned to %s in the obligation ledger, and no such test exists. "+
+				"An entry naming a test nobody wrote reads exactly like a discharge "+
 				"and is none", obligation, named)
 			continue
 		}
@@ -1630,7 +1640,7 @@ func TestEveryScenarioCoverEntryAssertsTheNamedField(t *testing.T) {
 			return true
 		})
 		if !touched {
-			t.Errorf("%s is recorded as covered by %s, and that test never asserts "+
+			t.Errorf("%s is assigned to %s in the obligation ledger, and that test never asserts "+
 				"on %s.\nThe checker cannot establish this obligation and the test "+
 				"named as covering it does not either, so nothing does — which is "+
 				"worse than an unresolved entry, because this one looks answered.",
@@ -1650,7 +1660,11 @@ func lowerFirst(s string) string {
 // contractSitesVisited is how many construction sites the contract
 // checker last visited, and contractSiteCount is how the census row
 // obtains it without depending on test order.
-var contractSitesVisited int
+var (
+	contractSitesVisited       int
+	failureContractFiles       []parsedFile
+	failureContractObligations []obligation
+)
 
 func contractSiteCount(t *testing.T) int {
 	t.Helper()
