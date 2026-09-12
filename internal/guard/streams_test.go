@@ -64,6 +64,7 @@ var streamExceptions = map[string]exceptionReason{
 
 	"tools/skipcheck/main.go":    outsideTheShippedCLI,
 	"tools/surfacecheck/main.go": outsideTheShippedCLI,
+	"tools/leakscan/main.go":     outsideTheShippedCLI,
 
 	"internal/flow/preflight_test.go":  swapsThemForCapture,
 	"internal/flow/upload_test.go":     swapsThemForCapture,
