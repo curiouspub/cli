@@ -7,7 +7,7 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check hooks ci
+.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check hooks ci guard-a-branch-to-work-on
 
 build:
 	go build -trimpath ./...
@@ -277,4 +277,29 @@ hooks:
 	echo "installed $$hook"; \
 	echo "it runs the same check the workflow does, over what you are about to push"
 
-ci: fmt vet build test lint
+# THE DEFAULT BRANCH IS NOT A PLACE TO WORK, and the gate says so before
+# it spends twelve minutes proving the tree is fine.
+#
+# Ruled 2026-09-12 after four commits of a task landed on a local main
+# rather than on a branch. Nothing reached the trunk — the ruleset on the
+# remote requires a pull request and has no bypass actors, so the push
+# would have been refused — but the ruleset was the ONLY thing standing
+# between those commits and main, and it was never exercised because no
+# push was attempted. That is luck rather than process, and luck is not a
+# control.
+#
+# The refusal is here rather than in a hook because this is the command a
+# person runs before committing: it is the last moment the mistake is
+# free to undo.
+#
+# IT IS SKIPPED UNDER CI, where the default branch is a legitimate place
+# to run: a push to main after a merge runs this workflow, and so does
+# the merge queue's own ref. Nothing is being committed there.
+ci: guard-a-branch-to-work-on fmt vet build test lint
+
+guard-a-branch-to-work-on:
+	@if [ -z "$$CI" ] && [ "$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$(DEFAULT_BRANCH)" ]; then 		echo "make ci refuses to run on $(DEFAULT_BRANCH)."; 		echo; 		echo "Work happens on a branch. Committing here is one keystroke from a"; 		echo "trunk nobody reviewed, and the remote's ruleset is the only thing"; 		echo "that would catch it — which is a control you should not be spending."; 		echo; 		echo "    git checkout -b <name>"; 		exit 1; 	fi
+
+# DEFAULT_BRANCH is named once so the guard above and anything that grows
+# beside it cannot disagree about which branch is the trunk.
+DEFAULT_BRANCH := main
