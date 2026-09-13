@@ -54,15 +54,31 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
+// git runs a fixture command and returns its STANDARD OUTPUT ONLY.
+//
+// It returned combined output until 2026-09-13, and two rows went red on
+// the Windows leg alone. Callers use the return value AS A VALUE — an
+// object id handed straight back to git — and git on a Windows runner
+// converts line endings by default, so `hash-object` prints a warning about
+// it on stderr. The warning arrived glued to the front of the id, and git
+// refused an id that had become a sentence. Unix runners do not convert
+// line endings by default, so the defect was invisible on the machines it
+// was written on; injecting core.autocrlf=true through the environment
+// reproduced it byte for byte on any of them.
+//
+// The value channel and the diagnostic channel are different channels.
+// Stderr is still printed when the command fails, which is the only time a
+// reader needs it.
 func (f *fixture) git(args ...string) string {
 	f.t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = f.dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		f.t.Fatalf("fixture: git %s: %v: %s", strings.Join(args, " "), err, out)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		f.t.Fatalf("fixture: git %s: %v: %s%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
 	}
-	return string(out)
+	return stdout.String()
 }
 
 func (f *fixture) write(path, content string) {
@@ -1236,5 +1252,37 @@ func TestNoBaselinedBlobOccursInHEAD(t *testing.T) {
 		if headBlobs[entry.Blob] {
 			t.Errorf("baselined blob %s still occurs in HEAD", short(entry.Blob))
 		}
+	}
+}
+
+// TestAFixtureValueIsStdoutEvenWhenGitWarns keeps a red that only the
+// Windows leg could see as a row that every leg runs. The property is not
+// Windows: it is whether a diagnostic on stderr can reach a value, and that
+// is reproducible anywhere by asking git to warn.
+func TestAFixtureValueIsStdoutEvenWhenGitWarns(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+	f := newFixture(t)
+	f.write("lf.txt", "one line\n")
+
+	// THIS ROW MUST NOT PASS BECAUSE GIT STOPPED WARNING. Establish that the
+	// warning is really emitted under this configuration first; otherwise a
+	// future git that no longer warns would leave the assertion below
+	// satisfied while it tested nothing.
+	probe := exec.Command("git", "hash-object", "-w", "lf.txt")
+	probe.Dir = f.dir
+	combined, err := probe.CombinedOutput()
+	if err != nil {
+		t.Fatalf("probe: %v: %s", err, combined)
+	}
+	if !strings.Contains(string(combined), "CRLF") {
+		t.Fatalf("git did not warn about line endings under core.autocrlf=true, so this row "+
+			"cannot exercise the condition it exists for: %q", combined)
+	}
+
+	id := strings.TrimSpace(f.git("hash-object", "-w", "lf.txt"))
+	if len(id) != 40 || strings.Trim(id, "0123456789abcdef") != "" {
+		t.Fatalf("the fixture returned %q as an object id — a diagnostic reached the value channel", id)
 	}
 }
