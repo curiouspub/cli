@@ -398,11 +398,15 @@ YAML is a step nobody can run before pushing.
   checks out the full history for the rows that read real commits. It
   needs no secret, so it runs on a pull request from a stranger's fork
   like everything else here. **What it costs, so the next person to ask
-  has a number instead of an opinion:** about ten seconds over 1,157
-  blobs and 20 MB, LOCAL, on Apple arm64 — half a second to enumerate and
-  the rest to read and match. A hosted runner is **unmeasured**; the
-  first CI run records it per leg, and the figure decays, because the
-  cost grows with the history.
+  has a number instead of an opinion:** the current LOCAL figure lives in
+  ONE place, beside the `leak-scan` target in the Makefile, and is
+  deliberately not restated here. It was restated here once — about ten
+  seconds, half a second of it enumeration — and when membership moved to
+  the object walk the Makefile's figure moved to 1.6 seconds of
+  enumeration while this one stayed put: two homes for one number,
+  diverged within a day of being written. A hosted runner is
+  **unmeasured**; the first CI run records it per leg, and the figure
+  decays, because the cost grows with the history.
 - **`make leak-scan-private INVENTORY=<path>` is the maintainer half and
   is deliberately unreachable from `ci`.** It reads an operator's
   inventory of this project's own resource names, which lives outside
