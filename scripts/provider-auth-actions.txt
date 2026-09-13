@@ -15,6 +15,22 @@
 # forbids without writing it down. Its COMMENT lines are scanned like any
 # other prose, so nothing here names a provider outside the list below.
 #
+# EVERY DATA LINE CARRIES AN ID, and the id comes first: an id, a space,
+# and then the entry verbatim. It is what a report names when this rule
+# fires, and what a ledger of already-published matches records.
+#
+# THE IDS ARE NUMBERED RATHER THAN NAMED, and that is the point rather
+# than laziness. The entries in this file ARE the strings the rule exists
+# to keep out of published text, so an id spelling one of them would
+# publish it into every run log that reports a match — on a fork's pull
+# request, a log more public than the surface being read. A number
+# discloses nothing and sits on the same line as the entry it names, so
+# nothing here is harder to read.
+#
+# AN ID IS STABLE, AND RENUMBERING BREAKS RECORDS. Append new entries at
+# the end with the next number; never renumber to close a gap. A deleted
+# entry leaves its number retired.
+#
 # WHY THERE IS ANYTHING TO FORBID AT ALL. There is nothing in this
 # repository to deploy. The binary speaks one protocol — this project's
 # own public HTTP API — and the workflows build it, test it and publish
@@ -35,30 +51,30 @@
 # place, and enumerating them is a list that goes stale the next time one
 # is added. Where the authenticating action lives under a general-purpose
 # owner, the entry names the action.
-aws-actions/
-amazon-ecs-
-amazon-ecr-
-azure/
-microsoft/azure-
-google-github-actions/
-googlecloudplatform/
-alibabacloud-github-actions/
-aliyun/
-tencentcloud/
-huaweicloud/
-oracle-actions/
-ibm/actions-
-digitalocean/
-linode/
-hetznercloud/
-scaleway/
-vultr/
-cloudflare/
-fly-apps/
-superfly/
-railwayapp/
-render-oss/
-heroku/
-pulumi/actions
-hashicorp/vault-action
-hashicorp/setup-terraform
+action-01  aws-actions/
+action-02  amazon-ecs-
+action-03  amazon-ecr-
+action-04  azure/
+action-05  microsoft/azure-
+action-06  google-github-actions/
+action-07  googlecloudplatform/
+action-08  alibabacloud-github-actions/
+action-09  aliyun/
+action-10  tencentcloud/
+action-11  huaweicloud/
+action-12  oracle-actions/
+action-13  ibm/actions-
+action-14  digitalocean/
+action-15  linode/
+action-16  hetznercloud/
+action-17  scaleway/
+action-18  vultr/
+action-19  cloudflare/
+action-20  fly-apps/
+action-21  superfly/
+action-22  railwayapp/
+action-23  render-oss/
+action-24  heroku/
+action-25  pulumi/actions
+action-26  hashicorp/vault-action
+action-27  hashicorp/setup-terraform

@@ -15,6 +15,22 @@
 # like any other prose, so nothing here quotes an example — the comments
 # describe classes, and the classes are named in CLAUDE.md.
 #
+# EVERY DATA LINE CARRIES AN ID, and the id comes first: an id, a space,
+# and then the entry verbatim. It is what a report names when this rule
+# fires, and what a ledger of already-published matches records.
+#
+# THE IDS ARE NUMBERED RATHER THAN NAMED, and that is the point rather
+# than laziness. The entries in this file ARE the strings the rule exists
+# to keep out of published text, so an id spelling one of them would
+# publish it into every run log that reports a match — on a fork's pull
+# request, a log more public than the surface being read. A number
+# discloses nothing and sits on the same line as the entry it names, so
+# nothing here is harder to read.
+#
+# AN ID IS STABLE, AND RENUMBERING BREAKS RECORDS. Append new entries at
+# the end with the next number; never renumber to close a gap. A deleted
+# entry leaves its number retired.
+#
 # --- Class 1: infrastructure provider SDKs.
 # This binary speaks one protocol, its own project's public HTTP API, and
 # has no business holding any provider's SDK — whichever provider it is.
@@ -22,53 +38,53 @@
 # widening (a guard naming one provider lets every other one through) and
 # the reason nothing here says where anything runs: a dozen names imply
 # none of them.
-aws-sdk
-aws/smithy
-azure-sdk
-azidentity
-cloud.google.com/go
-googleapis/gax-go
-cloudflare-go
-digitalocean/godo
-linodego
-scaleway-sdk-go
-hetznercloud
-govultr
-oci-go-sdk
-aliyun
-alibabacloud
-tencentcloud
-ibm-cloud
+sdk-01  aws-sdk
+sdk-02  aws/smithy
+sdk-03  azure-sdk
+sdk-04  azidentity
+sdk-05  cloud.google.com/go
+sdk-06  googleapis/gax-go
+sdk-07  cloudflare-go
+sdk-08  digitalocean/godo
+sdk-09  linodego
+sdk-10  scaleway-sdk-go
+sdk-11  hetznercloud
+sdk-12  govultr
+sdk-13  oci-go-sdk
+sdk-14  aliyun
+sdk-15  alibabacloud
+sdk-16  tencentcloud
+sdk-17  ibm-cloud
 
 # --- Class 2: telemetry and analytics. No phone-home, ever. This repo's
 # existence is a trust argument and one tracker ends it.
-segment.com
-segmentio
-mixpanel
-amplitude
-google-analytics
-getsentry
-sentry-go
-posthog
-datadog
-honeycombio
-newrelic
+telemetry-01  segment.com
+telemetry-02  segmentio
+telemetry-03  mixpanel
+telemetry-04  amplitude
+telemetry-05  google-analytics
+telemetry-06  getsentry
+telemetry-07  sentry-go
+telemetry-08  posthog
+telemetry-09  datadog
+telemetry-10  honeycombio
+telemetry-11  newrelic
 # Telemetry that arrives as a "standard" rather than as a vendor, which
 # is how it gets waved through. It is a phone-home whatever the
 # governance model, and it was the gap a review found in a list that
 # named only vendors.
-opentelemetry.io
-opencensus.io
-go.elastic.co/apm
-bugsnag
-rollbar
-logrocket
+telemetry-12  opentelemetry.io
+telemetry-13  opencensus.io
+telemetry-14  go.elastic.co/apm
+telemetry-15  bugsnag
+telemetry-16  rollbar
+telemetry-17  logrocket
 
 # --- Class 3: auto-updaters. CLAUDE.md's first screen promises this
 # class is enforced mechanically, and until these lines existed it was
 # not — the public repo was making a claim its code did not keep, which
 # is worse than a missing check because a reader stops looking.
-selfupdate
-go-update
-go-github-selfupdate
-equinox.io
+updater-01  selfupdate
+updater-02  go-update
+updater-03  go-github-selfupdate
+updater-04  equinox.io

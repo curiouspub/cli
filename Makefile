@@ -7,7 +7,7 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check hooks ci guard-a-branch-to-work-on
+.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check leak-scan leak-scan-private hooks ci guard-a-branch-to-work-on
 
 build:
 	go build -trimpath ./...
@@ -131,9 +131,11 @@ test-go:
 # runner's own classified figures could not be recovered from a passing
 # job at all.
 #
-# It is on this target alone, not on test-go, because it is these two
-# packages that report measurements and the rest of the suite would
-# only add noise to the same log.
+# tools/leakscan joins the raced pass because its tree walk has a worker
+# pool. Its ordinary suite asserts that no job or error is dropped; the
+# detector asserts the other half, that workers share no mutable map.
+# Only the two timing packages are verbose because their measurements,
+# rather than merely their verdicts, are part of the gate's output.
 # BOTH CONDITIONS ARE RUN HERE, and both print. The rule these packages
 # keep is that a leg's number is the WORSE of the two conditions the
 # gate runs it in — and for as long as only the raced pass carried -v,
@@ -141,6 +143,7 @@ test-go:
 # figure and the other existed nowhere. A rule about two numbers needs
 # both of them on the log.
 test-race:
+	CGO_ENABLED=1 go test -race -count=1 -timeout 25m ./tools/leakscan/
 	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 	go test -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
 
@@ -244,6 +247,47 @@ snapshot:
 surface-check:
 	go run ./tools/surfacecheck $(ARGS)
 
+# leak-scan reads everything this repository has ever published — every
+# blob reachable from a ref that exists on origin — against the manifests
+# in this repository, and fails on anything not recorded in
+# scripts/leak-baseline.txt.
+#
+# IT IS IN ci, WHICH surface-check IS NOT, and the difference is the shape
+# of the subject rather than a change of heart about cost. A range needs
+# two endpoints and a working copy is one state; a history needs no
+# endpoints at all. Every leg of every push already checks out the full
+# history for the rows that read real commits, so the objects are there.
+#
+# WHAT IT COSTS, recorded here because the next person to ask "can we
+# afford this in CI" should have a number instead of an opinion: about
+# 10.8 seconds over 1,157 blobs and 20 MB, LOCAL, on Apple arm64,
+# measured 2026-09-12 after object-walk membership landed: 1.6 seconds to
+# enumerate every reachable object and blob-path membership, and 9.2
+# seconds to read and match. The former one-name enumeration took about
+# 0.6 seconds; complete membership and paths therefore add about a second.
+# A hosted runner is unmeasured; the first CI run records it per leg, and
+# the figure decays, because the cost grows with the history.
+#
+# IT NEEDS NO SECRET, which is what lets it run on a pull request from a
+# stranger's fork like every other row here.
+leak-scan:
+	go run ./tools/leakscan -public
+
+# leak-scan-private is the MAINTAINER half and is deliberately not
+# reachable from ci. It reads an operator's inventory of this project's
+# own resource names, which lives outside this repository because a
+# committed list of the exact names you are defending is a directory of
+# them — and its findings are recorded beside that inventory, for the
+# same reason: a public file cannot hold an exception to a private rule
+# without becoming the leak.
+#
+# THE PATH IS REQUIRED AND THERE IS NO DEFAULT. A run asked for this half
+# with nothing to read has not found the estate clean, it has not looked
+# at it, and the command says so rather than passing.
+leak-scan-private:
+	@if [ -z "$(INVENTORY)" ]; then 		echo "leak-scan-private needs the inventory to read:"; 		echo; 		echo "    make leak-scan-private INVENTORY=<path outside this repository>"; 		echo; 		echo "There is no default. A scan that picked one would be a scan that"; 		echo "silently ran the half you were not asking for."; 		exit 1; 	fi
+	go run ./tools/leakscan -inventory "$(INVENTORY)"
+
 # hooks installs the pre-push hook, and it is OPT IN because a hook is
 # not the gate and must never be mistaken for one. A hook lives in a
 # directory git does not clone, is skipped by --no-verify, and is absent
@@ -295,7 +339,7 @@ hooks:
 # IT IS SKIPPED UNDER CI, where the default branch is a legitimate place
 # to run: a push to main after a merge runs this workflow, and so does
 # the merge queue's own ref. Nothing is being committed there.
-ci: guard-a-branch-to-work-on fmt vet build test lint
+ci: guard-a-branch-to-work-on fmt vet build leak-scan test lint
 
 guard-a-branch-to-work-on:
 	@if [ -z "$$CI" ] && [ "$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$(DEFAULT_BRANCH)" ]; then 		echo "make ci refuses to run on $(DEFAULT_BRANCH)."; 		echo; 		echo "Work happens on a branch. Committing here is one keystroke from a"; 		echo "trunk nobody reviewed, and the remote's ruleset is the only thing"; 		echo "that would catch it — which is a control you should not be spending."; 		echo; 		echo "    git checkout -b <name>"; 		exit 1; 	fi

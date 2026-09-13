@@ -53,6 +53,9 @@ func TestTheSelfTestProvesTheCheckerBothWays(t *testing.T) {
 					"which half ran:\n%s", short(sha), out.String())
 			}
 		}
+		if !strings.Contains(out.String(), vendorControlID+" reported one infrastructure finding") {
+			t.Errorf("the self-test output does not show that the vendor half ran:\n%s", out.String())
+		}
 	})
 
 	t.Run("each half reports what it must, and the other half does not", func(t *testing.T) {
@@ -103,14 +106,43 @@ func TestTheSelfTestProvesTheCheckerBothWays(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading %s: %v", short(sha), err)
 			}
+			// THE LINE THAT TRIPPED, rather than the text that matched. A
+			// finding no longer carries the matched string — the struct
+			// that cannot hold it cannot leak it — so what this row has to
+			// work with is WHERE it fired, and the line at that place is a
+			// strictly larger piece of the message. If the output contains
+			// none of those lines it contains none of the matches either,
+			// and it is the sharper question besides: a short term can sit
+			// inside an ordinary word of the report's own prose, and a
+			// whole line of somebody's commit message cannot.
+			lines := strings.Split(message, "\n")
+			tripped := 0
 			for _, f := range rules.Scan("audit", message) {
-				if strings.Contains(out.String(), f.Match) {
+				if f.Line < 1 || f.Line > len(lines) {
+					continue
+				}
+				line := strings.TrimSpace(lines[f.Line-1])
+				if line == "" {
+					continue
+				}
+				tripped++
+				if strings.Contains(out.String(), line) {
 					// NAMED BY SHA, NOT QUOTED. A failure message that
 					// printed the leaked text would be the same leak,
 					// arriving through the row that reports it.
-					t.Fatalf("the self-test's output reproduces text matched in %s; the "+
-						"recorded evidence is meant to be shas and counts", short(sha))
+					t.Fatalf("the self-test's output reproduces a line of the message in %s; "+
+						"the recorded evidence is meant to be shas and counts", short(sha))
 				}
+			}
+			if tripped == 0 {
+				t.Fatalf("%s produced no finding this row could check the output against, so "+
+					"the absence above is satisfied by a scan that found nothing", short(sha))
+			}
+		}
+		for term, id := range rules.VendorTerms() {
+			if id == vendorControlID && strings.Contains(strings.ToLower(out.String()), term) {
+				t.Fatal("the self-test output reproduces the pinned provider term; the control " +
+					"must name only its public rule id")
 			}
 		}
 	})
