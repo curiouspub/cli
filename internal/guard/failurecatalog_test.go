@@ -3,7 +3,6 @@ package guard
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/parser"
@@ -96,30 +95,89 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 		}
 	}
 
-	families := productionCheckFamilies()
-	type sets struct {
-		actions map[string]bool
-		stages  map[string]bool
-		// stage -> What value -> the sites writing it
-		whats map[string]map[string]map[string]bool
-	}
-	byID := map[string]*sets{}
+	seen := map[string]bool{}
 	for _, value := range constants {
-		if byID[value] != nil {
+		if seen[value] {
 			t.Errorf("FailureID constant value %q is declared more than once", value)
-			continue
 		}
-		byID[value] = &sets{actions: map[string]bool{}, stages: map[string]bool{},
-			whats: map[string]map[string]map[string]bool{}}
+		seen[value] = true
 	}
-	addWhat := func(entry *sets, stage, value, site string) {
-		if entry.whats[stage] == nil {
-			entry.whats[stage] = map[string]map[string]bool{}
+	families := productionCheckFamilies()
+	census := catalogCensusFrom(t, failureContractObligations, families, constants)
+
+	entries := make([]publicCatalogEntry, 0, len(census.actions))
+	for _, id := range headlineKeys(census.actions) {
+		if len(census.actions[id]) == 0 || len(census.stages[id]) == 0 {
+			t.Errorf("catalog id %q has no derived production action/stage", id)
 		}
-		if entry.whats[stage][value] == nil {
-			entry.whats[stage][value] = map[string]bool{}
+		var family *string
+		if families[id] {
+			value := id
+			family = &value
 		}
-		entry.whats[stage][value][site] = true
+		headline := map[string]*string{}
+		reason := map[string]string{}
+		for _, stage := range mapKeys(census.stages[id]) {
+			values := census.whats[id][stage]
+			if len(values) != 1 {
+				// THE ROW NAMES THE SITES; this refuses to emit a headline it
+				// would have to choose. See TestOneWhatPerIdAndStage.
+				t.Errorf("catalog id %q at stage %q carries %d What values, and a headline is one What "+
+					"per (id, Stage); TestOneWhatPerIdAndStage names the sites", id, stage, len(values))
+				continue
+			}
+			for value := range values {
+				kind, text, _ := strings.Cut(value, ":")
+				if kind == "literal" || kind == "format" {
+					quoted := text
+					headline[stage] = &quoted
+				} else {
+					headline[stage] = nil
+					reason[stage] = "composed"
+				}
+			}
+		}
+		entries = append(entries, publicCatalogEntry{
+			Action: mapKeys(census.actions[id]), Family: family, Headline: headline, HeadlineReason: reason,
+			ID: id, Stages: mapKeys(census.stages[id]),
+		})
+	}
+	out, err := json.MarshalIndent(publicCatalog{Note: publicCatalogNote, Failures: entries}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(out, '\n')
+}
+
+// catalogCensus is what production sites say about each failure id: the
+// actions they pass, the stages they declare, and the What each stage's
+// sites write. The generator serialises it and the headline rows read it,
+// so the artefact and the rows cannot disagree about what the sites say.
+type catalogCensus struct {
+	actions map[string]map[string]bool
+	stages  map[string]map[string]bool
+	// id -> stage -> What value -> the sites writing it
+	whats map[string]map[string]map[string]map[string]bool
+}
+
+func catalogCensusFrom(t *testing.T, obs []obligation, families map[string]bool,
+	constants map[string]string) catalogCensus {
+	t.Helper()
+	c := catalogCensus{actions: map[string]map[string]bool{}, stages: map[string]map[string]bool{},
+		whats: map[string]map[string]map[string]map[string]bool{}}
+	for _, value := range constants {
+		c.actions[value] = map[string]bool{}
+		c.stages[value] = map[string]bool{}
+		c.whats[value] = map[string]map[string]map[string]bool{}
+	}
+	addWhat := func(id, stage, value, site string) {
+		if c.whats[id][stage] == nil {
+			c.whats[id][stage] = map[string]map[string]bool{}
+		}
+		if c.whats[id][stage][value] == nil {
+			c.whats[id][stage][value] = map[string]bool{}
+		}
+		c.whats[id][stage][value][site] = true
 	}
 
 	// family -> What value -> the sites writing it, read where each finding
@@ -127,7 +185,7 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 	// failure.
 	familyWhats := map[string]map[string]map[string]bool{}
 	groups := map[string][]obligation{}
-	for _, o := range failureContractObligations {
+	for _, o := range obs {
 		if o.problem != "" {
 			continue
 		}
@@ -199,8 +257,7 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 			}
 		}
 		for _, pair := range pairs {
-			entry := byID[pair[0]]
-			if entry == nil {
+			if c.actions[pair[0]] == nil {
 				t.Errorf("%s emits undeclared failure id %q", group[0].where, pair[0])
 				continue
 			}
@@ -208,13 +265,13 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 				t.Errorf("%s emits invalid action %q", group[0].where, pair[1])
 				continue
 			}
-			entry.actions[pair[1]] = true
-			entry.stages[stage] = true
+			c.actions[pair[0]][pair[1]] = true
+			c.stages[pair[0]][stage] = true
 			if familySite {
 				// The family's What is read where its finding is written.
 				for value, sites := range familyWhats[pair[0]] {
 					for site := range sites {
-						addWhat(entry, stage, value, site)
+						addWhat(pair[0], stage, value, site)
 					}
 				}
 				continue
@@ -223,61 +280,10 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 				t.Errorf("%s: the What of %q was not read", group[0].where, pair[0])
 				continue
 			}
-			addWhat(entry, stage, whatOb.values[0], group[0].where)
+			addWhat(pair[0], stage, whatOb.values[0], group[0].where)
 		}
 	}
-
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	entries := make([]publicCatalogEntry, 0, len(ids))
-	for _, id := range ids {
-		set := byID[id]
-		if len(set.actions) == 0 || len(set.stages) == 0 {
-			t.Errorf("catalog id %q has no derived production action/stage", id)
-		}
-		var family *string
-		if families[id] {
-			value := id
-			family = &value
-		}
-		headline := map[string]*string{}
-		reason := map[string]string{}
-		for _, stage := range mapKeys(set.stages) {
-			values := set.whats[stage]
-			if len(values) != 1 {
-				var described []string
-				for value, sites := range values {
-					described = append(described, fmt.Sprintf("%q at %s", value, strings.Join(mapKeys(sites), ", ")))
-				}
-				sort.Strings(described)
-				t.Errorf("catalog id %q at stage %q carries %d What values, and a headline is one What "+
-					"per (id, Stage): %s", id, stage, len(values), strings.Join(described, "; "))
-				continue
-			}
-			for value := range values {
-				kind, text, _ := strings.Cut(value, ":")
-				if kind == "literal" || kind == "format" {
-					quoted := text
-					headline[stage] = &quoted
-				} else {
-					headline[stage] = nil
-					reason[stage] = "composed"
-				}
-			}
-		}
-		entries = append(entries, publicCatalogEntry{
-			Action: mapKeys(set.actions), Family: family, Headline: headline, HeadlineReason: reason,
-			ID: id, Stages: mapKeys(set.stages),
-		})
-	}
-	out, err := json.MarshalIndent(publicCatalog{Note: publicCatalogNote, Failures: entries}, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(out, '\n')
+	return c
 }
 
 func mapKeys[V ~bool](set map[string]V) []string {
