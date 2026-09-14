@@ -1925,15 +1925,24 @@ func TestAStarvedPassIsRetakenRatherThanCounted(t *testing.T) {
 		// exceeds the window times marginFloorDen. The excluded reading
 		// clears it; the excursion does not, which is exactly the red
 		// that ejected a green pull request from the merge queue.
-		if worst*marginFloorNum > entry.Window*marginFloorDen {
+		//
+		// AGAINST THE WINDOW OF THAT DAY, pinned here rather than read from
+		// the entry. The window has since been re-ruled to 235 ms from every
+		// hosted reading, and against that a gap of this size clears the
+		// floor — which is the point of re-ruling it, and would leave this
+		// half asserting a failure that can no longer happen. The starvation
+		// half above still reads the live budget: that budget is a ceiling,
+		// and this pass must stay starved under it.
+		const windowThatDay = 55 * time.Millisecond
+		if worst*marginFloorNum > windowThatDay*marginFloorDen {
 			t.Errorf("the admitted maximum %v is inside the margin floor's band "+
 				"against a %v window, so excluding the excursion did not buy the "+
-				"row its margin back", worst, entry.Window)
+				"row its margin back", worst, windowThatDay)
 		}
-		if excursionGap*marginFloorNum <= entry.Window*marginFloorDen {
+		if excursionGap*marginFloorNum <= windowThatDay*marginFloorDen {
 			t.Errorf("the excursion's %v would NOT have tripped the margin floor "+
 				"against a %v window, so this row is not about the failure it "+
-				"names", excursionGap, entry.Window)
+				"names", excursionGap, windowThatDay)
 		}
 	})
 
