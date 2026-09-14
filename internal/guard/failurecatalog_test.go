@@ -11,17 +11,103 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/curiouspub/cli/internal/ui"
 )
 
+// publicCatalog is the published artefact: a note saying what its fields
+// mean, and one entry per failure id.
+type publicCatalog struct {
+	Note     []string             `json:"note"`
+	Failures []publicCatalogEntry `json:"failures"`
+}
+
 type publicCatalogEntry struct {
-	Action []string `json:"action"`
-	Family *string  `json:"family"`
-	ID     string   `json:"id"`
-	Stages []string `json:"stages"`
+	Action         []string           `json:"action"`
+	Family         *string            `json:"family"`
+	Headline       map[string]*string `json:"headline"`
+	HeadlineReason map[string]string  `json:"headline_reason"`
+	ID             string             `json:"id"`
+	Stages         []string           `json:"stages"`
+}
+
+// publicCatalogNote opens the published note. It travels in the file because
+// the meaning of stages changed, and a consumer reading the file is the one
+// who needs to know. The lines after it are generated from each stage's
+// documented sentence, by catalogNote.
+const publicCatalogNote = "stages are the stages each failure's construction sites DECLARE: " +
+	"what a person was doing when the failure met them, never the package or file that raised " +
+	"it. headline maps each of those stages to the failure's What exactly as written in code, " +
+	"Go verbs kept. A null headline is a What composed at run time, and headline_reason says so. " +
+	"Each line after this one names a stage and what a person is doing when a failure carries it."
+
+// catalogNote is the published note: the opening line, then one line per
+// declared stage, in declared order, carrying the one sentence that stage's
+// constant is documented with in internal/ui.
+func catalogNote(t *testing.T, root string) []string {
+	t.Helper()
+	sentences := stageSentences(t, root)
+	note := []string{publicCatalogNote}
+	for _, stage := range ui.Stages {
+		sentence := sentences[string(stage)]
+		if sentence == "" {
+			t.Errorf("stage %q has no documented sentence, so the catalog note cannot say what it means", stage)
+		}
+		note = append(note, stageNoteLine(string(stage), sentence))
+	}
+	return note
+}
+
+// stageNoteLine is how the note carries one stage.
+func stageNoteLine(stage, sentence string) string { return stage + ": " + sentence }
+
+// stageSentences reads, from internal/ui's own source, the sentence each
+// Stage constant is documented with, keyed by the stage's value. The doc
+// comment is the one home: the note is generated from it, not copied.
+func stageSentences(t *testing.T, root string) map[string]string {
+	t.Helper()
+	dir := filepath.Join(root, "internal", "ui")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	fset := token.NewFileSet()
+	out := map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", e.Name(), err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Values) != 1 {
+					continue
+				}
+				typ, ok := vs.Type.(*ast.Ident)
+				lit, isLit := vs.Values[0].(*ast.BasicLit)
+				if !ok || typ.Name != "Stage" || !isLit || lit.Kind != token.STRING {
+					continue
+				}
+				value, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("stage constant %s does not decode: %v", vs.Names[0].Name, err)
+				}
+				out[value] = strings.Join(strings.Fields(vs.Doc.Text()), " ")
+			}
+		}
+	}
+	return out
 }
 
 // TestCatalogJSONMatchesRegeneration is both the drift row and the target of
@@ -50,10 +136,10 @@ func TestCatalogJSONMatchesRegeneration(t *testing.T) {
 	}
 }
 
-// generatedFailureCatalog derives action and stages from production sites,
-// rather than declaring either by hand. That assumption is explicit because a
-// hand-maintained description of those sites is the drift this catalog exists
-// to prevent. The input is the obligation set collected by the failure
+// generatedFailureCatalog derives every field from production sites rather
+// than declaring any by hand: actions from the actions sites pass, stages
+// from the stages sites DECLARE, and headlines from the What each site
+// writes. The input is the obligation set collected by the failure
 // contract's type-aware recogniser above; this is serialization over that
 // census, not a second recogniser.
 func generatedFailureCatalog(t *testing.T, root string) []byte {
@@ -79,47 +165,143 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 		}
 	}
 
-	familySites := productionCheckFamilySites(root)
-	families := map[string]bool{}
-	for family := range familySites {
-		families[family] = true
-	}
-	type sets struct{ actions, stages map[string]bool }
-	byID := map[string]*sets{}
+	seen := map[string]bool{}
 	for _, value := range constants {
-		if byID[value] != nil {
+		if seen[value] {
 			t.Errorf("FailureID constant value %q is declared more than once", value)
-			continue
 		}
-		byID[value] = &sets{actions: map[string]bool{}, stages: map[string]bool{}}
+		seen[value] = true
 	}
-	// Check-backed families are authored by finding producers before flow turns
-	// them into ui.Failures. Both are emission stages: retaining the producer is
-	// why a limit family says "pack" rather than pretending its first appearance
-	// was the generic ownCopy call in flow.
-	for family, stages := range familySites {
-		if entry := byID[family]; entry != nil {
-			for stage := range stages {
-				entry.stages[stage] = true
+	families := productionCheckFamilies()
+	census := catalogCensusFrom(t, failureContractObligations, families, constants)
+
+	entries := make([]publicCatalogEntry, 0, len(census.actions))
+	for _, id := range headlineKeys(census.actions) {
+		if len(census.actions[id]) == 0 || len(census.stages[id]) == 0 {
+			t.Errorf("catalog id %q has no derived production action/stage", id)
+		}
+		var family *string
+		if families[id] {
+			value := id
+			family = &value
+		}
+		headline := map[string]*string{}
+		reason := map[string]string{}
+		for _, stage := range mapKeys(census.stages[id]) {
+			values := census.whats[id][stage]
+			if len(values) != 1 {
+				// THE ROW NAMES THE SITES; this refuses to emit a headline it
+				// would have to choose. See TestOneWhatPerIdAndStage.
+				t.Errorf("catalog id %q at stage %q carries %d What values, and a headline is one What "+
+					"per (id, Stage); TestOneWhatPerIdAndStage names the sites", id, stage, len(values))
+				continue
+			}
+			for value := range values {
+				kind, text, _ := strings.Cut(value, ":")
+				if kind == "literal" || kind == "format" {
+					quoted := text
+					headline[stage] = &quoted
+				} else {
+					headline[stage] = nil
+					reason[stage] = "composed"
+				}
 			}
 		}
+		entries = append(entries, publicCatalogEntry{
+			Action: mapKeys(census.actions[id]), Family: family, Headline: headline, HeadlineReason: reason,
+			ID: id, Stages: mapKeys(census.stages[id]),
+		})
+	}
+	out, err := json.MarshalIndent(publicCatalog{Note: catalogNote(t, root), Failures: entries}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(out, '\n')
+}
+
+// catalogCensus is what production sites say about each failure id: the
+// actions they pass, the stages they declare, the What each stage's sites
+// write, and how each composed What is built. The generator serialises it
+// and the headline rows read it, so the artefact and the rows cannot
+// disagree about what the sites say.
+type catalogCensus struct {
+	actions map[string]map[string]bool
+	stages  map[string]map[string]bool
+	// id -> stage -> What value -> the sites writing it. A composed What is
+	// filed as "composed": its words are not the catalog's to quote, and how
+	// it is built is filed under builders instead.
+	whats map[string]map[string]map[string]map[string]bool
+	// id -> stage -> "constructor · shape" -> the sites building a composed What
+	builders map[string]map[string]map[string]map[string]bool
+}
+
+func catalogCensusFrom(t *testing.T, obs []obligation, families map[string]bool,
+	constants map[string]string) catalogCensus {
+	t.Helper()
+	c := catalogCensus{actions: map[string]map[string]bool{}, stages: map[string]map[string]bool{},
+		whats:    map[string]map[string]map[string]map[string]bool{},
+		builders: map[string]map[string]map[string]map[string]bool{}}
+	for _, value := range constants {
+		c.actions[value] = map[string]bool{}
+		c.stages[value] = map[string]bool{}
+		c.whats[value] = map[string]map[string]map[string]bool{}
+		c.builders[value] = map[string]map[string]map[string]bool{}
+	}
+	file := func(m map[string]map[string]map[string]map[string]bool, id, stage, key, site string) {
+		if m[id][stage] == nil {
+			m[id][stage] = map[string]map[string]bool{}
+		}
+		if m[id][stage][key] == nil {
+			m[id][stage][key] = map[string]bool{}
+		}
+		m[id][stage][key][site] = true
+	}
+	addWhat := func(id, stage, value, site, constructor string) {
+		kind, shape, _ := strings.Cut(value, ":")
+		if kind == "composed" {
+			file(c.whats, id, stage, "composed", site)
+			file(c.builders, id, stage, constructor+" · "+shape, site)
+			return
+		}
+		file(c.whats, id, stage, value, site)
 	}
 
+	// family -> What value -> site -> constructor, read where each finding is
+	// built rather than at the one generic site that turns it into a failure.
+	familyWhats := map[string]map[string]map[string]string{}
 	groups := map[string][]obligation{}
-	for _, o := range failureContractObligations {
+	for _, o := range obs {
 		if o.problem != "" {
+			continue
+		}
+		if o.field == "FamilyWhat" {
+			if o.family == "" || len(o.values) != 1 {
+				t.Errorf("%s: a check family's What was not read (%q)", o.where, o.expr)
+				continue
+			}
+			if familyWhats[o.family] == nil {
+				familyWhats[o.family] = map[string]map[string]string{}
+			}
+			if familyWhats[o.family][o.values[0]] == nil {
+				familyWhats[o.family][o.values[0]] = map[string]string{}
+			}
+			familyWhats[o.family][o.values[0]][o.where] = o.constructor
 			continue
 		}
 		groups[o.source.target+"|"+o.where] = append(groups[o.source.target+"|"+o.where], o)
 	}
 	for _, group := range groups {
-		var idOb, actionOb *obligation
+		var idOb, actionOb, stageOb, whatOb *obligation
 		for i := range group {
 			switch group[i].field {
 			case "ID":
 				idOb = &group[i]
 			case "Next":
 				actionOb = &group[i]
+			case "Stage":
+				stageOb = &group[i]
+			case "What":
+				whatOb = &group[i]
 			}
 		}
 		if idOb == nil && actionOb == nil {
@@ -129,12 +311,23 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 			t.Errorf("%s has only one of the catalog's ID/action obligations", group[0].where)
 			continue
 		}
+		if stageOb == nil || len(stageOb.values) != 1 {
+			expr := ""
+			if stageOb != nil {
+				expr = stageOb.expr
+			}
+			t.Errorf("%s declares no single Stage the catalog can record (%q)", group[0].where, expr)
+			continue
+		}
+		stage := stageOb.values[0]
 
+		familySite := false
 		pairs, correlated := correlatedReturnPairs(*idOb, *actionOb)
 		if !correlated {
 			ids := append([]string(nil), idOb.values...)
 			if len(ids) == 0 && findingFamilyExpression(*idOb) {
 				ids = mapKeys(families)
+				familySite = true
 			}
 			actions := append([]string(nil), actionOb.values...)
 			if len(ids) == 0 || len(actions) == 0 {
@@ -148,10 +341,8 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 				}
 			}
 		}
-		stage := catalogStage(group[0].where)
 		for _, pair := range pairs {
-			entry := byID[pair[0]]
-			if entry == nil {
+			if c.actions[pair[0]] == nil {
 				t.Errorf("%s emits undeclared failure id %q", group[0].where, pair[0])
 				continue
 			}
@@ -159,36 +350,25 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 				t.Errorf("%s emits invalid action %q", group[0].where, pair[1])
 				continue
 			}
-			entry.actions[pair[1]] = true
-			entry.stages[stage] = true
+			c.actions[pair[0]][pair[1]] = true
+			c.stages[pair[0]][stage] = true
+			if familySite {
+				// The family's What is read where its finding is written.
+				for value, sites := range familyWhats[pair[0]] {
+					for site, constructor := range sites {
+						addWhat(pair[0], stage, value, site, constructor)
+					}
+				}
+				continue
+			}
+			if whatOb == nil || len(whatOb.values) != 1 {
+				t.Errorf("%s: the What of %q was not read", group[0].where, pair[0])
+				continue
+			}
+			addWhat(pair[0], stage, whatOb.values[0], group[0].where, whatOb.constructor)
 		}
 	}
-
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	entries := make([]publicCatalogEntry, 0, len(ids))
-	for _, id := range ids {
-		set := byID[id]
-		if len(set.actions) == 0 || len(set.stages) == 0 {
-			t.Errorf("catalog id %q has no derived production action/stage", id)
-		}
-		var family *string
-		if families[id] {
-			value := id
-			family = &value
-		}
-		entries = append(entries, publicCatalogEntry{
-			Action: mapKeys(set.actions), Family: family, ID: id, Stages: mapKeys(set.stages),
-		})
-	}
-	out, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(out, '\n')
+	return c
 }
 
 func mapKeys[V ~bool](set map[string]V) []string {
@@ -202,8 +382,9 @@ func mapKeys[V ~bool](set map[string]V) []string {
 	return out
 }
 
-func productionCheckFamilySites(root string) map[string]map[string]bool {
-	out := map[string]map[string]bool{}
+// productionCheckFamilies is every check family a production file names.
+func productionCheckFamilies() map[string]bool {
+	out := map[string]bool{}
 	for _, p := range failureContractFiles {
 		ast.Inspect(p.file, func(n ast.Node) bool {
 			id, ok := n.(*ast.Ident)
@@ -213,11 +394,7 @@ func productionCheckFamilySites(root string) map[string]map[string]bool {
 			c, ok := p.info.Uses[id].(*types.Const)
 			if ok && c.Val().Kind() == constant.String &&
 				namedTypeKey(c.Type()) == modulePath+"/internal/check.FailureFamily" {
-				family := constant.StringVal(c.Val())
-				if out[family] == nil {
-					out[family] = map[string]bool{}
-				}
-				out[family][catalogStage(displayPath(root, p.path))] = true
+				out[constant.StringVal(c.Val())] = true
 			}
 			return true
 		})
@@ -347,15 +524,6 @@ func nodeText(p parsedFile, n ast.Node) string {
 	// resolveIn only needs this callback for diagnostics and definition
 	// fingerprints here; catalog return values are typed constants.
 	return "catalog expression"
-}
-
-func catalogStage(where string) string {
-	path := strings.SplitN(where, ":", 2)[0]
-	parts := strings.Split(filepath.ToSlash(path), "/")
-	if len(parts) >= 2 && (parts[0] == "internal" || parts[0] == "pkg" || parts[0] == "cmd") {
-		return parts[1]
-	}
-	return parts[0]
 }
 
 func TestActiveFailureIDsAreUniqueAndReachable(t *testing.T) {

@@ -425,7 +425,7 @@ func newLoginRun(t *testing.T) *loginRun {
 			run.offer.resetsAt = resetsAt
 			carried, _ := ctx.Value(ctxMarker{}).(string)
 			run.offer.ctxCarried = carried == "carried"
-			return ui.NewFailure(ui.IDInternalFault, "Capacity is closed.", "stub", ui.NextGiveUp, "stub")
+			return ui.NewFailure(ui.IDInternalFault, ui.StageThisRun, "Capacity is closed.", "stub", ui.NextGiveUp, "stub")
 		},
 	}
 	return run
@@ -1703,7 +1703,7 @@ func TestTheTokenIsNeverPrintedOnAnyPath(t *testing.T) {
 		prompt := &scriptedPrompt{}
 		prompt.Step("%s", token)
 		planted := prompt.out.String() + "\n" +
-			rendered(ui.NewFailure(ui.IDInternalFault, token, token, ui.NextGiveUp, token))
+			rendered(ui.NewFailure(ui.IDInternalFault, ui.StageThisRun, token, token, ui.NextGiveUp, token))
 		if n := strings.Count(planted, token); n != 4 {
 			t.Fatalf("a planted value was found %d times across the narration "+
 				"buffer and the rendered failure, want 4 — the assertions below "+
@@ -2031,7 +2031,7 @@ func TestTheOfferKeepsItsWordsAndTheFlowKeepsTheCost(t *testing.T) {
 	run.prompt.lines = []answer{says("111111")}
 	run.prompt.confirms = []answer{no()}
 	run.deps.Offer = func(context.Context, string, time.Time) error {
-		return ui.NewFailure(ui.IDInternalFault, "Want a nudge when a slot frees up?", "Because.", ui.NextGiveUp, "Say yes.")
+		return ui.NewFailure(ui.IDInternalFault, ui.StageThisRun, "Want a nudge when a slot frees up?", "Because.", ui.NextGiveUp, "Say yes.")
 	}
 	run.script.verifyOutcomes = []outcome{
 		fails(http.StatusServiceUnavailable, wire.CodeCapacityClosed, "full").after("900"),

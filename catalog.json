@@ -1,586 +1,883 @@
-[
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "answer-not-understood",
-    "stages": [
-      "ui"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "api-address-unusable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "archive-unreadable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "astro-dep-absent",
-    "id": "astro-dep-absent",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "astro-dep-invalid-json",
-    "id": "astro-dep-invalid-json",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "astro-dep-missing",
-    "id": "astro-dep-missing",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "astro-dep-not-object",
-    "id": "astro-dep-not-object",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "astro-dep-unreadable",
-    "id": "astro-dep-unreadable",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "build-failed",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "build-log-lost",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "build-output-refused",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "capacity-check-failed",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "capacity-check-unreachable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "client-request-rejected",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "config-location-unusable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "daily-capacity-closed",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "deploy-not-completed-by-server",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "deploy-unknown-to-server",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "fresh-login-refused",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "internal-fault",
-    "stages": [
-      "ui"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "limit-file-size",
-    "id": "limit-file-size",
-    "stages": [
-      "flow",
-      "pack"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "limit-files",
-    "id": "limit-files",
-    "stages": [
-      "flow",
-      "pack"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "limit-packed",
-    "id": "limit-packed",
-    "stages": [
-      "flow",
-      "pack"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "limit-total",
-    "id": "limit-total",
-    "stages": [
-      "flow",
-      "pack"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "lockfile-missing",
-    "id": "lockfile-missing",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "lockfile-unsupported",
-    "id": "lockfile-unsupported",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "lockfile-workspace",
-    "id": "lockfile-workspace",
-    "stages": [
-      "flow",
-      "preflight"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "login-endpoint-missing",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "login-not-saved",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "login-refused",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "needs-a-terminal",
-    "stages": [
-      "ui"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": "path-charset",
-    "id": "path-charset",
-    "stages": [
-      "flow",
-      "pack"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "project-dir-missing",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "project-dir-unknown",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "project-dir-unreadable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "project-not-ready",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "project-path-not-a-directory",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "project-unreadable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "publish-not-confirmed",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "published-address-invalid",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "rate-limited",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "server-answer-unrecognised",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "server-unanswered",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "service-unavailable",
-    "stages": [
-      "flow",
-      "ui"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "temp-dir-unusable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-address-unusable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-answer-unrecognised",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-connection-lost",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-host-unreachable",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-link-expired",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-redirected",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-refused-unexplained",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "GiveUp"
-    ],
-    "family": null,
-    "id": "upload-signature-mismatch",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "FreshDeploy"
-    ],
-    "family": null,
-    "id": "upload-stalled",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "waitlist-declined",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "waitlist-needs-terminal",
-    "stages": [
-      "flow"
-    ]
-  },
-  {
-    "action": [
-      "Wait"
-    ],
-    "family": null,
-    "id": "waitlist-signup-failed",
-    "stages": [
-      "flow"
-    ]
-  }
-]
+{
+  "note": [
+    "stages are the stages each failure's construction sites DECLARE: what a person was doing when the failure met them, never the package or file that raised it. headline maps each of those stages to the failure's What exactly as written in code, Go verbs kept. A null headline is a What composed at run time, and headline_reason says so. Each line after this one names a stage and what a person is doing when a failure carries it.",
+    "deploys: A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.",
+    "logins: A person is logging in, or curious is saving the login they just completed.",
+    "building: A person is waiting while the server builds the project and decides whether to take the result.",
+    "addresses: A person is waiting for a finished deploy to be given its public address.",
+    "this request: A person asked curious.pub for something and the server closed the door without saying which step it was.",
+    "build log: A person is watching the build log stream in while the build runs.",
+    "uploads: A person is waiting while curious sends the packed project to the upload address.",
+    "this machine: A person is getting this machine ready before anything is sent: the project directory, where the login is kept, the API address or the temporary directory.",
+    "pre-flight: A person is having the project checked before anything leaves the machine.",
+    "waitlist: A person found today's capacity used up and is being offered the waitlist.",
+    "questions: A person is being asked a question that curious cannot put to them or cannot read the answer to.",
+    "this run: A person could be anywhere in a run, and the fault is in curious itself."
+  ],
+  "failures": [
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "questions": "Didn't catch that."
+      },
+      "headline_reason": {},
+      "id": "answer-not-understood",
+      "stages": [
+        "questions"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": "curious can't use that API address."
+      },
+      "headline_reason": {},
+      "id": "api-address-unusable",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "archive-unreadable",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "astro-dep-absent",
+      "headline": {
+        "pre-flight": "This doesn't look like an Astro project."
+      },
+      "headline_reason": {},
+      "id": "astro-dep-absent",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "astro-dep-invalid-json",
+      "headline": {
+        "pre-flight": "package.json isn't valid JSON."
+      },
+      "headline_reason": {},
+      "id": "astro-dep-invalid-json",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "astro-dep-missing",
+      "headline": {
+        "pre-flight": "This doesn't look like an Astro project."
+      },
+      "headline_reason": {},
+      "id": "astro-dep-missing",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "astro-dep-not-object",
+      "headline": {
+        "pre-flight": "package.json isn't a JSON object."
+      },
+      "headline_reason": {},
+      "id": "astro-dep-not-object",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "astro-dep-unreadable",
+      "headline": {
+        "pre-flight": "curious couldn't read package.json."
+      },
+      "headline_reason": {},
+      "id": "astro-dep-unreadable",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "building": "The build failed."
+      },
+      "headline_reason": {},
+      "id": "build-failed",
+      "stages": [
+        "building"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "build log": "curious lost the build log and could not pick it up again."
+      },
+      "headline_reason": {},
+      "id": "build-log-lost",
+      "stages": [
+        "build log"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "building": "The build finished, and the server would not take the result."
+      },
+      "headline_reason": {},
+      "id": "build-output-refused",
+      "stages": [
+        "building"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "deploys": "curious couldn't ask whether there is room today."
+      },
+      "headline_reason": {},
+      "id": "capacity-check-failed",
+      "stages": [
+        "deploys"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "deploys": "curious couldn't ask whether there is room today."
+      },
+      "headline_reason": {},
+      "id": "capacity-check-unreachable",
+      "stages": [
+        "deploys"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "deploys": "The server wouldn't accept that archive.",
+        "logins": "curious sent something this server wouldn't accept."
+      },
+      "headline_reason": {},
+      "id": "client-request-rejected",
+      "stages": [
+        "deploys",
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": "curious couldn't work out where to keep your login."
+      },
+      "headline_reason": {},
+      "id": "config-location-unusable",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "curious.pub is full for today.",
+        "deploys": "curious.pub is full for today."
+      },
+      "headline_reason": {},
+      "id": "daily-capacity-closed",
+      "stages": [
+        "addresses",
+        "deploys"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "The server couldn't finish the deploy."
+      },
+      "headline_reason": {},
+      "id": "deploy-not-completed-by-server",
+      "stages": [
+        "addresses"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "The server doesn't know that deploy."
+      },
+      "headline_reason": {},
+      "id": "deploy-unknown-to-server",
+      "stages": [
+        "addresses"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "deploys": "Authentication failed."
+      },
+      "headline_reason": {},
+      "id": "fresh-login-refused",
+      "stages": [
+        "deploys"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "this run": "Something went wrong inside curious."
+      },
+      "headline_reason": {},
+      "id": "internal-fault",
+      "stages": [
+        "this run"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "limit-file-size",
+      "headline": {
+        "pre-flight": null
+      },
+      "headline_reason": {
+        "pre-flight": "composed"
+      },
+      "id": "limit-file-size",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "limit-files",
+      "headline": {
+        "pre-flight": null
+      },
+      "headline_reason": {
+        "pre-flight": "composed"
+      },
+      "id": "limit-files",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "limit-packed",
+      "headline": {
+        "pre-flight": null
+      },
+      "headline_reason": {
+        "pre-flight": "composed"
+      },
+      "id": "limit-packed",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "limit-total",
+      "headline": {
+        "pre-flight": null
+      },
+      "headline_reason": {
+        "pre-flight": "composed"
+      },
+      "id": "limit-total",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "lockfile-missing",
+      "headline": {
+        "pre-flight": "No lockfile found."
+      },
+      "headline_reason": {},
+      "id": "lockfile-missing",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "lockfile-unsupported",
+      "headline": {
+        "pre-flight": "No lockfile curious can install from."
+      },
+      "headline_reason": {},
+      "id": "lockfile-unsupported",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "lockfile-workspace",
+      "headline": {
+        "pre-flight": "This looks like a package inside a workspace."
+      },
+      "headline_reason": {},
+      "id": "lockfile-workspace",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "logins": "That server does not answer the login endpoint."
+      },
+      "headline_reason": {},
+      "id": "login-endpoint-missing",
+      "stages": [
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "logins": "Logged in, but the login could not be saved."
+      },
+      "headline_reason": {},
+      "id": "login-not-saved",
+      "stages": [
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "logins": "That login was refused."
+      },
+      "headline_reason": {},
+      "id": "login-refused",
+      "stages": [
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "questions": "curious needs a terminal for that."
+      },
+      "headline_reason": {},
+      "id": "needs-a-terminal",
+      "stages": [
+        "questions"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": "path-charset",
+      "headline": {
+        "pre-flight": null
+      },
+      "headline_reason": {
+        "pre-flight": "composed"
+      },
+      "id": "path-charset",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": null
+      },
+      "headline_reason": {
+        "this machine": "composed"
+      },
+      "id": "project-dir-missing",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": "curious couldn't work out which directory you mean."
+      },
+      "headline_reason": {},
+      "id": "project-dir-unknown",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": null
+      },
+      "headline_reason": {
+        "this machine": "composed"
+      },
+      "id": "project-dir-unreadable",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "pre-flight": "curious can't deploy this project yet."
+      },
+      "headline_reason": {},
+      "id": "project-not-ready",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": null
+      },
+      "headline_reason": {
+        "this machine": "composed"
+      },
+      "id": "project-path-not-a-directory",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": "curious couldn't read the whole project."
+      },
+      "headline_reason": {},
+      "id": "project-unreadable",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "building": "The build could not be confirmed in time."
+      },
+      "headline_reason": {},
+      "id": "publish-not-confirmed",
+      "stages": [
+        "building"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "The server gave this deploy an address that cannot be one."
+      },
+      "headline_reason": {},
+      "id": "published-address-invalid",
+      "stages": [
+        "addresses"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "The server is asking for a pause.",
+        "deploys": "Too many requests from here.",
+        "logins": "Too many requests from here."
+      },
+      "headline_reason": {},
+      "id": "rate-limited",
+      "stages": [
+        "addresses",
+        "deploys",
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "The server wouldn't give this deploy an address.",
+        "build log": "The server wouldn't send the build log.",
+        "building": "The server wouldn't start the build.",
+        "deploys": "curious couldn't start the deploy.",
+        "logins": "curious couldn't finish logging you in."
+      },
+      "headline_reason": {},
+      "id": "server-answer-unrecognised",
+      "stages": [
+        "addresses",
+        "build log",
+        "building",
+        "deploys",
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "curious didn't hear back after asking for the deploy's address.",
+        "building": "curious didn't hear back after asking the server to build.",
+        "deploys": "curious didn't hear back after asking for somewhere to upload."
+      },
+      "headline_reason": {},
+      "id": "server-unanswered",
+      "stages": [
+        "addresses",
+        "building",
+        "deploys"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "curious.pub isn't giving out addresses right now.",
+        "build log": "curious.pub stopped sending the build log.",
+        "building": "curious.pub is not building right now.",
+        "deploys": "curious.pub is not taking deploys right now.",
+        "logins": "curious.pub is not taking logins right now.",
+        "this request": "curious.pub isn't taking this right now."
+      },
+      "headline_reason": {},
+      "id": "service-unavailable",
+      "stages": [
+        "addresses",
+        "build log",
+        "building",
+        "deploys",
+        "logins",
+        "this request"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "this machine": "curious couldn't make a place to write the archive."
+      },
+      "headline_reason": {},
+      "id": "temp-dir-unusable",
+      "stages": [
+        "this machine"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-address-unusable",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-answer-unrecognised",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-connection-lost",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-host-unreachable",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-link-expired",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-redirected",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-refused-unexplained",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-signature-mismatch",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "uploads": null
+      },
+      "headline_reason": {
+        "uploads": "composed"
+      },
+      "id": "upload-stalled",
+      "stages": [
+        "uploads"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "waitlist": "Nothing has been deployed."
+      },
+      "headline_reason": {},
+      "id": "waitlist-declined",
+      "stages": [
+        "waitlist"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "waitlist": "Nothing has been deployed."
+      },
+      "headline_reason": {},
+      "id": "waitlist-needs-terminal",
+      "stages": [
+        "waitlist"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "waitlist": "That didn't get you onto the list."
+      },
+      "headline_reason": {},
+      "id": "waitlist-signup-failed",
+      "stages": [
+        "waitlist"
+      ]
+    }
+  ]
+}
