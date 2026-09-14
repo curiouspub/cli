@@ -1247,3 +1247,99 @@ func TestAPinIsRecordedOnTheWriteSideAndNowhereElse(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryCeilingIsRegisteredAndProvisionalUntilItIsMeasured holds the
+// ratio ceilings to the standard the stall windows keep, with the one
+// difference the type records: a Ceiling has nowhere to keep hosted
+// readings yet, so it cannot be anything but provisional.
+//
+// Mutations, run through a harness 2026-09-14: marking TokeniserCost not
+// provisional, taking it out of the Ceilings map, and setting its re-rule
+// count to zero each red this row by name.
+func TestEveryCeilingIsRegisteredAndProvisionalUntilItIsMeasured(t *testing.T) {
+	dir := filepath.Join(moduleRoot(t), "internal", "timing")
+	names, err := declaredOfType(dir, "Ceiling")
+	if err != nil {
+		t.Fatalf("reading the registry's own source: %v", err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no Ceiling is declared in this package's source at all, so this row " +
+			"is comparing two empty things")
+	}
+	for _, name := range names {
+		c, ok := timing.Ceilings[name]
+		if !ok {
+			t.Errorf("timing.%s is declared and is not in the Ceilings map, so nothing "+
+				"this package enforces reaches it", name)
+			continue
+		}
+		if c.Name != name {
+			t.Errorf("the ceiling declared as %s calls itself %q; the identifier, the map "+
+				"key and the Name field are one name", name, c.Name)
+		}
+		if c.Row == "" || c.Governs == "" || c.Value <= 0 {
+			t.Errorf("timing.%s must name its row, what it governs and a positive value: "+
+				"row %q, governs %q, value %v", name, c.Row, c.Governs, c.Value)
+		}
+		if !c.Provisional {
+			t.Errorf("timing.%s is not marked provisional, and a Ceiling has nowhere to "+
+				"record the hosted readings that would make it anything else.\nRe-ruling a "+
+				"ceiling adds its readings; until that change exists, a ceiling that says it "+
+				"is measured is claiming a measurement nobody can see.", name)
+			continue
+		}
+		if c.ReRuleAfter <= 0 {
+			t.Errorf("timing.%s is provisional and names no count of hosted readings per "+
+				"leg that re-rules it, so nothing says when it stops being provisional", name)
+		}
+		if strings.TrimSpace(c.Why) == "" {
+			t.Errorf("timing.%s is provisional and does not say what its value was sized "+
+				"from", name)
+		}
+	}
+	if len(names) != len(timing.Ceilings) {
+		t.Errorf("%d ceilings are declared and %d are registered", len(names), len(timing.Ceilings))
+	}
+}
+
+// declaredOfType is every package-level variable in dir whose value is a
+// composite literal of the named type. declaredEntries above is the same
+// walk for one type; what is duplicated is a walk, not a fact.
+func declaredOfType(dir, typeName string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+					continue
+				}
+				lit, ok := value.Values[0].(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				if ident, ok := lit.Type.(*ast.Ident); ok && ident.Name == typeName {
+					names = append(names, value.Names[0].Name)
+				}
+			}
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}

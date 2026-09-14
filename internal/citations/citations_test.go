@@ -2,12 +2,14 @@ package citations_test
 
 import (
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/curiouspub/cli/internal/citations"
+	"github.com/curiouspub/cli/internal/timing"
 )
 
 // TestSplitSubwordsSplitsTheWayAnIdentifierIsBuilt is the first test this
@@ -198,12 +200,22 @@ func TestEveryTokenFitsTheBound(t *testing.T) {
 // about twenty minutes of processor time. Bounded, the same step measures
 // between 4.0 and 4.2 across ten trials, and 64 KiB takes 25 ms.
 //
-// THE CEILING IS SIZED OFF BOTH NUMBERS rather than off one of them.
-// Sixteen sits a factor of 3.8 above the worst ratio measured with the
-// bound in place and a factor of 3.5 below the ratio measured without it,
-// so an ordinary bad minute on a shared runner cannot reach it and the
-// defect cannot hide under it. Sizing a window against only the value it
-// must not exceed leaves it unknown whether the row can still fail.
+// THE CEILING IS timing.TokeniserCost, AND IT IS PROVISIONAL. This comment
+// used to say that sixteen sat far enough above the worst bounded ratio
+// that "an ordinary bad minute on a shared runner cannot reach it". That
+// was a claim made from no measurement: every number behind it came from
+// one machine. The row's first red in 150 CI runs arrived on 2026-09-14,
+// on a hosted Windows runner, on a pull request that did not touch this
+// package — 16.9 against 16, over a smaller input that cost 507 µs there,
+// short enough for one scheduler stall to be most of the ratio.
+//
+// SO THE INPUTS ARE SIZED IN MILLISECONDS AND THE RATIO IS LOGGED ON EVERY
+// RUN. 32 KiB and 128 KiB cost about 12 ms and 52 ms on the machine this
+// was changed on, and 77 ms and 359 ms under the race detector. The gate
+// runs this package with -v in both conditions, so every hosted run
+// publishes its reading, and the ceiling is re-ruled from the first 20 per
+// leg. Until then its value is a number nobody has measured where it is
+// enforced.
 //
 // The two sizes are measured INTERLEAVED and each is the best of several
 // runs: a slow window on a shared machine then lands on both, where it
@@ -211,11 +223,11 @@ func TestEveryTokenFitsTheBound(t *testing.T) {
 // growth.
 func TestTheCostOfTokenisingIsBoundedByTheBound(t *testing.T) {
 	const (
-		small   = 4 << 10
-		large   = 16 << 10
-		rounds  = 7
-		ceiling = 16.0
+		small  = 32 << 10
+		large  = 128 << 10
+		rounds = 7
 	)
+	ceiling := timing.TokeniserCost.Value
 	// A line of alternating case, which is the worst input this
 	// tokeniser has: every two bytes are a subword, so the number of
 	// joins is as large as the length allows.
@@ -245,7 +257,24 @@ func TestTheCostOfTokenisingIsBoundedByTheBound(t *testing.T) {
 	if smallCost <= 0 {
 		t.Fatalf("the smaller input measured %v, so the ratio below divides by noise", smallCost)
 	}
-	if ratio := float64(largeCost) / float64(smallCost); ratio > ceiling {
+	ratio := float64(largeCost) / float64(smallCost)
+
+	// EVERY RUN PUBLISHES ITS READING, pass or fail, because the ceiling is
+	// re-ruled from hosted readings and a reading printed only on a red is
+	// a distribution made of failures.
+	condition := "plain"
+	if raceDetector {
+		condition = "-race"
+	}
+	state := "measured"
+	if timing.TokeniserCost.Provisional {
+		state = "PROVISIONAL, UNMEASURED"
+	}
+	t.Logf("%s on %s (%s): a four-fold input took %.2f times as long (%v against %v); "+
+		"ceiling %.0f, %s", timing.TokeniserCost.Name, runtime.GOOS, condition, ratio,
+		largeCost, smallCost, ceiling, state)
+
+	if ratio > ceiling {
 		t.Errorf("a four-fold input took %.1f times as long (%v against %v), and the ceiling "+
 			"is %.0f.\nWithout a bound on the join this grows as the cube of the input, and the "+
 			"input is a stranger's pull request. Nothing runs out of memory — the map "+

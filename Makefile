@@ -78,8 +78,15 @@ test:
 # with -v so each pass publishes its numbers. Left in here as well they
 # would run three times, and the third run would be the one whose
 # figures nobody can read.
+#
+# internal/citations JOINED THEM on 2026-09-14. Its tokeniser-cost row
+# measures a ratio against a provisional ceiling, and the ceiling is to
+# be re-ruled from hosted readings that could not exist while the row
+# ran here without -v. The package has no skips; if it grows one, the
+# skip check on this line does not see it, and that is the price of the
+# package publishing its number.
 test-go:
-	go run ./tools/skipcheck -- -count=1 -timeout 25m $$(go list ./... | grep -vE '/internal/(flow|timing)$$')
+	go run ./tools/skipcheck -- -count=1 -timeout 25m $$(go list ./... | grep -vE '/internal/(flow|timing|citations)$$')
 
 # THE RACE PASS OVER THE STALL-WINDOW MACHINERY, and it is reached from
 # test so that CI gets it without a second entry point: the workflow runs
@@ -121,7 +128,7 @@ test-go:
 # measurement at all, which is the worst of both — the money spent and no
 # number back. The package takes about two minutes there without the
 # detector and something over five times that with it.
-# -v BECAUSE THESE TWO PACKAGES MEASURE THINGS. Five of these rows are
+# -v BECAUSE THESE PACKAGES MEASURE THINGS. Five of these rows are
 # probes whose whole product is a number, and t.Logf output is invisible
 # without it — so a green run published nothing and the only way to read
 # a leg's measurement was to make its test FAIL. That is backwards: the
@@ -134,8 +141,10 @@ test-go:
 # tools/leakscan joins the raced pass because its tree walk has a worker
 # pool. Its ordinary suite asserts that no job or error is dropped; the
 # detector asserts the other half, that workers share no mutable map.
-# Only the two timing packages are verbose because their measurements,
-# rather than merely their verdicts, are part of the gate's output.
+# Only the measuring packages are verbose, the two timing packages and
+# internal/citations, whose tokeniser-cost row publishes a ratio: their
+# measurements, rather than merely their verdicts, are part of the gate's
+# output.
 # BOTH CONDITIONS ARE RUN HERE, and both print. The rule these packages
 # keep is that a leg's number is the WORSE of the two conditions the
 # gate runs it in — and for as long as only the raced pass carried -v,
@@ -144,8 +153,8 @@ test-go:
 # both of them on the log.
 test-race:
 	CGO_ENABLED=1 go test -race -count=1 -timeout 25m ./tools/leakscan/
-	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
-	go test -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/
+	CGO_ENABLED=1 go test -race -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/ ./internal/citations/
+	go test -count=1 -timeout 25m -v ./internal/timing/ ./internal/flow/ ./internal/citations/
 
 # The wrapper package's own suite. It is a PREREQUISITE OF test rather
 # than a separate command somebody has to know about, because a check
