@@ -92,6 +92,7 @@ type obligation struct {
 	values  []string // resolved possibilities; empty means unresolved
 	problem string   // a structurally forbidden write or address-taking
 	binding string   // reaching definitions for an obligation-ledger expression
+	family  string   // the check family a finding producer's What belongs to
 	source  parsedFile
 	within  *ast.FuncDecl
 	before  token.Pos
@@ -103,6 +104,7 @@ type summary struct {
 	fn    string
 	idArg int
 	stage int
+	what  int
 	act   int
 	txt   int
 }
@@ -189,6 +191,27 @@ func TestTheFailureContractHolds(t *testing.T) {
 		}
 	}
 
+	// --- 1b. VERIFY THE FINDING HELPERS' SUMMARIES -------------------
+	//
+	// A pre-flight family's sentence is written where its finding is built,
+	// and two helpers build most of them. Their summaries are read from the
+	// bodies like every other summary: which parameter becomes the finding's
+	// family, and which becomes its What. A helper whose body stops wiring
+	// either loses its summary, and every call to it stops being readable.
+	findingSummaries := verifyFindingSummaries(files)
+	for _, want := range []string{"hardStop", "hardStopAbout"} {
+		found := false
+		for key := range findingSummaries {
+			found = found || strings.HasSuffix(key, "/internal/preflight."+want)
+		}
+		if !found {
+			t.Errorf("no VERIFIED finding summary for preflight.%s. Either its body stopped "+
+				"wiring its family and What parameters into the finding it builds, or this "+
+				"checker no longer understands the shape it uses — and both mean the sentence "+
+				"every call writes can no longer be read where it is written", want)
+		}
+	}
+
 	// --- 2. COLLECT OBLIGATIONS ---------------------------------------
 	var obs []obligation
 	sitesVisited := 0
@@ -246,7 +269,9 @@ func TestTheFailureContractHolds(t *testing.T) {
 					obs = append(obs,
 						resolveIn(site, "ID", field("ID"), text, p, "id", in, 0),
 						resolveIn(site, "Next", field("Next"), text, p, "action", in, 0),
-						resolveIn(site, "NextText", field("NextText"), text, p, "text", in, 0))
+						resolveIn(site, "NextText", field("NextText"), text, p, "text", in, 0),
+						resolveStage(site, field("Stage"), text, p, in),
+						resolveWhat(site, "What", field("What"), text, p, in, 0))
 				}
 				for range embeddedZeros {
 					sitesVisited++
@@ -312,13 +337,86 @@ func TestTheFailureContractHolds(t *testing.T) {
 			}
 			sitesVisited++
 			in := enclosingDecl(p.file, call.Pos())
+			// WHAT IS READ WHERE IT IS WRITTEN. A helper that forwards its
+			// What parameter is read at the caller; one that composes the
+			// sentence in its own body makes it composed for every caller.
+			what := obligation{where: site, field: "What", source: p, within: in,
+				expr: "What composed inside " + s.fn, values: []string{"composed:helper"}}
+			if s.what >= 0 {
+				what = resolveWhat(site, "What", at(s.what), text, p, in, 0)
+			}
 			obs = append(obs,
 				resolveIn(site, "ID", at(s.idArg), text, p, "id", in, 0),
 				resolveIn(site, "Next", at(s.act), text, p, "action", in, 0),
-				resolveIn(site, "NextText", at(s.txt), text, p, "text", in, 0))
+				resolveIn(site, "NextText", at(s.txt), text, p, "text", in, 0),
+				resolveStage(site, at(s.stage), text, p, in),
+				what)
 			return true
 		})
 	}
+	// --- 2b. WHERE EACH CHECK FAMILY'S WHAT IS WRITTEN -----------------
+	//
+	// A family becomes a ui.Failure at one generic site that holds its What
+	// in a variable, so the sentence a person reads is not visible there. It
+	// is written where the finding is built — a check.Finding literal, or an
+	// argument to a summarised helper — and it is read there.
+	for _, p := range files {
+		rel := displayPath(root, p.path)
+		ast.Inspect(p.file, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.CallExpr:
+				in := enclosingDecl(p.file, v.Pos())
+				fs, known := findingSummaries[targetFuncKey(p, calledFuncKey(v.Fun, in, p.info))]
+				if !known {
+					return true
+				}
+				if _, inHelper := findingSummaries[targetFuncKey(p, enclosingFuncKey(p, v.Pos()))]; inHelper {
+					return true
+				}
+				site := rel + ":" + itoa(fset.Position(v.Pos()).Line)
+				var familyExpr, whatExpr ast.Expr
+				if fs.family < len(v.Args) {
+					familyExpr = v.Args[fs.family]
+				}
+				if fs.what < len(v.Args) {
+					whatExpr = v.Args[fs.what]
+				}
+				obs = append(obs, familyWhat(familyExpr,
+					resolveWhat(site, "FamilyWhat", whatExpr, text, p, in, 0), p))
+			case *ast.CompositeLit:
+				if !isFindingType(p.info.TypeOf(v)) {
+					return true
+				}
+				if _, inHelper := findingSummaries[targetFuncKey(p, enclosingFuncKey(p, v.Pos()))]; inHelper {
+					return true
+				}
+				field := func(name string) ast.Expr {
+					for _, elt := range v.Elts {
+						if kv, ok := elt.(*ast.KeyValueExpr); ok && calleeName(kv.Key) == name {
+							return kv.Value
+						}
+					}
+					return nil
+				}
+				familyExpr := field("FailureID")
+				if familyExpr == nil {
+					return true // a warning or a note, which never becomes a failure
+				}
+				site := rel + ":" + itoa(fset.Position(v.Pos()).Line)
+				in := enclosingDecl(p.file, v.Pos())
+				what := obligation{where: site, field: "FamilyWhat", source: p, within: in}
+				if e := field("What"); e != nil {
+					what = resolveWhat(site, "FamilyWhat", e, text, p, in, 0)
+				} else if field("Message") != nil {
+					what.expr = "no What, so the failure falls back to the finding's Message"
+					what.values = []string{"composed:message"}
+				}
+				obs = append(obs, familyWhat(familyExpr, what, p))
+			}
+			return true
+		})
+	}
+
 	if len(obs) == 0 {
 		t.Fatal("no obligation was discovered, so this guard asserted nothing")
 	}
@@ -341,6 +439,13 @@ func TestTheFailureContractHolds(t *testing.T) {
 				if !validActions[v] {
 					invalid = append(invalid,
 						o.where+" Next = "+v+", which is not one of the four")
+				}
+			}
+		case o.field == "Stage":
+			for _, v := range o.values {
+				if !declaredStage(v) {
+					invalid = append(invalid, o.where+" Stage = "+v+
+						", which is not a declared ui.Stage")
 				}
 			}
 		case o.field == "ID":
@@ -433,7 +538,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 			if !isFailureExpr(p.info, node) {
 				return true
 			}
-			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, act: -1, txt: -1}
+			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, what: -1, act: -1, txt: -1}
 			for _, elt := range node.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
@@ -452,6 +557,8 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 					s.idArg = i
 				case "Stage":
 					s.stage = i
+				case "What":
+					s.what = i
 				case "Next":
 					s.act = i
 				case "NextText":
@@ -467,7 +574,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				c != modulePath+"/internal/ui.Quoted" {
 				return true
 			}
-			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, act: -1, txt: -1}
+			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, what: -1, act: -1, txt: -1}
 			for i, arg := range node.Args {
 				id, ok := arg.(*ast.Ident)
 				if !ok {
@@ -483,6 +590,8 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 					s.idArg = j
 				case 1:
 					s.stage = j
+				case 2:
+					s.what = j
 				case 4:
 					s.act = j
 				case 5:
@@ -511,7 +620,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 		return summary{}, false
 	}
 	for _, got := range candidates[1:] {
-		if got.idArg != want.idArg || got.stage != want.stage || got.act != want.act || got.txt != want.txt {
+		if got.idArg != want.idArg || got.stage != want.stage || got.what != want.what || got.act != want.act || got.txt != want.txt {
 			return summary{}, false
 		}
 	}
@@ -1718,4 +1827,260 @@ func collectedSiteCount(t *testing.T) int {
 			"compare against nothing")
 	}
 	return got
+}
+
+// resolveStage reads the stage a construction declares.
+//
+// ONLY A DECLARED CONSTANT COUNTS. A stage is something the site says in
+// the vocabulary internal/ui publishes, so a conversion of a literal, a
+// variable or a string that happens to spell a stage's value is not one:
+// it resolves to nothing and fails like any other unreadable obligation.
+func resolveStage(site string, e ast.Expr, text func(parsedFile, ast.Node) string,
+	p parsedFile, within *ast.FuncDecl) obligation {
+	o := obligation{where: site, field: "Stage", source: p, within: within}
+	if e == nil || p.info == nil {
+		return o
+	}
+	o.before = e.Pos()
+	o.expr = text(p, e)
+	var obj types.Object
+	switch v := unparen(e).(type) {
+	case *ast.Ident:
+		obj = p.info.Uses[v]
+	case *ast.SelectorExpr:
+		obj = p.info.Uses[v.Sel]
+	}
+	c, ok := obj.(*types.Const)
+	if ok && c.Val().Kind() == constant.String &&
+		namedTypeKey(c.Type()) == modulePath+"/internal/ui.Stage" {
+		o.values = []string{constant.StringVal(c.Val())}
+	}
+	return o
+}
+
+func declaredStage(value string) bool {
+	for _, stage := range ui.Stages {
+		if string(stage) == value {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveWhat reads a failure's What the way the catalog quotes it.
+//
+// A single literal or named constant is quoted verbatim; fmt.Sprintf with a
+// constant format is quoted as its format, verbs kept. Anything assembled at
+// run time — a concatenation, a variable, a builder's result — is COMPOSED,
+// and the catalog quotes no part of it. A form this reads as none of those
+// resolves to nothing and fails closed, like every other obligation.
+func resolveWhat(site, field string, e ast.Expr, text func(parsedFile, ast.Node) string,
+	p parsedFile, within *ast.FuncDecl, depth int) obligation {
+	o := obligation{where: site, field: field, source: p, within: within}
+	if e == nil || depth > 4 || p.info == nil {
+		return o
+	}
+	o.before = e.Pos()
+	o.expr = text(p, e)
+	if value, ok := typedStringConstant(p.info, e); ok {
+		o.values = []string{"literal:" + value}
+		return o
+	}
+	switch v := unparen(e).(type) {
+	case *ast.CallExpr:
+		if calledFuncKey(v.Fun, within, p.info) == "fmt.Sprintf" && len(v.Args) > 0 {
+			if format, ok := typedStringConstant(p.info, v.Args[0]); ok {
+				o.values = []string{"format:" + format}
+				return o
+			}
+		}
+		o.values = []string{"composed:call"}
+	case *ast.BinaryExpr:
+		o.values = []string{"composed:concatenation"}
+	case *ast.Ident:
+		if within != nil {
+			if def, ok := soleDefinitionAt(v.Name, within, v.Pos()); ok {
+				return resolveWhat(site, field, def, text, p, within, depth+1)
+			}
+		}
+		o.values = []string{"composed:variable"}
+	case *ast.SelectorExpr:
+		o.values = []string{"composed:variable"}
+	}
+	return o
+}
+
+// familyWhat attaches the check family a producer's What belongs to, and
+// refuses a family written as anything but a check.FailureFamily constant.
+func familyWhat(familyExpr ast.Expr, what obligation, p parsedFile) obligation {
+	if family, ok := familyConstant(p.info, familyExpr); ok {
+		what.family = family
+		return what
+	}
+	what.problem = "a finding's family that is not a check.FailureFamily constant"
+	return what
+}
+
+func familyConstant(info *types.Info, e ast.Expr) (string, bool) {
+	if info == nil || e == nil {
+		return "", false
+	}
+	e = unparen(e)
+	if call, ok := e.(*ast.CallExpr); ok && len(call.Args) == 1 && info.Types[call.Fun].IsType() {
+		e = unparen(call.Args[0])
+	}
+	var obj types.Object
+	switch v := e.(type) {
+	case *ast.Ident:
+		obj = info.Uses[v]
+	case *ast.SelectorExpr:
+		obj = info.Uses[v.Sel]
+	}
+	c, ok := obj.(*types.Const)
+	if !ok || c.Val().Kind() != constant.String ||
+		namedTypeKey(c.Type()) != modulePath+"/internal/check.FailureFamily" {
+		return "", false
+	}
+	return constant.StringVal(c.Val()), true
+}
+
+func isFindingType(typ types.Type) bool {
+	if typ == nil {
+		return false
+	}
+	if ptr, ok := types.Unalias(typ).(*types.Pointer); ok {
+		typ = ptr.Elem()
+	}
+	return namedTypeKey(typ) == modulePath+"/internal/check.Finding"
+}
+
+// findingSummary is one verified finding-helper relationship: the
+// parameter that becomes the finding's family, and the one that becomes
+// its What.
+type findingSummary struct {
+	fn     string
+	family int
+	what   int
+}
+
+// verifyFindingSummaries reads which helpers build a check.Finding from
+// their own parameters, in two passes: a body that builds the finding
+// itself, then a body that forwards its parameters to one of those.
+// Nothing is declared; a helper that mutates a parameter, or builds
+// findings that disagree about which parameter goes where, is not
+// summarised.
+func verifyFindingSummaries(files []parsedFile) map[string]findingSummary {
+	out := map[string]findingSummary{}
+	eachDecl := func(visit func(p parsedFile, fd *ast.FuncDecl)) {
+		for _, p := range files {
+			for _, d := range p.file.Decls {
+				if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil && p.info != nil {
+					visit(p, fd)
+				}
+			}
+		}
+	}
+	mutates := func(n ast.Node, params map[string]int) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return false
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok {
+				if _, isParam := params[id.Name]; isParam {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	agree := func(cands []findingSummary, mutated bool) (findingSummary, bool) {
+		if mutated || len(cands) == 0 {
+			return findingSummary{}, false
+		}
+		want := cands[0]
+		if want.family < 0 || want.what < 0 {
+			return findingSummary{}, false
+		}
+		for _, got := range cands[1:] {
+			if got.family != want.family || got.what != want.what {
+				return findingSummary{}, false
+			}
+		}
+		return want, true
+	}
+	paramAt := func(e ast.Expr, params map[string]int) int {
+		if id, ok := unparen(e).(*ast.Ident); ok {
+			if i, isParam := params[id.Name]; isParam {
+				return i
+			}
+		}
+		return -1
+	}
+	eachDecl(func(p parsedFile, fd *ast.FuncDecl) {
+		params := paramNames(fd)
+		var cands []findingSummary
+		mutated := false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			mutated = mutated || mutates(n, params)
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok || !isFindingType(p.info.TypeOf(lit)) {
+				return true
+			}
+			s := findingSummary{fn: fd.Name.Name, family: -1, what: -1}
+			for _, elt := range lit.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				switch calleeName(kv.Key) {
+				case "FailureID":
+					if call, ok := unparen(kv.Value).(*ast.CallExpr); ok && len(call.Args) == 1 &&
+						p.info.Types[call.Fun].IsType() {
+						s.family = paramAt(call.Args[0], params)
+					}
+				case "What":
+					s.what = paramAt(kv.Value, params)
+				}
+			}
+			cands = append(cands, s)
+			return true
+		})
+		if s, ok := agree(cands, mutated); ok {
+			out[targetFuncKey(p, declaredFuncKey(fd, p.info))] = s
+		}
+	})
+	eachDecl(func(p parsedFile, fd *ast.FuncDecl) {
+		key := targetFuncKey(p, declaredFuncKey(fd, p.info))
+		if _, done := out[key]; done {
+			return
+		}
+		params := paramNames(fd)
+		var cands []findingSummary
+		mutated := false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			mutated = mutated || mutates(n, params)
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			callee, known := out[targetFuncKey(p, calledFuncKey(call.Fun, fd, p.info))]
+			if !known {
+				return true
+			}
+			s := findingSummary{fn: fd.Name.Name, family: -1, what: -1}
+			if callee.family < len(call.Args) {
+				s.family = paramAt(call.Args[callee.family], params)
+			}
+			if callee.what < len(call.Args) {
+				s.what = paramAt(call.Args[callee.what], params)
+			}
+			cands = append(cands, s)
+			return true
+		})
+		if s, ok := agree(cands, mutated); ok {
+			out[key] = s
+		}
+	})
+	return out
 }
