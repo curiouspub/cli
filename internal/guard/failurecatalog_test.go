@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ import (
 // publicCatalog is the published artefact: a note saying what its fields
 // mean, and one entry per failure id.
 type publicCatalog struct {
-	Note     string               `json:"note"`
+	Note     []string             `json:"note"`
 	Failures []publicCatalogEntry `json:"failures"`
 }
 
@@ -33,12 +34,81 @@ type publicCatalogEntry struct {
 	Stages         []string           `json:"stages"`
 }
 
-// publicCatalogNote travels in the file because the meaning of stages
-// changed, and a consumer reading the file is the one who needs to know.
+// publicCatalogNote opens the published note. It travels in the file because
+// the meaning of stages changed, and a consumer reading the file is the one
+// who needs to know. The lines after it are generated from each stage's
+// documented sentence, by catalogNote.
 const publicCatalogNote = "stages are the stages each failure's construction sites DECLARE: " +
 	"what a person was doing when the failure met them, never the package or file that raised " +
 	"it. headline maps each of those stages to the failure's What exactly as written in code, " +
-	"Go verbs kept. A null headline is a What composed at run time, and headline_reason says so."
+	"Go verbs kept. A null headline is a What composed at run time, and headline_reason says so. " +
+	"Each line after this one names a stage and what a person is doing when a failure carries it."
+
+// catalogNote is the published note: the opening line, then one line per
+// declared stage, in declared order, carrying the one sentence that stage's
+// constant is documented with in internal/ui.
+func catalogNote(t *testing.T, root string) []string {
+	t.Helper()
+	sentences := stageSentences(t, root)
+	note := []string{publicCatalogNote}
+	for _, stage := range ui.Stages {
+		sentence := sentences[string(stage)]
+		if sentence == "" {
+			t.Errorf("stage %q has no documented sentence, so the catalog note cannot say what it means", stage)
+		}
+		note = append(note, stageNoteLine(string(stage), sentence))
+	}
+	return note
+}
+
+// stageNoteLine is how the note carries one stage.
+func stageNoteLine(stage, sentence string) string { return stage + ": " + sentence }
+
+// stageSentences reads, from internal/ui's own source, the sentence each
+// Stage constant is documented with, keyed by the stage's value. The doc
+// comment is the one home: the note is generated from it, not copied.
+func stageSentences(t *testing.T, root string) map[string]string {
+	t.Helper()
+	dir := filepath.Join(root, "internal", "ui")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	fset := token.NewFileSet()
+	out := map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", e.Name(), err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Values) != 1 {
+					continue
+				}
+				typ, ok := vs.Type.(*ast.Ident)
+				lit, isLit := vs.Values[0].(*ast.BasicLit)
+				if !ok || typ.Name != "Stage" || !isLit || lit.Kind != token.STRING {
+					continue
+				}
+				value, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("stage constant %s does not decode: %v", vs.Names[0].Name, err)
+				}
+				out[value] = strings.Join(strings.Fields(vs.Doc.Text()), " ")
+			}
+		}
+	}
+	return out
+}
 
 // TestCatalogJSONMatchesRegeneration is both the drift row and the target of
 // failureid.go's go:generate directive. The directive sets
@@ -142,7 +212,7 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 			ID: id, Stages: mapKeys(census.stages[id]),
 		})
 	}
-	out, err := json.MarshalIndent(publicCatalog{Note: publicCatalogNote, Failures: entries}, "", "  ")
+	out, err := json.MarshalIndent(publicCatalog{Note: catalogNote(t, root), Failures: entries}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}

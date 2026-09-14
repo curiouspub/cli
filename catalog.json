@@ -1,5 +1,19 @@
 {
-  "note": "stages are the stages each failure's construction sites DECLARE: what a person was doing when the failure met them, never the package or file that raised it. headline maps each of those stages to the failure's What exactly as written in code, Go verbs kept. A null headline is a What composed at run time, and headline_reason says so.",
+  "note": [
+    "stages are the stages each failure's construction sites DECLARE: what a person was doing when the failure met them, never the package or file that raised it. headline maps each of those stages to the failure's What exactly as written in code, Go verbs kept. A null headline is a What composed at run time, and headline_reason says so. Each line after this one names a stage and what a person is doing when a failure carries it.",
+    "deploys: A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.",
+    "logins: A person is logging in, or curious is saving the login they just completed.",
+    "building: A person is waiting while the server builds the project and decides whether to take the result.",
+    "addresses: A person is waiting for a finished deploy to be given its public address.",
+    "this request: A person asked curious.pub for something and the server closed the door without saying which step it was.",
+    "build log: A person is watching the build log stream in while the build runs.",
+    "uploads: A person is waiting while curious sends the packed project to the upload address.",
+    "this machine: A person is getting this machine ready before anything is sent: the project directory, where the login is kept, the API address or the temporary directory.",
+    "pre-flight: A person is having the project checked before anything leaves the machine.",
+    "waitlist: A person found today's capacity used up and is being offered the waitlist.",
+    "questions: A person is being asked a question that curious cannot put to them or cannot read the answer to.",
+    "this run: A person could be anywhere in a run, and the fault is in curious itself."
+  ],
   "failures": [
     {
       "action": [

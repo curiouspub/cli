@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/ui"
 )
 
 // THE HEADLINE ROWS. A headline is filed under (id, Stage): the id names
@@ -445,4 +447,68 @@ func composedDisagreements(builders map[string]map[string]map[string]map[string]
 		}
 	}
 	return out
+}
+
+// TestEveryStageIsOneSentenceAndTheCatalogNoteCarriesThemAll keeps the key
+// readable by someone who never opens the code.
+//
+// A stage value is a word; what a person is doing when a failure carries it
+// is a sentence, and that sentence lives on the constant. The catalog note is
+// generated from those sentences, so the row checks both ends: every declared
+// stage has exactly one, and the published note carries every one of them.
+func TestEveryStageIsOneSentenceAndTheCatalogNoteCarriesThemAll(t *testing.T) {
+	root := moduleRoot(t)
+	sentences := stageSentences(t, root)
+	declared := map[string]bool{}
+	for _, stage := range ui.Stages {
+		declared[string(stage)] = true
+	}
+	for value := range sentences {
+		if !declared[value] {
+			t.Errorf("stage constant %q is declared in internal/ui and missing from ui.Stages, so no row "+
+				"or catalog reads it", value)
+		}
+	}
+	for _, stage := range ui.Stages {
+		sentence, found := sentences[string(stage)]
+		switch {
+		case !found:
+			t.Errorf("stage %q is in ui.Stages and no Stage constant declares it", stage)
+		case sentence == "":
+			t.Errorf("stage %q has no documented sentence.\nA stage is published as a word; what a person is "+
+				"doing when a failure carries it is the sentence on its constant, and the catalog note is "+
+				"generated from it.", stage)
+		case !oneSentence(sentence):
+			t.Errorf("stage %q is documented as %q, which is not one sentence", stage, sentence)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "catalog.json"))
+	if err != nil {
+		t.Fatalf("reading catalog.json: %v", err)
+	}
+	var catalog publicCatalog
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatalf("catalog.json does not decode as the published shape: %v", err)
+	}
+	carried := map[string]bool{}
+	for _, line := range catalog.Note {
+		carried[line] = true
+	}
+	for _, stage := range ui.Stages {
+		if want := stageNoteLine(string(stage), sentences[string(stage)]); !carried[want] {
+			t.Errorf("catalog.json's note does not carry %q.\nThe note is how someone who never opens the "+
+				"code learns what a stage means; regenerate it with go generate ./internal/ui.", want)
+		}
+	}
+	if !t.Failed() {
+		t.Logf("%d stages, each documented in one sentence, all %d carried by the catalog note",
+			len(ui.Stages), len(ui.Stages))
+	}
+}
+
+// oneSentence is the bar a stage's documentation has to clear: something is
+// there, it ends in a full stop, and no full stop before that ends a sentence.
+func oneSentence(s string) bool {
+	s = strings.TrimSpace(s)
+	return s != "" && strings.HasSuffix(s, ".") && !strings.Contains(strings.TrimSuffix(s, "."), ". ")
 }
