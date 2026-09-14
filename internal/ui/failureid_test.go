@@ -26,6 +26,7 @@ func TestTheIdReachesTheTerminal(t *testing.T) {
 	u := New(nil, &out, &out)
 
 	f := NewFailure(IDUploadLinkExpired,
+		StageUploads,
 		"The upload link ran out.",
 		"Links are short-lived on purpose.", NextFreshDeploy,
 		"Run it again — a fresh link is issued every time.")
@@ -95,7 +96,7 @@ func TestTheGeneralValidatorAcceptsAllFourActions(t *testing.T) {
 		NextNone, NextFreshDeploy, NextWait, NextGiveUp,
 	} {
 		t.Run(string(action), func(t *testing.T) {
-			f := NewFailure(IDInternalFault, "A thing happened.",
+			f := NewFailure(IDInternalFault, StageThisRun, "A thing happened.",
 				"For a reason.", action, "Some words.")
 			if f.Next != action {
 				t.Errorf("the constructor changed the action: got %q, want %q",

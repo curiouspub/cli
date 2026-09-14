@@ -166,6 +166,7 @@ func offerWaitlist(ctx context.Context, w waitlistDeps, address addressSource, r
 func declinedStop(resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
 		ui.IDWaitlistDeclined,
+		ui.StageWaitlist,
 		nothingDeployed,
 		capacityUsedUp+" "+uploadedNothing, ui.NextWait,
 		"Run `curious deploy` again "+afterTheReset(resetsAt, now)+".")
@@ -179,6 +180,7 @@ func declinedStop(resetsAt, now time.Time) *ui.Failure {
 func noTerminalStop(resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
 		ui.IDWaitlistNeedsTerminal,
+		ui.StageWaitlist,
 		nothingDeployed,
 		capacityUsedUp+" There is a waitlist for the moment it reopens, and "+
 			"curious had no terminal to offer it on — that happens through a "+
@@ -229,6 +231,7 @@ func joinedStop(email string, resetsAt, now time.Time) *ui.Closed {
 func signupFailedStop(err error, resetsAt, now time.Time) *ui.Failure {
 	return ui.NewFailure(
 		ui.IDWaitlistSignupFailed,
+		ui.StageWaitlist,
 		"That didn't get you onto the list.",
 		uploadedNothing, ui.NextWait,
 		"Email "+supportAddress+" and we'll add you by hand.\nRun `curious deploy` "+

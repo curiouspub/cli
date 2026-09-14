@@ -72,6 +72,10 @@ type Failure struct {
 	// answer and an agent all match on, so it survives both.
 	ID FailureID
 
+	// Stage is what the person was doing when this failure met them. See
+	// Stage. It is declared at every construction site, the way ID is.
+	Stage Stage
+
 	What string
 	Why  string
 
@@ -153,16 +157,16 @@ func (f *Failure) Error() string { return f.What }
 // the three parts are named at the call site — a positional
 // Failure{a, b, c} reads as three interchangeable strings, and they are
 // not: the third is the only one the reader can act on.
-func NewFailure(id FailureID, what, why string, next NextAction, nextText string) *Failure {
-	return &Failure{ID: id, What: what, Why: why, Next: next, NextText: nextText}
+func NewFailure(id FailureID, stage Stage, what, why string, next NextAction, nextText string) *Failure {
+	return &Failure{ID: id, Stage: stage, What: what, Why: why, Next: next, NextText: nextText}
 }
 
 // Quoted is a failure whose middle paragraph is somebody else's sentence
 // and nothing of ours — the commonest shape by far, because where the
 // server knows something this client does not, its words are the only
 // thing that carries it.
-func Quoted(id FailureID, what, detail string, next NextAction, nextText string) *Failure {
-	return &Failure{ID: id, What: what, Detail: detail, Next: next, NextText: nextText}
+func Quoted(id FailureID, stage Stage, what, detail string, next NextAction, nextText string) *Failure {
+	return &Failure{ID: id, Stage: stage, What: what, Detail: detail, Next: next, NextText: nextText}
 }
 
 // Quoting returns the failure with somebody else's sentence attached.
@@ -205,8 +209,9 @@ func (f *Failure) Quoting(detail string) *Failure {
 // ErrNotInteractive itself and this is what is left for one that has
 // none.
 var notInteractiveFailure = &Failure{
-	ID:   IDNeedsATerminal,
-	What: "curious needs a terminal for that.",
+	ID:    IDNeedsATerminal,
+	Stage: StageQuestions,
+	What:  "curious needs a terminal for that.",
 	Why: "It had a question to ask you and no way to ask it. That happens when\n" +
 		"curious runs through a pipe, from a script, or inside a tool that\n" +
 		"captures its output.",
@@ -228,8 +233,9 @@ var notInteractiveFailure = &Failure{
 // that the answers were not understood, and it names the two words that
 // work. Nothing about it suggests anything is broken, because nothing is.
 var noAnswerFailure = &Failure{
-	ID:   IDAnswerNotUnderstood,
-	What: "Didn't catch that.",
+	ID:    IDAnswerNotUnderstood,
+	Stage: StageQuestions,
+	What:  "Didn't catch that.",
 	Why: "curious asked the same question a few times and couldn't read any of\n" +
 		"the answers, so it stopped rather than keep asking.",
 	Next: NextFreshDeploy,
@@ -254,8 +260,9 @@ var serverClosedFailure = &Failure{
 	// that met it is not a family. This is the bare case — reached when
 	// the closed-door marker was used with no copy behind it — and a
 	// reader meeting it has met the same thing.
-	ID:   IDServiceUnavailable,
-	What: "curious.pub isn't taking this right now.",
+	ID:    IDServiceUnavailable,
+	Stage: StageThisRequest,
+	What:  "curious.pub isn't taking this right now.",
 	Why: "The server is closed to this run — not because of anything wrong with\n" +
 		"your project, and not because of anything you did.",
 	Next:     NextWait,
@@ -488,10 +495,11 @@ const (
 // that.
 func (u *UI) Internal(err error) {
 	f := &Failure{
-		ID:   IDInternalFault,
-		What: internalWhat,
-		Why:  internalWhy,
-		Next: NextGiveUp,
+		ID:    IDInternalFault,
+		Stage: StageThisRun,
+		What:  internalWhat,
+		Why:   internalWhy,
+		Next:  NextGiveUp,
 		NextText: "Re-run with " + debugEnvVar + "=1 to see the detail, and please\n" +
 			"report it with that output.",
 	}

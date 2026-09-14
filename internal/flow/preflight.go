@@ -220,7 +220,7 @@ func ownCopy(f check.Finding) *ui.Failure {
 	if strings.TrimSpace(next) == "" {
 		next = standingAction
 	}
-	return ui.NewFailure(ui.FailureID(f.FailureID), what, why, ui.NextFreshDeploy, next)
+	return ui.NewFailure(ui.FailureID(f.FailureID), ui.StagePreflight, what, why, ui.NextFreshDeploy, next)
 }
 
 // synthesised builds one failure out of several summaries.
@@ -243,6 +243,7 @@ func synthesised(hardStops []check.Finding) *ui.Failure {
 
 	return ui.NewFailure(
 		ui.IDProjectNotReady,
+		ui.StagePreflight,
 		"curious can't deploy this project yet.",
 		strings.TrimRight(b.String(), "\n"),
 		ui.NextFreshDeploy, standingAction,

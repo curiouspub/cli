@@ -466,6 +466,7 @@ func publishStoppedFromOutside(cause error, deployID string) error {
 func publishUnusableAnswerFailure(deployID string) error {
 	return ui.NewFailure(
 		ui.IDPublishedAddressInvalid,
+		ui.StageAddresses,
 		"The server gave this deploy an address that cannot be one.",
 		"The publish itself was accepted, so the deploy may well be live — but\n"+
 			"the label the server sent back is not a label, so curious has no\n"+
@@ -500,6 +501,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// promised would be wrong either way.
 		return ui.NewFailure(
 			ui.IDRateLimited,
+			ui.StageAddresses,
 			"The server is asking for a pause.",
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message)
@@ -510,6 +512,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// "this went wrong".
 		return ui.ServerClosed(ui.NewFailure(
 			ui.IDDailyCapacityClosed,
+			ui.StageAddresses,
 			closedHeadline,
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 			"Try again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+".").Quoting(apiErr.Message))
@@ -520,6 +523,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	case wire.CodeNotFound:
 		return ui.NewFailure(
 			ui.IDDeployUnknownToServer,
+			ui.StageAddresses,
 			"The server doesn't know that deploy.",
 			ui.Written("The deploy is %s. That usually "+
 				"means it has already\nexpired, or that it belongs to a different login "+
@@ -531,6 +535,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// the service simply is not taking this step right now.
 		return ui.ServerClosed(ui.NewFailure(
 			ui.IDServiceUnavailable,
+			ui.StageAddresses,
 			"curious.pub isn't giving out addresses right now.",
 			nothingDeployed, ui.NextWait,
 			"Try again a little later.").Quoting(apiErr.Message))
@@ -543,6 +548,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 		// printed directly above it.
 		return ui.NewFailure(
 			ui.IDDeployNotCompletedByServer,
+			ui.StageAddresses,
 			"The server couldn't finish the deploy.",
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextGiveUp,
 			"There is nothing to fix at this end and nothing here worth retrying.\n"+
@@ -554,6 +560,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.NewFailure(
 		ui.IDServerAnswerUnrecognised,
+		ui.StageAddresses,
 		"The server wouldn't give this deploy an address.",
 		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
@@ -582,6 +589,7 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 func buildRefusedFailure(deployID string) *ui.Failure {
 	return ui.NewFailure(
 		ui.IDBuildOutputRefused,
+		ui.StageBuilding,
 		"The build finished, and the server would not take the result.",
 		"The build log above ended with the build reporting that it had\n"+
 			"finished. What runs after that is a check on what the build actually\n"+
@@ -605,6 +613,7 @@ func buildRefusedFailure(deployID string) *ui.Failure {
 func publishNotConfirmedFailure(deployID string) error {
 	return ui.NewFailure(
 		ui.IDPublishNotConfirmed,
+		ui.StageBuilding,
 		"The build could not be confirmed in time.",
 		"The build log ended with the build reporting that it had finished, and\n"+
 			"the server was still working on it "+publishConfirmWindow.String()+
@@ -629,6 +638,7 @@ func publishNotConfirmedFailure(deployID string) error {
 func publishUnansweredFailure(err error, deployID string) error {
 	return ui.NewFailure(
 		ui.IDServerUnanswered,
+		ui.StageAddresses,
 		"curious didn't hear back after asking for the deploy's address.",
 		ui.Written("The deploy may or may not have got one — curious cannot "+
 			"tell whether\nthe request arrived, and it does not ask twice, because "+

@@ -102,6 +102,7 @@ type obligation struct {
 type summary struct {
 	fn    string
 	idArg int
+	stage int
 	act   int
 	txt   int
 }
@@ -432,7 +433,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 			if !isFailureExpr(p.info, node) {
 				return true
 			}
-			s := summary{fn: fd.Name.Name, idArg: -1, act: -1, txt: -1}
+			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, act: -1, txt: -1}
 			for _, elt := range node.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
@@ -449,6 +450,8 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				switch calleeName(kv.Key) {
 				case "ID":
 					s.idArg = i
+				case "Stage":
+					s.stage = i
 				case "Next":
 					s.act = i
 				case "NextText":
@@ -464,7 +467,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				c != modulePath+"/internal/ui.Quoted" {
 				return true
 			}
-			s := summary{fn: fd.Name.Name, idArg: -1, act: -1, txt: -1}
+			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, act: -1, txt: -1}
 			for i, arg := range node.Args {
 				id, ok := arg.(*ast.Ident)
 				if !ok {
@@ -474,13 +477,15 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				if !isParam {
 					continue
 				}
-				// Constructor positions: (id, what, why|detail, next, nextText)
+				// Constructor positions: (id, stage, what, why|detail, next, nextText)
 				switch i {
 				case 0:
 					s.idArg = j
-				case 3:
-					s.act = j
+				case 1:
+					s.stage = j
 				case 4:
+					s.act = j
+				case 5:
 					s.txt = j
 				}
 			}
@@ -499,11 +504,14 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 		return summary{}, false
 	}
 	want := candidates[0]
-	if want.idArg < 0 || want.act < 0 || want.txt < 0 {
+	// A HELPER THAT DOES NOT FORWARD A STAGE IS NOT SUMMARISED, for the
+	// reason one that does not forward an id is not: every call to it would
+	// build a failure that says nothing about where the person was.
+	if want.idArg < 0 || want.stage < 0 || want.act < 0 || want.txt < 0 {
 		return summary{}, false
 	}
 	for _, got := range candidates[1:] {
-		if got.idArg != want.idArg || got.act != want.act || got.txt != want.txt {
+		if got.idArg != want.idArg || got.stage != want.stage || got.act != want.act || got.txt != want.txt {
 			return summary{}, false
 		}
 	}
@@ -840,9 +848,10 @@ func typedFailureFixture(t *testing.T, source string) parsedFile {
 		type FailureID string
 		type NextAction string
 		const NextWait NextAction = "Wait"
-		type Failure struct { ID FailureID; Next NextAction; NextText string }
-		func NewFailure(id FailureID, next NextAction, text string) *Failure {
-			return &Failure{ID: id, Next: next, NextText: text}
+		type Stage string
+		type Failure struct { ID FailureID; Stage Stage; Next NextAction; NextText string }
+		func NewFailure(id FailureID, stage Stage, next NextAction, text string) *Failure {
+			return &Failure{ID: id, Stage: stage, Next: next, NextText: text}
 		}`
 	uiFile, err := parser.ParseFile(fset, "ui.go", uiSource, 0)
 	if err != nil {
@@ -880,7 +889,7 @@ func TestFailureRecognitionUsesTypesAcrossAliasesAndElision(t *testing.T) {
 			_ = struct{ ui.Failure }{}
 			_ = Failure{}
 			var makeFailure = ui.NewFailure
-			_ = makeFailure("id", "next", "text")
+			_ = makeFailure("id", "stage", "next", "text")
 			var zero ui.Failure
 			_ = &zero
 		}`)
@@ -995,12 +1004,12 @@ func TestNonBlankAnalysisDecodesLiteralsAndRejectsNakedReturns(t *testing.T) {
 
 func TestSummaryRequiresEveryConstructionAndUnmutatedParameters(t *testing.T) {
 	for _, body := range []string{
-		`next = ""; return &ui.Failure{ID: id, Next: next, NextText: text}`,
-		`if bad { return &ui.Failure{} }; return &ui.Failure{ID: id, Next: next, NextText: text}`,
+		`next = ""; return &ui.Failure{ID: id, Stage: stage, Next: next, NextText: text}`,
+		`if bad { return &ui.Failure{} }; return &ui.Failure{ID: id, Stage: stage, Next: next, NextText: text}`,
 	} {
 		p := typedFailureFixture(t, `package fixture
 			import ui "github.com/curiouspub/cli/internal/ui"
-			func build(id ui.FailureID, next ui.NextAction, text string, bad bool) *ui.Failure {
+			func build(id ui.FailureID, stage ui.Stage, next ui.NextAction, text string, bad bool) *ui.Failure {
 				`+body+`
 			}`)
 		fd := p.file.Decls[1].(*ast.FuncDecl)
@@ -1049,7 +1058,7 @@ func TestFunctionAliasCyclesFailClosed(t *testing.T) {
 			var a, b = ui.NewFailure, ui.NewFailure
 			a = b
 			b = a
-			_ = a("id", "next", "text")
+			_ = a("id", "stage", "next", "text")
 		}`)
 	fd := p.file.Decls[1].(*ast.FuncDecl)
 	var call *ast.CallExpr
@@ -1468,10 +1477,10 @@ func allReturnsNonBlankAnywhere(key string) bool { return key != "" && nonBlankH
 var obligationLedger = map[string]string{
 	"internal/flow/preflight.go:223 ID":       "flow.TestAHardStopCarriesItsCheckFamilyIntoTheFailure",
 	"internal/flow/preflight.go:223 NextText": "flow.TestAHardStopCarriesItsCheckFamilyIntoTheFailure",
-	"internal/flow/upload.go:340 NextText":    "flow.TestTheOtherTwoRefusalBranchesKeepTheirOwnFamilies",
-	"internal/flow/upload.go:372 ID":          "flow.TestARefusalInsideTheWindowSaysGiveUp",
-	"internal/flow/upload.go:372 Next":        "flow.TestARefusalInsideTheWindowSaysGiveUp",
-	"internal/flow/upload.go:372 NextText":    "flow.TestARefusalInsideTheWindowSaysGiveUp",
+	"internal/flow/upload.go:341 NextText":    "flow.TestTheOtherTwoRefusalBranchesKeepTheirOwnFamilies",
+	"internal/flow/upload.go:373 ID":          "flow.TestARefusalInsideTheWindowSaysGiveUp",
+	"internal/flow/upload.go:373 Next":        "flow.TestARefusalInsideTheWindowSaysGiveUp",
+	"internal/flow/upload.go:373 NextText":    "flow.TestARefusalInsideTheWindowSaysGiveUp",
 }
 
 // obligationLedgerExpression binds each ledger entry above to the exact
@@ -1481,19 +1490,19 @@ var obligationLedger = map[string]string{
 var obligationLedgerExpression = map[string]string{
 	"internal/flow/preflight.go:223 ID":       "ui.FailureID(f.FailureID)",
 	"internal/flow/preflight.go:223 NextText": "next",
-	"internal/flow/upload.go:340 NextText":    "next",
-	"internal/flow/upload.go:372 ID":          "id",
-	"internal/flow/upload.go:372 Next":        "action",
-	"internal/flow/upload.go:372 NextText":    "next",
+	"internal/flow/upload.go:341 NextText":    "next",
+	"internal/flow/upload.go:373 ID":          "id",
+	"internal/flow/upload.go:373 Next":        "action",
+	"internal/flow/upload.go:373 NextText":    "next",
 }
 
 var obligationLedgerBinding = map[string]string{
 	"internal/flow/preflight.go:223 ID":       "",
 	"internal/flow/preflight.go:223 NextText": "f.Next | standingAction",
-	"internal/flow/upload.go:340 NextText":    "expiredCopy()#1",
-	"internal/flow/upload.go:372 ID":          "refusalCopy(host, deps.ExpiresAt, deps.Now())#0",
-	"internal/flow/upload.go:372 Next":        "refusalCopy(host, deps.ExpiresAt, deps.Now())#1",
-	"internal/flow/upload.go:372 NextText":    "expiredCopy()#1 | refusalCopy(host, deps.ExpiresAt, deps.Now())#3",
+	"internal/flow/upload.go:341 NextText":    "expiredCopy()#1",
+	"internal/flow/upload.go:373 ID":          "refusalCopy(host, deps.ExpiresAt, deps.Now())#0",
+	"internal/flow/upload.go:373 Next":        "refusalCopy(host, deps.ExpiresAt, deps.Now())#1",
+	"internal/flow/upload.go:373 NextText":    "expiredCopy()#1 | refusalCopy(host, deps.ExpiresAt, deps.Now())#3",
 }
 
 func obligationDischarge(message, binding string) (string, bool) {
@@ -1516,7 +1525,7 @@ func obligationDischarge(message, binding string) (string, bool) {
 }
 
 func TestAnObligationLedgerEntryBelongsToItsExpression(t *testing.T) {
-	key := "internal/flow/upload.go:372 Next"
+	key := "internal/flow/upload.go:373 Next"
 	if _, ok := obligationDischarge(key+" = changedAtRuntime() (unsupported form)",
 		"refusalCopy(host, deps.ExpiresAt, deps.Now())#1"); ok {
 		t.Fatal("a different expression inherited the ledger discharge at the same location")

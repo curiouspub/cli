@@ -185,6 +185,7 @@ func createDeploy(ctx context.Context, deps createDeps) (*wire.DeployCreateRespo
 func createUnansweredFailure(err error) error {
 	return ui.NewFailure(
 		ui.IDServerUnanswered,
+		ui.StageDeploys,
 		"curious didn't hear back after asking for somewhere to upload.",
 		deployMayExist+" — curious cannot tell whether the\n"+
 			"request arrived. Nothing has been uploaded to it either way, and an\n"+
@@ -202,6 +203,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// run that is not going to end differently.
 		return ui.NewFailure(
 			ui.IDFreshLoginRefused,
+			ui.StageDeploys,
 			authenticationFailed,
 			"curious logged in again and the server still would not "+
 				"accept the\nrequest, so it stopped rather than keep asking.", ui.NextFreshDeploy,
@@ -213,6 +215,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// switch has no reset anybody can honestly name.
 		return ui.ServerClosed(ui.Quoted(
 			ui.IDServiceUnavailable,
+			ui.StageDeploys,
 			"curious.pub is not taking deploys right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later. "+uploadedNothing))
@@ -230,6 +233,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// server named is USED rather than dropped.
 		return ui.Quoted(
 			ui.IDRateLimited,
+			ui.StageDeploys,
 			"Too many requests from here.",
 			apiErr.Message, ui.NextWait,
 			retryAdvice(apiErr.RetryAfter, now))
@@ -240,6 +244,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 		// knows which one.
 		return ui.NewFailure(
 			ui.IDClientRequestRejected,
+			ui.StageDeploys,
 			"The server wouldn't accept that archive.",
 			"Sending the same thing again would not go any better, "+
 				"so the run\nstopped here.", ui.NextGiveUp,
@@ -253,6 +258,7 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 	// to introduce one, and the honest answer is to show what it said.
 	return ui.Quoted(
 		ui.IDServerAnswerUnrecognised,
+		ui.StageDeploys,
 		"curious couldn't start the deploy.",
 		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+

@@ -640,6 +640,7 @@ func startFailure(err error) error {
 	if !errors.As(err, &apiErr) {
 		return ui.NewFailure(
 			ui.IDServerUnanswered,
+			ui.StageBuilding,
 			"curious didn't hear back after asking the server to build.",
 			buildMayBeRunning+" — curious cannot tell whether the\n"+
 				"request arrived, and it does not ask twice: everything you would be\n"+
@@ -653,6 +654,7 @@ func startFailure(err error) error {
 		// the archive is already where it was going.
 		return ui.ServerClosed(ui.Quoted(
 			ui.IDServiceUnavailable,
+			ui.StageBuilding,
 			"curious.pub is not building right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
@@ -664,6 +666,7 @@ func startFailure(err error) error {
 	// build may be older than the code it is being shown.
 	return ui.Quoted(
 		ui.IDServerAnswerUnrecognised,
+		ui.StageBuilding,
 		"The server wouldn't start the build.",
 		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
@@ -677,12 +680,14 @@ func streamRefusedFailure(apiErr *api.APIError) error {
 	if apiErr.Code == wire.CodeMaintenance {
 		return ui.ServerClosed(ui.Quoted(
 			ui.IDServiceUnavailable,
+			ui.StageBuildLog,
 			"curious.pub stopped sending the build log.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
 	}
 	return ui.Quoted(
 		ui.IDServerAnswerUnrecognised,
+		ui.StageBuildLog,
 		"The server wouldn't send the build log.",
 		apiErr.Message, ui.NextWait,
 		"Try again in a moment. If it keeps happening, updating curious may\n"+
@@ -699,6 +704,7 @@ func streamRefusedFailure(apiErr *api.APIError) error {
 func streamLostFailure(deployID string) error {
 	return ui.NewFailure(
 		ui.IDBuildLogLost,
+		ui.StageBuildLog,
 		"curious lost the build log and could not pick it up again.",
 		fmt.Sprintf("The connection to the build log dropped, and %d attempts to "+
 			"re-establish\nit did not last either. THE BUILD ITSELF IS NOT AFFECTED "+
@@ -713,6 +719,7 @@ func streamLostFailure(deployID string) error {
 func buildFailedFailure() error {
 	return ui.NewFailure(
 		ui.IDBuildFailed,
+		ui.StageBuilding,
 		"The build failed.",
 		"The server ran the build and it did not finish. What went wrong is in\n"+
 			"the log above rather than here, and it is a problem in the project\n"+
