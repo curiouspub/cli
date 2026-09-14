@@ -432,6 +432,13 @@ type Measurement struct {
 	// per leg, dated, and retaken like any other reading here. It sits
 	// beside WorstGap because it comes off the same passes.
 	//
+	// BUT A BUDGET IS NOT RAISED BY ITS OWN OUTLIER. Defined as the widest
+	// gap on a valid pass, it can raise itself: a pause inside three times
+	// the budget is valid, becomes the widest, and moves the threshold out
+	// past the next pause, until nothing on the leg is ever starved.
+	// StreamGoesQuiet's darwin budget is held as a ruled ceiling for exactly
+	// that reason, and its entry shows the arithmetic.
+	//
 	// ZERO MEANS THIS FIXTURE STATES AN INTERVAL and the interval is the
 	// threshold. Zero on a fixture whose Pace.Interval is ALSO zero is
 	// nobody having looked, and the guard beside this package refuses it
@@ -1297,13 +1304,15 @@ var UploadWedgedStops = Entry{
 var StreamGoesQuiet = Entry{
 	Name: "StreamGoesQuiet",
 	Row:  "TestAStreamThatStopsTalkingIsReconnected",
-	// 55 ms: five times darwin's 10.2835 ms is 51.42 ms, and this is the
-	// next round number above it. It was 100 ms, chosen from nothing,
-	// and the measurement has brought it DOWN — which is worth saying,
-	// because every other move this task has made to a window has been
-	// upward and a reader could be forgiven for thinking that is what
-	// measuring a margin does.
-	Window: 55 * time.Millisecond,
+	// 235 ms: five times darwin's 46.124083 ms is 230.62 ms, and this is
+	// the next round number above it. RE-RULED 2026-09-14 from every hosted
+	// reading rather than from one retake; the evidence is on the darwin
+	// measurement below. It was 55 ms, five times a retake's 10.2835 ms, and
+	// 100 ms before that, chosen from nothing. Measuring first brought it
+	// DOWN and then, once the tail had been read, back up past where it
+	// started: a retake measures a leg's ordinary figure, and a window is
+	// sized against its worst.
+	Window: 235 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval from the watchdog being armed — before the connection is " +
 		"opened — to the first byte of the first frame arriving: connection " +
@@ -1347,8 +1356,8 @@ var StreamGoesQuiet = Entry{
 				Flushes: 2, WorstFixtureGap: 53951}},
 		// 10.2835ms under the detector, 1.033458ms without it — a factor
 		// of ten between the two conditions, and the detector is the one
-		// this window is sized against because it is the worse of two
-		// the gate actually runs.
+		// this window was first sized against because it is the worse of
+		// two the gate actually runs.
 		//
 		// THE STORED NUMBER SAID 4.121458 ms OVER 7,000 RUNS AND BOTH
 		// HALVES OF THAT WERE WRONG. The window three fields up is
@@ -1378,21 +1387,63 @@ var StreamGoesQuiet = Entry{
 		// a shade past the 10.2835 ms the correction restored, and the
 		// third independent confirmation that this leg's raced figure
 		// lives at about ten and a half milliseconds rather than at four.
-		// Five times it is 53.23 ms against a 55 ms window, so the
-		// window still clears the rule and does not move.
-		Darwin: {WorstGap: 10645375 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
-			// BUDGET: 11.010375 ms, the widest this leg's fixture was
-			// seen to go between its two flushes on a pass that was not
-			// itself starved, across fifteen CI readings on 2026-09-11.
-			// Nine of the fifteen cluster at 10.04–10.07 ms, which is a
-			// scheduling quantum rather than noise; one sat at 11.01 ms
-			// and one — excluded, and the reason this budget exists — at
-			// 35.113375 ms.
+		// Five times it was 53.23 ms against a 55 ms window, so the
+		// window cleared the rule and did not move — on one retake.
+		//
+		// RE-RULED 2026-09-14, FROM EVERY HOSTED READING. A retake is one
+		// run of the gate; a leg's worst shows up only across many. Every
+		// 1000-run reading this probe has printed on the gate's macOS
+		// runner since 2026-09-10, read back out of the CI logs: 91
+		// jobs, 176 passes, one excluded as starved (below). The
+		// valid passes, with p90 and p95 taken by rank:
+		//
+		//	condition  passes  median     p90        p95        max
+		//	-race      90      10.484 ms  13.319 ms  19.317 ms  22.455 ms
+		//	plain      85      0.869 ms   4.324 ms   5.828 ms   46.124 ms
+		//
+		// THE RECORD IS THE MAXIMUM OVER VALID PASSES; A VALID READING IS
+		// NEVER HELD BESIDE THE RECORD BECAUSE IT IS LARGE. It is
+		// 46.124083 ms, a plain pass on 2026-09-14 (CI run 34823572993)
+		// whose fixture was clean on every run, widest gap 2.978 ms. A
+		// single retake the same morning read 10.40 ms under the detector;
+		// taking a retake's maximum as the record, and holding a reading
+		// like this one beside it as an excursion, is what that sentence
+		// rules out. The tail reproduced within the hour: the merge queue's
+		// push run (CI run 34829220546) read 22.454834 ms under the
+		// detector, fixture 231.584 µs, and the margin floor failed the row
+		// against the 55 ms window.
+		//
+		// THE WORSE CONDITION IS NOT WHERE THIS RECORD CAME FROM. On an
+		// ordinary run the detector reads about ten times the plain pass,
+		// which is why a leg keeps the worse of the two; this record is a
+		// plain pass, at four times the raced figure beside it. What a leg
+		// keeps is the worse READING.
+		Darwin: {WorstGap: 46124083 * time.Nanosecond, Runs: 175000, Date: "2026-09-14",
+			// BUDGET: 11.010375 ms, A RULED CEILING THAT IS NOT RE-DERIVED.
+			// It was taken on 2026-09-11 as the widest this leg's fixture
+			// went between its two flushes across fifteen CI readings; nine
+			// clustered at 10.04–10.07 ms, a scheduling quantum, and one pass
+			// — excluded, and the reason this budget exists — paused
+			// 35.113375 ms (CI run 34627736788, merge queue, 54.251708 ms at
+			// the client). That pass stays starved, and its runs are not
+			// counted below: its log printed only its widest gap, so how many
+			// of its thousand were starved is not known.
+			//
+			// IT IS HELD rather than raised to the widest valid gap seen
+			// since, because that definition raises itself on its own
+			// outlier. A valid pass on 2026-09-12 (CI run 34683989128)
+			// paused 14.398625 ms, inside three times this ceiling. Raised to
+			// that, the threshold would be 43.2 ms and would admit the
+			// 35.113375 ms pause; admitted, that would become the widest
+			// valid gap, and the threshold would move to 105 ms, past
+			// anything this leg has produced, so nothing here could ever be
+			// starved again. The 14.398625 ms gap is recorded as the widest
+			// valid one and does not move the ceiling.
 			FlushBudget: 11010375 * time.Nanosecond,
-			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
+			Integrity: &PaceIntegrity{Attempts: 175000, Valid: 175000, Starved: 0,
 				ThresholdNum: 3, ThresholdDen: 1,
 				StatedPace: 0, FlushBudget: 11010375 * time.Nanosecond,
-				Flushes: 2, WorstFixtureGap: 574667 * time.Nanosecond}},
+				Flushes: 2, WorstFixtureGap: 14398625 * time.Nanosecond}},
 		// 2.2355ms under the detector, 2.0315ms without it.
 		//
 		// BUDGET: 2.1332ms, the widest this leg's fixture was seen to go
