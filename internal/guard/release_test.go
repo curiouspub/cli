@@ -49,6 +49,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/curiouspub/cli/internal/leakcheck"
+	"github.com/curiouspub/cli/internal/rulefile"
 )
 
 // ---------------------------------------------------------------------
@@ -467,24 +470,25 @@ func loadProviderAuthActions(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
+	declared, err := rulefile.Parse("scripts/provider-auth-actions.txt", string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var fragments []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	for _, rule := range declared {
 		// The same strictness the dependency denylist learned: neither
 		// whitespace nor a hash is legal inside an action path, so either
-		// one means somebody wrote a trailing comment — which does not
-		// terminate the line here, it becomes part of the fragment. The
-		// fragment then matches nothing and the rule is silently off with
-		// the guard still green.
-		if strings.ContainsAny(line, " \t#") {
-			t.Fatalf("scripts/provider-auth-actions.txt: %q is not a bare action-path fragment "+
-				"(whitespace or # present). A trailing comment silently disables the entry it "+
-				"is attached to; put the comment on its own line.", line)
+		// one after the id means somebody wrote a trailing comment — which
+		// does not terminate the line here, it becomes part of the
+		// fragment. The fragment then matches nothing and the rule is
+		// silently off with the guard still green.
+		if strings.ContainsAny(rule.Text, " \t#") {
+			t.Fatalf("scripts/provider-auth-actions.txt:%d: %s does not carry a bare "+
+				"action-path fragment (whitespace or # present after the id). A trailing "+
+				"comment silently disables the entry it is attached to; put the comment on "+
+				"its own line.", rule.Line, rule.ID)
 		}
-		fragments = append(fragments, strings.ToLower(line))
+		fragments = append(fragments, strings.ToLower(rule.Text))
 	}
 	if len(fragments) == 0 {
 		t.Fatal("scripts/provider-auth-actions.txt lists no fragments — this guard would silently pass")
@@ -503,7 +507,7 @@ func loadProviderAuthActions(t *testing.T, root string) []string {
 // guard QUIETER, so both directions are asserted: the file is in the set,
 // and a file that merely sits beside it is not.
 func TestProviderActionListIsTreatedAsARuleFile(t *testing.T) {
-	set := ruleFileNames()
+	set := leakcheck.RuleFileNames()
 	if !set["scripts/provider-auth-actions.txt"] {
 		t.Error("the provider list is not a rule file, so the vendor check reds on the " +
 			"entries it has to spell in order to match them — and the fastest way out of " +
@@ -522,10 +526,10 @@ func TestProviderActionListIsTreatedAsARuleFile(t *testing.T) {
 		}
 	}
 	// And the waiver is still per-line and per-check where it does apply.
-	if text, ok := vendorScanLine("scripts/provider-auth-actions.txt", "some-owner/some-action", true); ok {
+	if text, ok := leakcheck.VendorScanLine("scripts/provider-auth-actions.txt", "some-owner/some-action"); ok {
 		t.Errorf("a data line in the provider list is scanned by the vendor check (as %q)", text)
 	}
-	if _, ok := vendorScanLine("scripts/provider-auth-actions.txt", "# some-owner/some-action", true); !ok {
+	if _, ok := leakcheck.VendorScanLine("scripts/provider-auth-actions.txt", "# some-owner/some-action"); !ok {
 		t.Error("a comment line in the provider list is not scanned; the prose explaining a " +
 			"rule has no need to name what the rule forbids")
 	}

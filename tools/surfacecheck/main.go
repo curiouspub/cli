@@ -310,7 +310,7 @@ func report(stdout io.Writer, findings []Finding, narrowings []Narrowing) int {
 // it could not do, not by what it found.
 func describe(stdout io.Writer, findings []Finding, narrowings []Narrowing) bool {
 	for _, n := range narrowings {
-		fmt.Fprintf(stdout, "pattern set narrowed: %s no longer declares %s\n", n.Path, n.Line)
+		fmt.Fprintf(stdout, "pattern set narrowed: %s no longer declares %s\n", n.Path, n.Rule)
 	}
 	if len(narrowings) > 0 {
 		fmt.Fprintln(stdout, "\nA line removed from a rule file is still in force for the "+
@@ -391,20 +391,29 @@ func describe(stdout io.Writer, findings []Finding, narrowings []Narrowing) bool
 //
 // WHAT IS LEFT IS ENOUGH TO ACT ON, which is the other half and not a
 // smaller one — a report redacted into uselessness is a leak closed by
-// removing the check. The surface, the line and the rule name a single
-// line of the author's own text, and the rule is either a line of this
-// repository's own published manifest or the name of the vendor check.
-// Neither discloses anything the reader could not already read here.
+// removing the check. The surface, the line and the rule's ID name a
+// single line of the author's own text, and an id is a handle this
+// repository's own manifests publish. It discloses nothing the reader
+// could not already read here, and unlike the generic label it replaced
+// it says WHICH entry of the vocabulary fired.
 //
-// Match stays on the struct: it is what the counting is done on, and a
-// row can assert on it in memory without any of it reaching a page.
+// AND THE STRUCT NO LONGER HOLDS IT AT ALL. This used to be a promise
+// made by the renderer about a field it was carrying; it is now a
+// property of the type. A Finding has the surface, the line and the
+// rule's id, so there is nothing here to print by accident and nothing
+// for a consumer written later to reach for.
 func (f Finding) String() string {
 	where := f.Subject
 	if f.Line > 0 {
 		where = fmt.Sprintf("%s, line %d", f.Subject, f.Line)
 	}
-	if f.Rule == vendorVocabulary {
-		return where + " names infrastructure"
+	if f.Infrastructure {
+		// THE ID AND NOT THE TERM. A provider name written into a run's
+		// log is the disclosure this check exists to prevent, arriving
+		// through the report; the id names which entry of the vocabulary
+		// fired without spelling it, which is exactly what somebody
+		// fixing this needs and nothing more.
+		return fmt.Sprintf("%s names infrastructure (%s)", where, f.PatternID)
 	}
-	return fmt.Sprintf("%s matches %s", where, f.Rule)
+	return fmt.Sprintf("%s matches %s", where, f.PatternID)
 }

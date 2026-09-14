@@ -93,6 +93,30 @@ once by the same hand that had written the sentence describing the hole.
 **A rule with no mechanism gets followed until the moment somebody is
 busy**, and that is the moment a release is cut.
 
+**AND A THIRD READER LOOKS AT WHAT IS ALREADY PUBLISHED.** The two above
+read the tree and a range, and neither can see the thing that matters
+most about a public repository: a citation removed in a later commit is
+still there. The fix was a commit rather than a rewrite, so the object is
+still reachable, and that is what a stranger cloning this repository
+gets. `make leak-scan` — inside `make ci`, on every leg of every push —
+reads **every blob reachable from a ref that exists on origin** and fails
+on anything not recorded in `scripts/leak-baseline.txt`. All three take
+their verdict from one engine in `internal/leakcheck`, because a
+repository with two definitions of "is this a leak" has them drift in
+whichever direction nobody is watching.
+
+The baseline is a **ledger and not a mute button**. This repository has
+published matches already; a scan that reds on them for ever leaves two
+ways out and both are bad — rewrite the public history of a published
+module, or loosen the rule that catches real ones. So each is recorded,
+with the reason it stays, in a file where adding a line is a reviewable
+diff; an entry that stops matching FAILS, so the file cannot fill up with
+lines that mean nothing. **It never records the text that matched**, and
+never will: writing the string would publish the thing being recorded, in
+a public file, for ever — a directory of exactly what is being defended.
+A finding is the blob and the rule's id, which re-find it and disclose
+nothing.
+
 **What is still hand-checked, stated exactly, because implying coverage
 is worse than having none:** a release note, which is authored after the
 tag and is not a git object at all; and a message hand-edited in the
@@ -367,6 +391,30 @@ YAML is a step nobody can run before pushing.
   runbook".** There is no runbook; this is the list this repository has,
   and a reference to a document that does not exist is worse than no
   reference at all.
+- **`make leak-scan` IS a prerequisite of `ci`, and the difference from
+  `surface-check` is the shape of its subject rather than a change of
+  heart about cost.** A range needs two endpoints and a working copy is
+  one state; a history needs no endpoints at all, and every leg already
+  checks out the full history for the rows that read real commits. It
+  needs no secret, so it runs on a pull request from a stranger's fork
+  like everything else here. **What it costs, so the next person to ask
+  has a number instead of an opinion:** the current LOCAL figure lives in
+  ONE place, beside the `leak-scan` target in the Makefile, and is
+  deliberately not restated here. It was restated here once — about ten
+  seconds, half a second of it enumeration — and when membership moved to
+  the object walk the Makefile's figure moved to 1.6 seconds of
+  enumeration while this one stayed put: two homes for one number,
+  diverged within a day of being written. A hosted runner is
+  **unmeasured**; the first CI run records it per leg, and the figure
+  decays, because the cost grows with the history.
+- **`make leak-scan-private INVENTORY=<path>` is the maintainer half and
+  is deliberately unreachable from `ci`.** It reads an operator's
+  inventory of this project's own resource names, which lives outside
+  this repository because a committed list of the exact names you are
+  defending is a directory of them — and its findings are recorded beside
+  that inventory, for the same reason. **Neither half is the default**: a
+  bare invocation is refused, because a scan that picked one would be a
+  scan that silently ran the half you were not asking for.
 - **`make hooks` installs the same check as a pre-push hook, and it is opt
   in.** A hook lives in a directory git does not clone, is skipped by
   `--no-verify` and is absent on CI, so it is a convenience and never the
@@ -481,6 +529,16 @@ sentence has already carried a stale one.
    the real variable; from outside it would have to scrape a slice
    literal out of the syntax tree, which is a second transcription of
    the value and the exact defect guard 5 was created to remove.
+
+7. **Every rule in the four manifests carries an id, and no two rules
+   share one** — asserted against the working tree, which is the only
+   copy anybody can still fix. A rule's handle is what a report names and
+   what a ledger of already-published matches records, so a data line
+   without one is a rule nothing can refer to, and one handle over two
+   rules makes every record of it ambiguous. The readers that consult
+   these files across a RANGE deliberately tolerate a revision predating
+   the column — the base of a range is history and history cannot be
+   edited into compliance — and this is where that tolerance is paid for.
 
 Each guard fails loudly if it scanned nothing, so none of them can pass
 by looking at an empty set.

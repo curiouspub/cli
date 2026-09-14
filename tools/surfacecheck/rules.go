@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
+
+	"github.com/curiouspub/cli/internal/leakcheck"
+	"github.com/curiouspub/cli/internal/rulefile"
 )
 
 // The two rule files this check reads. They belong to the content rule
@@ -22,7 +24,7 @@ const (
 // is not an answer and must never be reported as the first.
 type end func(path string) (text string, present bool, err error)
 
-// Narrowing is a rule line that the base declared and head does not.
+// Narrowing is a rule that the base declared and head does not.
 //
 // It is REPORTED, with the line named, and it fails the check. The union
 // below means a narrowing cannot weaken the run that introduces it, so
@@ -32,7 +34,14 @@ type end func(path string) (text string, present bool, err error)
 // shape in which anybody can see what is being given up.
 type Narrowing struct {
 	Path string
-	Line string
+
+	// Rule is the id the manifest gives the retired rule.
+	//
+	// THE ID AND NOT THE RULE ITSELF, for the reason a finding carries an
+	// id: a retired VENDOR term printed here is the provider name written
+	// into a run's log, by the one report guaranteed to be holding it.
+	// The id says which line of a published manifest to go and read.
+	Rule string
 }
 
 // LoadRules builds the vocabulary from BOTH ENDS of the range: the union
@@ -50,27 +59,21 @@ type Narrowing struct {
 // The union closes it: the base's copy of a deleted line is still in
 // force for the range that deletes it.
 func LoadRules(base, head end) (Rules, []Narrowing, error) {
-	patternLines, patternNarrowings, err := unionOf(base, head, citationPatternsPath, verbatim)
+	patternRules, patternNarrowings, err := unionOf(base, head, citationPatternsPath, verbatim)
 	if err != nil {
 		return Rules{}, nil, err
 	}
-	vendorLines, vendorNarrowings, err := unionOf(base, head, vendorTermsPath, strings.ToLower)
+	vendorRules, vendorNarrowings, err := unionOf(base, head, vendorTermsPath, strings.ToLower)
 	if err != nil {
 		return Rules{}, nil, err
 	}
 
-	rules := Rules{vendor: map[string]bool{}}
-	for _, line := range patternLines {
-		re, err := regexp.Compile(line)
-		if err != nil {
-			return Rules{}, nil, fmt.Errorf("%s declares %q, which is not a pattern this "+
-				"check can compile: %w", citationPatternsPath, line, err)
-		}
-		rules.patterns = append(rules.patterns, re)
+	engine, err := leakcheck.New(patternRules, vendorRules)
+	if err != nil {
+		return Rules{}, nil, fmt.Errorf("the union of %s and %s across the range: %w",
+			citationPatternsPath, vendorTermsPath, err)
 	}
-	for _, line := range vendorLines {
-		rules.vendor[strings.ToLower(line)] = true
-	}
+	rules := Rules{Rules: engine}
 
 	// THE EMPTY-INPUT REFUSAL. A vocabulary that lost its contents passes
 	// everything and says nothing, which is indistinguishable from a
@@ -80,7 +83,7 @@ func LoadRules(base, head end) (Rules, []Narrowing, error) {
 		return Rules{}, nil, fmt.Errorf("the union of %s and %s across the range declares "+
 			"%d pattern(s) and %d term(s) — with either at zero this check would pass "+
 			"everything silently",
-			citationPatternsPath, vendorTermsPath, len(rules.patterns), len(rules.vendor))
+			citationPatternsPath, vendorTermsPath, len(patternRules), len(vendorRules))
 	}
 
 	return rules, append(patternNarrowings, vendorNarrowings...), nil
@@ -107,7 +110,7 @@ func verbatim(line string) string { return line }
 // case-only edit to a term reports a narrowing that did not happen — and
 // a narrowing is a finding, so an edit that changed nothing fails a run
 // and teaches the reader that this report cries wolf.
-func unionOf(base, head end, path string, sameAs func(string) string) ([]string, []Narrowing, error) {
+func unionOf(base, head end, path string, sameAs func(string) string) ([]rulefile.Rule, []Narrowing, error) {
 	baseText, baseHad, err := base(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading %s at the base of the range: %w", path, err)
@@ -121,37 +124,40 @@ func unionOf(base, head end, path string, sameAs func(string) string) ([]string,
 			"vocabulary to check against", path)
 	}
 
-	headLines := dataLines(headText)
+	// THE BASE IS HISTORY AND HEAD IS EDITABLE. The id column arrived in
+	// the middle of this repository's history, so an old base must retain
+	// the all-old-format fallback. Head is the working tree a run is being
+	// asked to trust, and accepting malformed current data would turn all
+	// of its otherwise valid lines into dead rules with an id prefix. That
+	// is not a clean vocabulary; it is one this reader could not assemble.
+	headRules, err := rulefile.Parse(path+" at head", headText)
+	if err != nil {
+		return nil, nil, err
+	}
+	baseRules := rulefile.ParseHistorical(path+" at the base of the range", baseText)
+
 	inHead := map[string]bool{}
-	for _, line := range headLines {
-		inHead[sameAs(line)] = true
+	for _, rule := range headRules {
+		inHead[sameAs(rule.Text)] = true
 	}
 
-	union := append([]string(nil), headLines...)
+	// THE BASE'S IDS ARE NOT CONSULTED, and that is the same ruling the
+	// sameAs argument carries: what a rule IS is its text, and the id is
+	// the handle used to talk about it. Keying the union on ids instead
+	// would report a narrowing every time somebody renamed a handle
+	// without giving anything up — and would MISS the real one, where a
+	// rule's text is replaced under an id that stayed put.
+	union := append([]rulefile.Rule(nil), headRules...)
 	var narrowings []Narrowing
 	seen := map[string]bool{}
-	for _, line := range dataLines(baseText) {
-		key := sameAs(line)
+	for _, rule := range baseRules {
+		key := sameAs(rule.Text)
 		if inHead[key] || seen[key] {
 			continue
 		}
 		seen[key] = true
-		union = append(union, line)
-		narrowings = append(narrowings, Narrowing{Path: path, Line: line})
+		union = append(union, rule)
+		narrowings = append(narrowings, Narrowing{Path: path, Rule: rule.ID})
 	}
 	return union, narrowings, nil
-}
-
-// dataLines returns the lines of a rule file that state a rule: blanks
-// and comments carry prose for a reader and declare nothing.
-func dataLines(text string) []string {
-	var out []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
 }

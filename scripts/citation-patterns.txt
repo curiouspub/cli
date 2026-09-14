@@ -15,6 +15,20 @@
 # them, and that is not fastidiousness: the guard reads these comment
 # lines like any other prose in the repository, so an example written out
 # here would be a citation shipping inside the file that forbids
+#
+# EVERY DATA LINE CARRIES AN ID, and the id comes first: an id, a space,
+# and then the rule verbatim. A rule has to be referable from outside
+# this file — by a report, and by a ledger of matches already published —
+# and until the column existed the only handle was the rule's own text,
+# which for a regular expression means quoting the expression into a log.
+#
+# THESE IDS NAME SHAPES RATHER THAN INSTANCES, which is the same
+# discipline the comments here already follow: an id printed in a run's
+# log must disclose no more than this file's own prose does.
+#
+# AN ID IS STABLE. A recorded match is remembered by it, so changing one
+# silently re-points every record that named it. Add new rules with new
+# ids; never re-spell an existing one to tidy it up.
 # citations. Only the pattern lines below are exempt.
 #
 # THE BOUNDARY, in one sentence: the NAME of a sibling repository may be
@@ -29,19 +43,19 @@
 # heading. Optional whitespace after the sign, including a NON-BREAKING
 # space: typed in a word processor the separator is often U+00A0, which
 # RE2's \s does not match, and the citation reads identically.
-§[\s\x{00A0}]*[0-9]+(\.[0-9]+)*
+section-sign  §[\s\x{00A0}]*[0-9]+(\.[0-9]+)*
 
 # A document version string, written as "spec" followed by a lowercase
 # "v" and a dotted number.
-(?i)\bspec[ _-]?v[0-9]+(\.[0-9]+)+\b
+doc-version  (?i)\bspec[ _-]?v[0-9]+(\.[0-9]+)+\b
 
 # An internal task identifier: the capital letter T, a hyphen, and
 # digits.
-\bT-[0-9]+\b
+task-id  \bT-[0-9]+\b
 
 # An internal ruling identifier: the capital letter R, a hyphen, and
 # digits.
-\bR-[0-9]+\b
+ruling-id  \bR-[0-9]+\b
 
 # An internal round identifier: the capital letter R, digits, a hyphen
 # and digits. The same shape as the cross-epic identifier further down,
@@ -68,18 +82,18 @@
 # pattern was proved on are no longer reachable from any ref and cannot
 # become a self-test commit; see tools/surfacecheck's own note on why
 # an amended-away message can never be a control.
-\bR[0-9]+-[0-9]+\b
+round-id  \bR[0-9]+-[0-9]+\b
 
 # An internal epic identifier, spelled out as a word followed by a
 # number.
-(?i)\bEpic[ -]?[0-9]+\b
+epic-id  (?i)\bEpic[ -]?[0-9]+\b
 
 # An internal decision identifier: a single capital letter directly
 # followed by digits, with no separator. Two forms, and the gap between
 # them is deliberate.
 #
 # Set off in parentheses — unambiguous, so matched bare:
-\([A-Z][0-9]+\)
+decision-id-bracketed  \([A-Z][0-9]+\)
 
 # Or introduced by a citing word. This form is CONTEXT-CUED rather than
 # bare, and that is a considered limit, not an oversight: a bare
@@ -88,12 +102,12 @@
 # capital-letter-plus-digits token a Go source file may contain. A guard
 # that cries wolf on its first run is a guard somebody disables, so this
 # one asks for a citing word and accepts that "the D7 rule" slips past.
-\b(?i:see|per|ruled|rule|ruling|decision|finding)\s+[A-Z][0-9]+\b
+decision-id-cued  \b(?i:see|per|ruled|rule|ruling|decision|finding)\s+[A-Z][0-9]+\b
 
 # Gap and cross-epic identifiers, which have no ambiguous twin and so are
 # matched bare.
-\bGAP-[0-9]+\b
-\bE[0-9]+-[0-9]+\b
+gap-id  \bGAP-[0-9]+\b
+cross-epic-id  \bE[0-9]+-[0-9]+\b
 
 # Finding identifiers from this project's review registers. NAMED
 # prefixes rather than a generic [A-Z]+-[0-9]+, which would red on UTF-8,
@@ -101,18 +115,18 @@
 # use. The register that produced this very file names its findings with
 # exactly these prefixes, and a comment citing one of them is the next
 # natural sentence somebody writes in a guard.
-\b(S|M|F|RQ|PUB|CMD)-[0-9]+\b
-\bG[0-9]-[0-9]+\b
+register-finding-id  \b(S|M|F|RQ|PUB|CMD)-[0-9]+\b
+gate-finding-id  \bG[0-9]-[0-9]+\b
 
 # A path segment naming the private documentation tree. Both separators:
 # a Windows-style path is the same disclosure, and this repo's CI runs on
 # Windows, so the backslash form is not hypothetical.
-\bdocs/epic
-\bdocs\\epic
-\bdocs/(tasks|curious-mvp-spec)
-\bdocs\\(tasks|curious-mvp-spec)
-\bplatform/docs
-\bplatform\\docs
+paper-tree-epics-slash  \bdocs/epic
+paper-tree-epics-backslash  \bdocs\\epic
+paper-tree-docs-slash  \bdocs/(tasks|curious-mvp-spec)
+paper-tree-docs-backslash  \bdocs\\(tasks|curious-mvp-spec)
+paper-tree-sibling-slash  \bplatform/docs
+paper-tree-sibling-backslash  \bplatform\\docs
 
 # The control plane's storage key scheme: an item-key prefix immediately
 # followed by "#".
@@ -124,7 +138,7 @@
 # is the canonical one the rule's own home carries; it is narrower than
 # "any uppercase word", so a NEW prefix invented later is not caught until
 # it is added here, and that trade is taken knowingly.
-\b(DEPLOY|SITE|TOKEN|CODE|EMAIL|QUOTA|CAP|WAIT|NAME|FLAG)#
+item-key-prefix  \b(DEPLOY|SITE|TOKEN|CODE|EMAIL|QUOTA|CAP|WAIT|NAME|FLAG)#
 
 # Deployment-estate identifiers: the resource names and endpoint shapes
 # that say WHERE this service runs. Ruled 2026-09-06 — what serves the
@@ -140,14 +154,14 @@
 # path — the dependency guard's denylist has to spell provider module
 # paths out loud to do its job, and a pattern matching those would red
 # this repository against its own guard.
-\barn:[a-z0-9-]+:[a-z0-9-]+:
-\.amazonaws\.com\b
-\b[0-9]{12}\.dkr\.ecr\.
-\.blob\.core\.windows\.net\b
-\.azurewebsites\.net\b
-\.cloudfunctions\.net\b
-\.googleusercontent\.com\b
-\.r2\.cloudflarestorage\.com\b
+estate-resource-id  \barn:[a-z0-9-]+:[a-z0-9-]+:
+estate-service-host  \.amazonaws\.com\b
+estate-registry-host  \b[0-9]{12}\.dkr\.ecr\.
+estate-blob-host  \.blob\.core\.windows\.net\b
+estate-webapp-host  \.azurewebsites\.net\b
+estate-function-host  \.cloudfunctions\.net\b
+estate-usercontent-host  \.googleusercontent\.com\b
+estate-object-store-host  \.r2\.cloudflarestorage\.com\b
 
 # Provider and service vocabulary is NOT matched here. It moved to
 # scripts/vendor-terms.txt and is matched by TOKENISING identifiers
@@ -185,7 +199,7 @@
 # The general shape, for whoever extends this list next: a phrase earns
 # a place here only if following it requires a document the reader
 # cannot open. A phrase that merely sounds internal does not.
-\bLEARNINGS\b
-(?i:\bacceptance (table|check|row|bullet)s?\b)
-(?i:\bthe task file\b)
-(?i:\bthe task's\b)
+private-register-name  \bLEARNINGS\b
+private-artefact-phrase  (?i:\bacceptance (table|check|row|bullet)s?\b)
+private-file-phrase  (?i:\bthe task file\b)
+private-possessive-phrase  (?i:\bthe task's\b)

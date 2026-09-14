@@ -48,6 +48,20 @@ func clonedRepo(t *testing.T) *fixture {
 	f.git("config", "user.name", "surface check fixture")
 	f.git("config", "user.email", "fixture@example.invalid")
 	f.git("config", "commit.gpgsign", "false")
+
+	// THE RULE FILES ARE TAKEN FROM THIS WORKING TREE, not from whatever
+	// the clone's tip carries, and they are left UNCOMMITTED because that
+	// is exactly where the head end of a range reads them from.
+	//
+	// A clone's tip is history. It can predate any change to these files
+	// — the id column, a pattern, a term — so a row that did not do this
+	// would be measuring the checker against a vocabulary somebody
+	// retired months ago, and would go green or red for reasons nothing
+	// in the row can see. The subject of every row below is the checker
+	// against the vocabulary this repository declares NOW.
+	for _, path := range []string{citationPatternsPath, vendorTermsPath} {
+		f.write(path, realRuleFile(t, path))
+	}
 	return f
 }
 
@@ -152,8 +166,16 @@ func TestTheRangeCheckAnswersTheThreeWaysItCan(t *testing.T) {
 		// THE ATTACK THE UNION EXISTS FOR, end to end: one push deletes
 		// the line that would catch it and adds the message, together.
 		f := clonedRepo(t)
-		base := strings.TrimSpace(f.git("rev-parse", "HEAD"))
-		f.write(citationPatternsPath, withoutLine(t, realRuleFile(t, citationPatternsPath), removed))
+		// THE BASE IS PINNED TO THE FILE THIS ROW IS ABOUT, rather than
+		// to whatever the clone's tip happens to carry. The row asks what
+		// happens when a range RETIRES a named rule, so the base has to
+		// be a revision that declares that rule under that name — and the
+		// tip of a clone is history, which may predate the id column
+		// entirely and would have the narrowing reported under a
+		// synthesised handle instead.
+		f.write(citationPatternsPath, realRuleFile(t, citationPatternsPath))
+		base := f.commit("the rule file as this working tree declares it", citationPatternsPath)
+		f.write(citationPatternsPath, withoutRule(t, realRuleFile(t, citationPatternsPath), removed))
 		head := f.commit("guard: retire a pattern\n\nand "+phrase+" while we are here\n",
 			citationPatternsPath)
 
@@ -175,8 +197,16 @@ func TestTheRangeCheckAnswersTheThreeWaysItCan(t *testing.T) {
 		// exactly what is being given up, rather than as a red nobody can
 		// separate from the rest of a change.
 		f := clonedRepo(t)
-		base := strings.TrimSpace(f.git("rev-parse", "HEAD"))
-		f.write(citationPatternsPath, withoutLine(t, realRuleFile(t, citationPatternsPath), removed))
+		// THE BASE IS PINNED TO THE FILE THIS ROW IS ABOUT, rather than
+		// to whatever the clone's tip happens to carry. The row asks what
+		// happens when a range RETIRES a named rule, so the base has to
+		// be a revision that declares that rule under that name — and the
+		// tip of a clone is history, which may predate the id column
+		// entirely and would have the narrowing reported under a
+		// synthesised handle instead.
+		f.write(citationPatternsPath, realRuleFile(t, citationPatternsPath))
+		base := f.commit("the rule file as this working tree declares it", citationPatternsPath)
+		f.write(citationPatternsPath, withoutRule(t, realRuleFile(t, citationPatternsPath), removed))
 		head := f.commit("guard: retire a pattern\n", citationPatternsPath)
 
 		code, stdout, _ := checked(t, "-repo", f.dir, "-base", base, "-head", head)
@@ -247,6 +277,44 @@ func TestTheRangeCheckAnswersTheThreeWaysItCan(t *testing.T) {
 			t.Error("an unresolvable range is spelled the same way as a clean one")
 		}
 	})
+}
+
+// TestAMalformedCurrentManifestCannotReportACleanRange is the end-to-end
+// regression for the historical reader's former all-or-nothing fallback.
+// One duplicate id used to rewrite every valid vendor line into dead text,
+// after which a message carrying a real term was reported as clean.
+func TestAMalformedCurrentManifestCannotReportACleanRange(t *testing.T) {
+	rules := realRules(t)
+	term, _, _ := aForbiddenName(t, rules)
+	f := clonedRepo(t)
+
+	vendor := realRuleFile(t, vendorTermsPath)
+	var duplicate string
+	for _, line := range strings.Split(vendor, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			duplicate = line
+			break
+		}
+	}
+	if duplicate == "" {
+		t.Fatal("the vendor control has no data line to duplicate")
+	}
+	f.write(vendorTermsPath, vendor+"\n"+duplicate+"\n")
+	base := f.commit("a malformed vocabulary", vendorTermsPath)
+	head := f.commit("handoff to " + term + " runtime")
+
+	code, stdout, stderr := checked(t, "-repo", f.dir, "-base", base, "-head", head)
+	if code != exitUndetermined {
+		t.Fatalf("exit %d, want %d — malformed rules produced a verdict\nstdout:\n%s\nstderr:\n%s",
+			code, exitUndetermined, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "vocabulary could not be assembled") {
+		t.Errorf("the refusal does not identify the unread vocabulary:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "clean.") {
+		t.Errorf("the malformed vocabulary reported a clean range:\n%s", stdout)
+	}
 }
 
 // ---------------------------------------------------------------------

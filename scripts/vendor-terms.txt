@@ -21,45 +21,61 @@
 # merely contains those letters.
 #
 # One entry per line. Blank lines and lines starting with "#" ignored.
+#
+# EVERY DATA LINE CARRIES AN ID, and the id comes first: an id, a space,
+# and then the entry verbatim. It is what a report names when this rule
+# fires, and what a ledger of already-published matches records.
+#
+# THE IDS ARE NUMBERED RATHER THAN NAMED, and that is the point rather
+# than laziness. The entries in this file ARE the strings the rule exists
+# to keep out of published text, so an id spelling one of them would
+# publish it into every run log that reports a match — on a fork's pull
+# request, a log more public than the surface being read. A number
+# discloses nothing and sits on the same line as the entry it names, so
+# nothing here is harder to read.
+#
+# AN ID IS STABLE, AND RENUMBERING BREAKS RECORDS. Append new entries at
+# the end with the next number; never renumber to close a gap. A deleted
+# entry leaves its number retired.
 # This is a RULE FILE: its data lines are exempt from the vendor check
 # only, never from any other pattern, and its comment lines are scanned
 # like all other prose.
-aws
-amazon
-ec2
-s3
-dynamodb
-cloudfront
-lambda
-ses
-sqs
-sns
-kinesis
-fargate
-route53
-cloudwatch
-elasticbeanstalk
-azure
-cosmosdb
-blobstorage
-appservice
-aks
-azurefunctions
-gcp
-gcs
-bigquery
-cloudrun
-gke
-pubsub
-firestore
-cloudsql
-appengine
-cloudflare
-r2
-durableobjects
-digitalocean
-droplet
-linode
-hetzner
-scaleway
-vultr
+vendor-01  aws
+vendor-02  amazon
+vendor-03  ec2
+vendor-04  s3
+vendor-05  dynamodb
+vendor-06  cloudfront
+vendor-07  lambda
+vendor-08  ses
+vendor-09  sqs
+vendor-10  sns
+vendor-11  kinesis
+vendor-12  fargate
+vendor-13  route53
+vendor-14  cloudwatch
+vendor-15  elasticbeanstalk
+vendor-16  azure
+vendor-17  cosmosdb
+vendor-18  blobstorage
+vendor-19  appservice
+vendor-20  aks
+vendor-21  azurefunctions
+vendor-22  gcp
+vendor-23  gcs
+vendor-24  bigquery
+vendor-25  cloudrun
+vendor-26  gke
+vendor-27  pubsub
+vendor-28  firestore
+vendor-29  cloudsql
+vendor-30  appengine
+vendor-31  cloudflare
+vendor-32  r2
+vendor-33  durableobjects
+vendor-34  digitalocean
+vendor-35  droplet
+vendor-36  linode
+vendor-37  hetzner
+vendor-38  scaleway
+vendor-39  vultr

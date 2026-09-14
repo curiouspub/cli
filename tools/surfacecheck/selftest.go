@@ -1,8 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
+)
+
+const (
+	vendorControlID     = "vendor-01"
+	vendorControlDigest = "7d1507284a5757cac6b62708a4ef00bfc5d695256489cb704f12b4b9e6255df2"
 )
 
 // The commits this check proves itself against, before it is trusted with
@@ -78,6 +84,36 @@ func selfTest(r repo, rules Rules, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "self-test: %s reported %d finding(s), as it must\n", short(sha), len(found))
 	}
+
+	// THE OTHER HALF OF THE VOCABULARY NEEDS ITS OWN CONTROL. No
+	// reachable commit message carries a provider finding, and publishing
+	// one merely to test the check would create the leak being prevented.
+	// The digest pins one already-declared term without copying or
+	// printing it. A loader that prefixes that term with its manifest id
+	// cannot find this digest and therefore cannot certify itself.
+	var vendorControl string
+	for term, id := range rules.VendorTerms() {
+		digest := sha256.Sum256([]byte(term))
+		if id == vendorControlID && fmt.Sprintf("%x", digest) == vendorControlDigest {
+			vendorControl = term
+			break
+		}
+	}
+	if vendorControl == "" {
+		return fmt.Errorf("the self-test could not find the pinned entry %s in the provider "+
+			"vocabulary. Either that rule changed or the loader changed its text; in either "+
+			"case the vendor half has no known input and cannot certify a clean range",
+			vendorControlID)
+	}
+	vendorFound := rules.Scan("provider control", vendorControl)
+	if len(vendorFound) != 1 || !vendorFound[0].Infrastructure ||
+		vendorFound[0].PatternID != vendorControlID {
+		return fmt.Errorf("the self-test's pinned provider entry %s produced %d unexpected "+
+			"finding(s). The vendor half has stopped recognising a known input, so a clean "+
+			"range would not be evidence that it looked", vendorControlID, len(vendorFound))
+	}
+	fmt.Fprintf(out, "self-test: %s reported one infrastructure finding, as it must\n",
+		vendorControlID)
 
 	found, err := scanCommit(r, rules, cleanCommit)
 	if err != nil {
