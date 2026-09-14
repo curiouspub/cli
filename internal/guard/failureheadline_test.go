@@ -51,6 +51,16 @@ func TestEveryFailureSiteDeclaresAStage(t *testing.T) {
 			continue
 		}
 		for _, o := range declared {
+			if o.expr == "" {
+				// A LITERAL WITH NO STAGE FIELD still produces a Stage
+				// obligation, with nothing in it. Reporting that as a stage
+				// declared as "" named a value that is not there; the defect
+				// is that the site says nothing, and the row says so.
+				t.Errorf("%s constructs a failure and declares no Stage.\n"+
+					"The stage is half of the key a headline is filed under, and a site that does "+
+					"not say where the person was cannot be filed at all.", where)
+				break
+			}
 			if len(o.values) != 1 || !declaredStage(o.values[0]) {
 				t.Errorf("%s declares its stage as %q, which is not a declared ui.Stage constant.\n"+
 					"A stage is something the site says in the vocabulary internal/ui publishes; "+
