@@ -1746,3 +1746,68 @@ func TestTheSurfaceCheckRunsWhenItMustAndCanSeeWhatItNeeds(t *testing.T) {
 			}
 		})
 }
+
+// TestTheQueuesOwnBranchesAreNotPushedRuns holds the push trigger's one
+// exclusion.
+//
+// THE MERGE QUEUE BUILDS EACH ENTRY ON A BRANCH IT PUSHES, under
+// gh-readonly-queue/, and a push trigger over every branch fires on that
+// push as well as on the merge_group event the queue exists to raise. One
+// candidate commit then ran the whole matrix twice, and a red in either run
+// ejected the entry. Measured over 53 hosted macOS jobs, one timing row alone
+// read past its margin floor in 2 of them; a pull request meets macOS about
+// four times on its way in, one of them this duplicate, which put its chance
+// of a red from that one row at about fourteen per cent.
+//
+// ORDER IS PART OF THE RULE. A pattern list is read in order and a later
+// match wins, so an exclusion written before the pattern it narrows excludes
+// nothing, and the file would still look as though it did.
+func TestTheQueuesOwnBranchesAreNotPushedRuns(t *testing.T) {
+	root := moduleRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ciWorkflow)))
+	if err != nil {
+		t.Fatalf("reading %s: %v", ciWorkflow, err)
+	}
+	triggers, ok := topLevelBlock(readYAMLLines(string(data)), "on")
+	if !ok {
+		t.Fatalf("%s declares no triggers at all", ciWorkflow)
+	}
+	pushAt := findKey(triggers, "push")
+	if pushAt < 0 {
+		t.Fatalf("%s does not run on a push, so the surface check never reads a "+
+			"pushed range and this row has nothing to hold", ciWorkflow)
+	}
+	push := blockAt(triggers, pushAt)
+	branchesAt := findKey(push, "branches")
+	if branchesAt < 0 {
+		t.Fatalf("%s's push trigger names no branches, so it takes every branch — "+
+			"the merge queue's own included", ciWorkflow)
+	}
+
+	const everything, queue = "**", "!gh-readonly-queue/**"
+	patterns := listValues(push, branchesAt)
+	at := map[string]int{}
+	for i, p := range patterns {
+		at[p] = i
+	}
+	ei, covers := at[everything]
+	if !covers {
+		t.Errorf("%s's push trigger no longer covers every branch (%q): %v.\n"+
+			"The surface check reads the range a push publishes, and a branch this "+
+			"does not run on is a branch whose messages nobody reads.",
+			ciWorkflow, everything, patterns)
+	}
+	qi, excludes := at[queue]
+	if !excludes {
+		t.Fatalf("%s's push trigger does not exclude the merge queue's branches (%q): %v.\n"+
+			"Every queue entry then runs the whole matrix twice on one commit — once "+
+			"for the push the queue makes and once for merge_group — and a red in "+
+			"either run ejects it.", ciWorkflow, queue, patterns)
+	}
+	if covers && qi < ei {
+		t.Errorf("%s's push trigger lists %q before %q: %v.\n"+
+			"Patterns are read in order and a later match wins, so the pattern after "+
+			"the exclusion overrides it and it excludes nothing.",
+			ciWorkflow, queue, everything, patterns)
+	}
+}
