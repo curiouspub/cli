@@ -195,7 +195,7 @@ func describedWhat(value string) string {
 	if kind == "literal" || kind == "format" {
 		return strconv.Quote(text)
 	}
-	return "a What composed at run time (" + text + ")"
+	return "a What composed at run time"
 }
 
 func liveCatalogCensus(t *testing.T) catalogCensus {
@@ -341,4 +341,98 @@ func TestAReadmeHeadlineTheCatalogDoesNotCarryReds(t *testing.T) {
 	if _, _, err := readmeHeadlineLines(readmeHeadlinesBegin + "\n> something\n"); err == nil {
 		t.Error("a block that never closes was read as a closed one, which would pass by ending early")
 	}
+}
+
+// TestEveryComposedHeadlineHasOneConstructorAndOneShape is coherence for a
+// What the catalog does not quote.
+//
+// A composed What has no sentence to compare, so the row compares how it
+// is BUILT: which constructor makes it, and the shape of the What that
+// constructor is given — a concatenation's operand kinds, a helper that
+// writes it in its own body, a builder's result — never its words. RULED
+// 2026-09-14: one constructor and one shape per composed (id, Stage). Two
+// sites may build it when they build it the same way; upload-link-expired
+// is built at two sites through one helper, and that is agreement.
+func TestEveryComposedHeadlineHasOneConstructorAndOneShape(t *testing.T) {
+	census := liveCatalogCensus(t)
+	composed, multiSite := 0, 0
+	for _, id := range headlineKeys(census.builders) {
+		for _, stage := range headlineKeys(census.builders[id]) {
+			builders := census.builders[id][stage]
+			composed++
+			sites := map[string]bool{}
+			for _, s := range builders {
+				for site := range s {
+					sites[site] = true
+				}
+			}
+			if len(sites) > 1 {
+				multiSite++
+			}
+		}
+	}
+	if composed == 0 {
+		t.Fatal("the census holds no composed (id, Stage), so this row compared nothing")
+	}
+	for _, problem := range composedDisagreements(census.builders) {
+		t.Error(problem)
+	}
+	if !t.Failed() {
+		t.Logf("%d composed (id, Stage) pairs, each built one way; %d of them built at more than one site",
+			composed, multiSite)
+	}
+}
+
+// TestTwoConstructorsForOneComposedHeadlineRedNamingBoth is the named
+// fixture for the row above, and its control is the case the ruling
+// allows.
+func TestTwoConstructorsForOneComposedHeadlineRedNamingBoth(t *testing.T) {
+	disagree := map[string]map[string]map[string]map[string]bool{
+		"upload-link-expired": {"uploads": {
+			"flow.uploadFailed · inside uploadFailed":                {"internal/flow/upload.go:373": true},
+			"ui.NewFailure · concatenation(literal, value, literal)": {"internal/flow/upload.go:341": true},
+		}},
+	}
+	problems := composedDisagreements(disagree)
+	if len(problems) != 1 {
+		t.Fatalf("one disagreement produced %d findings, want 1: %v", len(problems), problems)
+	}
+	for _, want := range []string{"internal/flow/upload.go:341", "internal/flow/upload.go:373",
+		"flow.uploadFailed", "ui.NewFailure"} {
+		if !strings.Contains(problems[0], want) {
+			t.Errorf("the finding does not name %s:\n%s", want, problems[0])
+		}
+	}
+	agree := map[string]map[string]map[string]map[string]bool{
+		"upload-link-expired": {"uploads": {
+			"flow.uploadFailed · inside uploadFailed": {
+				"internal/flow/upload.go:341": true, "internal/flow/upload.go:373": true},
+		}},
+	}
+	if got := composedDisagreements(agree); len(got) != 0 {
+		t.Errorf("two sites building one composed What the same way were reported as a disagreement: %v", got)
+	}
+}
+
+// composedDisagreements names every composed (id, Stage) built more than
+// one way, with the sites of each.
+func composedDisagreements(builders map[string]map[string]map[string]map[string]bool) []string {
+	var out []string
+	for _, id := range headlineKeys(builders) {
+		for _, stage := range headlineKeys(builders[id]) {
+			ways := builders[id][stage]
+			if len(ways) < 2 {
+				continue
+			}
+			var described []string
+			for _, way := range headlineKeys(ways) {
+				described = append(described, fmt.Sprintf("  %s at %s", way, strings.Join(headlineKeys(ways[way]), ", ")))
+			}
+			out = append(out, fmt.Sprintf("id %q at stage %q composes its What %d different ways:\n%s\n"+
+				"A composed headline is not quoted, so what holds it together is how it is built: one "+
+				"constructor and one shape per (id, Stage). Two sites may build it, the same way.",
+				id, stage, len(ways), strings.Join(described, "\n")))
+		}
+	}
+	return out
 }

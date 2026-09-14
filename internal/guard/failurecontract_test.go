@@ -85,17 +85,18 @@ func activeFailureID(value string) bool {
 }
 
 type obligation struct {
-	where   string
-	field   string
-	expr    string
-	chain   string
-	values  []string // resolved possibilities; empty means unresolved
-	problem string   // a structurally forbidden write or address-taking
-	binding string   // reaching definitions for an obligation-ledger expression
-	family  string   // the check family a finding producer's What belongs to
-	source  parsedFile
-	within  *ast.FuncDecl
-	before  token.Pos
+	where       string
+	field       string
+	expr        string
+	chain       string
+	values      []string // resolved possibilities; empty means unresolved
+	problem     string   // a structurally forbidden write or address-taking
+	binding     string   // reaching definitions for an obligation-ledger expression
+	family      string   // the check family a finding producer's What belongs to
+	constructor string   // what built the failure or finding a What belongs to
+	source      parsedFile
+	within      *ast.FuncDecl
+	before      token.Pos
 }
 
 // summary is one verified helper relationship: the parameter index whose
@@ -271,7 +272,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 						resolveIn(site, "Next", field("Next"), text, p, "action", in, 0),
 						resolveIn(site, "NextText", field("NextText"), text, p, "text", in, 0),
 						resolveStage(site, field("Stage"), text, p, in),
-						resolveWhat(site, "What", field("What"), text, p, in, 0))
+						withConstructor(resolveWhat(site, "What", field("What"), text, p, in, 0), "ui.Failure literal"))
 				}
 				for range embeddedZeros {
 					sitesVisited++
@@ -341,10 +342,11 @@ func TestTheFailureContractHolds(t *testing.T) {
 			// What parameter is read at the caller; one that composes the
 			// sentence in its own body makes it composed for every caller.
 			what := obligation{where: site, field: "What", source: p, within: in,
-				expr: "What composed inside " + s.fn, values: []string{"composed:helper"}}
+				expr: "What composed inside " + s.fn, values: []string{"composed:inside " + s.fn}}
 			if s.what >= 0 {
 				what = resolveWhat(site, "What", at(s.what), text, p, in, 0)
 			}
+			what.constructor = shortFuncName(calledFuncKey(call.Fun, in, p.info))
 			obs = append(obs,
 				resolveIn(site, "ID", at(s.idArg), text, p, "id", in, 0),
 				resolveIn(site, "Next", at(s.act), text, p, "action", in, 0),
@@ -381,8 +383,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 				if fs.what < len(v.Args) {
 					whatExpr = v.Args[fs.what]
 				}
-				obs = append(obs, familyWhat(familyExpr,
-					resolveWhat(site, "FamilyWhat", whatExpr, text, p, in, 0), p))
+				obs = append(obs, familyWhat(familyExpr, withConstructor(resolveWhat(site, "FamilyWhat", whatExpr, text, p, in, 0), shortFuncName(calledFuncKey(v.Fun, in, p.info))), p))
 			case *ast.CompositeLit:
 				if !isFindingType(p.info.TypeOf(v)) {
 					return true
@@ -411,6 +412,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 					what.expr = "no What, so the failure falls back to the finding's Message"
 					what.values = []string{"composed:message"}
 				}
+				what.constructor = "check.Finding literal"
 				obs = append(obs, familyWhat(familyExpr, what, p))
 			}
 			return true
@@ -1894,9 +1896,13 @@ func resolveWhat(site, field string, e ast.Expr, text func(parsedFile, ast.Node)
 				return o
 			}
 		}
-		o.values = []string{"composed:call"}
+		callee := shortFuncName(calledFuncKey(v.Fun, within, p.info))
+		if callee == "" {
+			callee = calleeName(v.Fun)
+		}
+		o.values = []string{"composed:call to " + callee}
 	case *ast.BinaryExpr:
-		o.values = []string{"composed:concatenation"}
+		o.values = []string{"composed:" + concatenationShape(v, p.info)}
 	case *ast.Ident:
 		if within != nil {
 			if def, ok := soleDefinitionAt(v.Name, within, v.Pos()); ok {
@@ -1905,7 +1911,7 @@ func resolveWhat(site, field string, e ast.Expr, text func(parsedFile, ast.Node)
 		}
 		o.values = []string{"composed:variable"}
 	case *ast.SelectorExpr:
-		o.values = []string{"composed:variable"}
+		o.values = []string{"composed:field"}
 	}
 	return o
 }
@@ -2083,4 +2089,40 @@ func verifyFindingSummaries(files []parsedFile) map[string]findingSummary {
 		}
 	})
 	return out
+}
+
+// withConstructor records what built the failure or finding a What
+// belongs to, which is half of a composed headline's shape.
+func withConstructor(o obligation, constructor string) obligation {
+	o.constructor = constructor
+	return o
+}
+
+// shortFuncName is a function key without this module's internal prefix:
+// flow.uploadFailed, ui.NewFailure, preflight.hardStop.
+func shortFuncName(key string) string {
+	return strings.TrimPrefix(key, modulePath+"/internal/")
+}
+
+// concatenationShape is a concatenation's operands as KINDS, never as
+// text: a constant is a literal and anything else is a value. It is the
+// shape a composed What keeps when its words may change and its assembly
+// may not.
+func concatenationShape(e *ast.BinaryExpr, info *types.Info) string {
+	var kinds []string
+	var walk func(ast.Expr)
+	walk = func(x ast.Expr) {
+		if b, ok := unparen(x).(*ast.BinaryExpr); ok && b.Op == token.ADD {
+			walk(b.X)
+			walk(b.Y)
+			return
+		}
+		if _, constant := typedStringConstant(info, x); constant {
+			kinds = append(kinds, "literal")
+			return
+		}
+		kinds = append(kinds, "value")
+	}
+	walk(e)
+	return "concatenation(" + strings.Join(kinds, ", ") + ")"
 }

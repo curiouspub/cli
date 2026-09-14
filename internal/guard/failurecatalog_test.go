@@ -150,40 +150,55 @@ func generatedFailureCatalog(t *testing.T, root string) []byte {
 }
 
 // catalogCensus is what production sites say about each failure id: the
-// actions they pass, the stages they declare, and the What each stage's
-// sites write. The generator serialises it and the headline rows read it,
-// so the artefact and the rows cannot disagree about what the sites say.
+// actions they pass, the stages they declare, the What each stage's sites
+// write, and how each composed What is built. The generator serialises it
+// and the headline rows read it, so the artefact and the rows cannot
+// disagree about what the sites say.
 type catalogCensus struct {
 	actions map[string]map[string]bool
 	stages  map[string]map[string]bool
-	// id -> stage -> What value -> the sites writing it
+	// id -> stage -> What value -> the sites writing it. A composed What is
+	// filed as "composed": its words are not the catalog's to quote, and how
+	// it is built is filed under builders instead.
 	whats map[string]map[string]map[string]map[string]bool
+	// id -> stage -> "constructor · shape" -> the sites building a composed What
+	builders map[string]map[string]map[string]map[string]bool
 }
 
 func catalogCensusFrom(t *testing.T, obs []obligation, families map[string]bool,
 	constants map[string]string) catalogCensus {
 	t.Helper()
 	c := catalogCensus{actions: map[string]map[string]bool{}, stages: map[string]map[string]bool{},
-		whats: map[string]map[string]map[string]map[string]bool{}}
+		whats:    map[string]map[string]map[string]map[string]bool{},
+		builders: map[string]map[string]map[string]map[string]bool{}}
 	for _, value := range constants {
 		c.actions[value] = map[string]bool{}
 		c.stages[value] = map[string]bool{}
 		c.whats[value] = map[string]map[string]map[string]bool{}
+		c.builders[value] = map[string]map[string]map[string]bool{}
 	}
-	addWhat := func(id, stage, value, site string) {
-		if c.whats[id][stage] == nil {
-			c.whats[id][stage] = map[string]map[string]bool{}
+	file := func(m map[string]map[string]map[string]map[string]bool, id, stage, key, site string) {
+		if m[id][stage] == nil {
+			m[id][stage] = map[string]map[string]bool{}
 		}
-		if c.whats[id][stage][value] == nil {
-			c.whats[id][stage][value] = map[string]bool{}
+		if m[id][stage][key] == nil {
+			m[id][stage][key] = map[string]bool{}
 		}
-		c.whats[id][stage][value][site] = true
+		m[id][stage][key][site] = true
+	}
+	addWhat := func(id, stage, value, site, constructor string) {
+		kind, shape, _ := strings.Cut(value, ":")
+		if kind == "composed" {
+			file(c.whats, id, stage, "composed", site)
+			file(c.builders, id, stage, constructor+" · "+shape, site)
+			return
+		}
+		file(c.whats, id, stage, value, site)
 	}
 
-	// family -> What value -> the sites writing it, read where each finding
-	// is built rather than at the one generic site that turns it into a
-	// failure.
-	familyWhats := map[string]map[string]map[string]bool{}
+	// family -> What value -> site -> constructor, read where each finding is
+	// built rather than at the one generic site that turns it into a failure.
+	familyWhats := map[string]map[string]map[string]string{}
 	groups := map[string][]obligation{}
 	for _, o := range obs {
 		if o.problem != "" {
@@ -195,12 +210,12 @@ func catalogCensusFrom(t *testing.T, obs []obligation, families map[string]bool,
 				continue
 			}
 			if familyWhats[o.family] == nil {
-				familyWhats[o.family] = map[string]map[string]bool{}
+				familyWhats[o.family] = map[string]map[string]string{}
 			}
 			if familyWhats[o.family][o.values[0]] == nil {
-				familyWhats[o.family][o.values[0]] = map[string]bool{}
+				familyWhats[o.family][o.values[0]] = map[string]string{}
 			}
-			familyWhats[o.family][o.values[0]][o.where] = true
+			familyWhats[o.family][o.values[0]][o.where] = o.constructor
 			continue
 		}
 		groups[o.source.target+"|"+o.where] = append(groups[o.source.target+"|"+o.where], o)
@@ -270,8 +285,8 @@ func catalogCensusFrom(t *testing.T, obs []obligation, families map[string]bool,
 			if familySite {
 				// The family's What is read where its finding is written.
 				for value, sites := range familyWhats[pair[0]] {
-					for site := range sites {
-						addWhat(pair[0], stage, value, site)
+					for site, constructor := range sites {
+						addWhat(pair[0], stage, value, site, constructor)
 					}
 				}
 				continue
@@ -280,7 +295,7 @@ func catalogCensusFrom(t *testing.T, obs []obligation, families map[string]bool,
 				t.Errorf("%s: the What of %q was not read", group[0].where, pair[0])
 				continue
 			}
-			addWhat(pair[0], stage, whatOb.values[0], group[0].where)
+			addWhat(pair[0], stage, whatOb.values[0], group[0].where, whatOb.constructor)
 		}
 	}
 	return c
