@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/curiouspub/cli/internal/leakcheck"
 	"github.com/curiouspub/cli/internal/rulefile"
 )
 
@@ -1284,5 +1285,109 @@ func TestAFixtureValueIsStdoutEvenWhenGitWarns(t *testing.T) {
 	id := strings.TrimSpace(f.git("hash-object", "-w", "lf.txt"))
 	if len(id) != 40 || strings.Trim(id, "0123456789abcdef") != "" {
 		t.Fatalf("the fixture returned %q as an object id — a diagnostic reached the value channel", id)
+	}
+}
+
+// TestAPlantFromTwoProvidersIsFoundForBoth is the two-provider control. A
+// scan proved against a single provider has been proved against the example
+// its author had in mind, so this row plants terms from two different
+// providers and requires a finding for each.
+//
+// THE PLANT IS COMPOSED AT RUN TIME AND NEVER COMMITTED. This repository is
+// world-readable, and a provider's name written into a fixture is the leak
+// the scan exists to catch. The row names two entries by id only, reads
+// their terms out of the live rule file as it runs, and plants them in a
+// temporary repository that is discarded afterwards. The two ids were chosen
+// from different providers when the row was written; the rule file does not
+// group its entries by provider, so that choice is recorded here rather than
+// derived.
+//
+// IT READS THE LIVE FILE ON PURPOSE. Removing either entry from the rule
+// file reds this row naming that entry, which is how it proves the scan
+// reads the file rather than a copy of it.
+func TestAPlantFromTwoProvidersIsFoundForBoth(t *testing.T) {
+	live, err := os.ReadFile(filepath.Join("../..", filepath.FromSlash(vendorTermsPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := map[string]string{}
+	for _, line := range strings.Split(string(live), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.HasPrefix(fields[0], "vendor-") {
+			terms[fields[0]] = fields[1]
+		}
+	}
+	pinned := []string{"vendor-16", "vendor-31"}
+	var plant strings.Builder
+	for _, id := range pinned {
+		term, ok := terms[id]
+		if !ok {
+			t.Fatalf("%s is not in %s, so this row cannot plant it and the two-provider control "+
+				"has lost a provider", id, vendorTermsPath)
+		}
+		plant.WriteString("the store runs on " + term + "\n")
+	}
+
+	f := newFixture(t)
+	f.write(vendorTermsPath, string(live))
+	f.write("notes.txt", plant.String())
+	head := f.commitAt("2026-01-01T00:00:00Z", "two providers", "notes.txt")
+	f.publish("refs/remotes/origin/main", head)
+
+	code, stdout, stderr := scanned(t, "-repo", f.dir, "-public")
+	if code != exitFindings {
+		t.Fatalf("exit %d, want %d — a plant from two providers was not reported\n%s\n%s",
+			code, exitFindings, stdout, stderr)
+	}
+	for _, id := range pinned {
+		if !strings.Contains(stdout, "public:"+id) {
+			t.Errorf("no finding for %s: a scan that catches one provider and not the other has "+
+				"been proved against one example\n%s", id, stdout)
+		}
+	}
+}
+
+// TestTheSiblingRepositoryNameIsNotAFinding holds a permission that used to
+// be held only by the rule file's contents. The citation manifest rules that
+// the NAME of a sibling repository may be written and its STRUCTURE may not,
+// and nothing failed if a later pattern began to capture the name. This row
+// checks the permitted form against the live manifests and requires zero
+// findings, so a pattern that starts to capture it reds here first.
+//
+// IT PROVES THE MANIFESTS LOADED BEFORE TRUSTING ZERO. An empty or unread
+// vocabulary also produces zero findings, so the row first requires the
+// structural form — a path into the sibling repository — to be caught. That
+// string is assembled at run time: written as one literal it would be the
+// finding it describes, in this file. The bare name is written literally, on
+// purpose: this committed file carrying it is part of what shows every reader
+// permits it.
+func TestTheSiblingRepositoryNameIsNotAFinding(t *testing.T) {
+	load := func(rel string) []rulefile.Rule {
+		t.Helper()
+		text, err := os.ReadFile(filepath.Join("../..", filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := rulefile.Parse(rel, string(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	rules, err := leakcheck.New(load(citationPatternsPath), load(vendorTermsPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	structure := "see " + "platform" + "/" + "docs" + "/index.md\n"
+	if got := rules.Check("README.md", structure); len(got) == 0 {
+		t.Fatal("a path into the sibling repository produced no finding, so the live manifests " +
+			"did not load and a zero below would mean nothing")
+	}
+
+	if got := rules.Check("README.md", "the other half is curiouspub/platform\n"); len(got) != 0 {
+		t.Fatalf("the permitted sibling-repository name produced %d finding(s): %v — a pattern now "+
+			"captures the NAME, which the citation manifest permits. If that boundary is meant to "+
+			"move, it moves in the manifest, deliberately.", len(got), got)
 	}
 }
