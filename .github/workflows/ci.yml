@@ -1,13 +1,29 @@
 name: CI
 
-# EVERY REF, and that is a change with a reason rather than a widening
-# for its own sake. The surface check below reads the range a push
+# EVERY REF BUT THE MERGE QUEUE'S OWN (see below), and that is a change
+# with a reason rather than a widening for its own sake. The surface
+# check below reads the range a push
 # publishes, and a job that never runs catches nothing: filtered to the
 # default branch, it would have examined exactly the pushes that had
 # already been reviewed and none of the ones where a message is written.
 # A tag is included because a tag is a published name carrying a
 # published message, and the release workflow is not the only way one
 # arrives.
+#
+# THE MERGE QUEUE'S OWN BRANCHES ARE EXCLUDED FROM THE PUSH TRIGGER, and
+# that is a change to this public workflow made for a measured reason. The
+# queue builds each entry on a branch it pushes under gh-readonly-queue/,
+# so a push trigger over every branch fired a run on that commit beside the
+# merge_group run the queue exists to raise: two whole matrices on one
+# candidate, and a red in either ejected the entry. Over 53 hosted macOS
+# jobs, one timing row alone read past its margin floor in 2 of them
+# (3.8%); a pull request met macOS about four times on its way in, one of
+# them this duplicate, which put its chance of a red from that one row at
+# about 14%. The merge_group run carries the same jobs, the surface check
+# included.
+#
+# ORDER MATTERS: a later pattern wins, so the exclusion comes after the
+# pattern it narrows. A row in internal/guard holds both halves.
 #
 # THE MERGE-QUEUE TRIGGER NEEDS A SETTING NOBODY CAN MAKE FROM HERE, and
 # saying so is the difference between a trigger and coverage. A squash
@@ -40,7 +56,7 @@ name: CI
 # about the line would look wrong.
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!gh-readonly-queue/**']
     tags: ['**']
   pull_request:
     types: [opened, synchronize, reopened, edited]
