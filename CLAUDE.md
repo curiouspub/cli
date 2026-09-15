@@ -649,3 +649,10 @@ semver tags; a plain `go build` reports `dev` rather than guessing.
 
 **Error messages are part of the product — write them for a clumsy
 first-timer.** Every hard stop names an action the reader can take.
+
+## Style
+
+**One spelling per file: pick British or American and do not churn.**
+Both appear across this repository's copy, and a file that starts a
+sentence in one keeps it for the rest of that file rather than drifting
+between the two as later edits land.
