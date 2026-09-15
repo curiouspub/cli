@@ -671,7 +671,9 @@ to end. They are:
 | 3 | curious.pub is closed to this run right now (the kill switch, or a capacity cap) |
 | 130 | the run was interrupted (Ctrl-C, or a signal from outside it) |
 
-Useful in a script: only `0` means a deploy actually published.
+In a script, `0` means the run ended the way it meant to — which
+includes a deploy you cancelled yourself, not only one that published.
+Anything else names what stopped it.
 
 ## Contributing
 
