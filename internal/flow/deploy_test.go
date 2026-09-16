@@ -1675,6 +1675,64 @@ func TestTheWarningPromptIsAnsweredBeforeAnythingIsSent(t *testing.T) {
 	}
 }
 
+// TestAWarningAnsweredYesReachesThePackAndTheUpload is the OTHER half of
+// what the page promises about failing locally, and the half nothing
+// held.
+//
+// A hard stop sending nothing is covered next door, by
+// TestABrokenProjectSendsNothingAndAGoodOneSends — a project that cannot
+// deploy makes zero requests, and its control proves the instrument can
+// see one. What neither that row nor the prompt row above says is what
+// happens when the answer is YES: the prompt row asserts the question
+// came before anything was sent, which is satisfied just as well by a run
+// that then does nothing at all.
+//
+// So this asserts the continuation. A warning is not a refusal: answering
+// yes must carry the run through the pack and the upload, and both must
+// happen AFTER the question rather than beside it. Without that, "a
+// warning asks first" could describe a program that asks and then stops,
+// and the page would be promising something no row had ever observed.
+func TestAWarningAnsweredYesReachesThePackAndTheUpload(t *testing.T) {
+	run := newDeployRun(t, fixtureProject(t, "localhost-hits")).scriptedLogin()
+	// Continue past the warning, then decline the marketing question.
+	run.prompt.confirms = []answer{yes(), no()}
+
+	handoff, err := run.run()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+	defer handoff.Release()
+
+	events := run.journal.all()
+	prompt := indexOfEvent(events, "asked: Continue anyway?")
+	packed := indexOfEvent(events, "pack")
+	uploaded := indexOfEvent(events, "PUT (object store)")
+
+	if prompt < 0 {
+		t.Fatalf("the run never asked about the warning, so this row is about a path it did "+
+			"not take:\n  %s", strings.Join(events, "\n  "))
+	}
+	if packed < 0 || uploaded < 0 {
+		t.Fatalf("a warning answered yes did not reach the pack and the upload "+
+			"(pack %d, upload %d).\nA warning is not a refusal; the page says answering yes "+
+			"carries the run on.\n  %s", packed, uploaded, strings.Join(events, "\n  "))
+	}
+	// THE ORDER IS THE CLAIM, not merely that both happened. Packing or
+	// uploading before the question would mean the person was asked to
+	// approve something already done.
+	if packed < prompt || uploaded < prompt {
+		t.Errorf("the run packed at %d and uploaded at %d, and asked at %d — so it acted "+
+			"before it asked:\n  %s", packed, uploaded, prompt, strings.Join(events, "\n  "))
+	}
+	// AND THE STORE IS THE WITNESS. A journal line says this client
+	// believes it uploaded; the store having received exactly one body is
+	// the other end agreeing.
+	if got := len(run.store.received()); got != 1 {
+		t.Errorf("the store received %d upload(s), want exactly one — the page promises one "+
+			"upload per deploy", got)
+	}
+}
+
 // -------------------------------------------------------------------
 // What each ending costs
 // -------------------------------------------------------------------

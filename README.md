@@ -217,9 +217,10 @@ forever. Within `/v1`, fields and endpoints are added, never renamed,
 retyped, or removed. The contract-guard tests in `pkg/wire` enforce
 this mechanically; every field that exists carries meaning.
 
-**Fail fast, fail local.** The CLI checks your project before a single
-byte leaves your machine, and its error messages are written for a
-first-timer, not a compiler.
+**Fail fast, fail local.** If a pre-flight check stops the run, nothing
+leaves your machine: no login, no upload. A warning asks first; answer
+yes and curious logs in, packs and uploads. Every error message is
+written for a first-timer, not a compiler.
 
 ## Using the wire types
 
