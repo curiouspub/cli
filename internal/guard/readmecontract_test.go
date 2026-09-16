@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -340,42 +341,95 @@ const (
 	futureTenseInstall  = "the commands below are what installing will look like rather than what works today"
 )
 
+// htmlComment matches a comment in the markdown source, which a reader
+// never sees.
+var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// renderedProse is what a person actually reads: the source with every
+// HTML comment removed and the whitespace collapsed.
+//
+// A COMMENT IS NOT A DISCLAIMER. The sentence this row requires is there
+// to be READ, by somebody deciding whether they can install this today,
+// and markdown renders a comment to nothing at all. Searching the raw
+// source is satisfied by a sentence nobody can see — which is the same
+// class of defect as a check satisfied by an empty set, arriving through
+// the one row whose whole subject is what the page tells a stranger.
+func renderedProse(markdown string) string {
+	return normalizeSpace(htmlComment.ReplaceAllString(markdown, " "))
+}
+
+// readmeTopSection is the title block and the first section under it.
+//
+// THE PLACE MATTERS AND NOT ONLY THE PRESENCE. A reader deciding whether
+// this is installable today decides it in the first screen; the same
+// sentence four sections down is true and arrives after the decision.
+func readmeTopSection(readme string) string {
+	const heading = "\n## "
+	first := strings.Index(readme, heading)
+	if first < 0 {
+		return readme
+	}
+	rest := first + len(heading)
+	next := strings.Index(readme[rest:], heading)
+	if next < 0 {
+		return readme
+	}
+	return readme[:rest+next]
+}
+
+// reachableReleaseTags is every tag this checkout can reach from HEAD.
+//
+// IT REPLACED A STAND-IN. The row used to key on the wrapper's checksum
+// file still being an empty object, which is a FILE THIS REPOSITORY
+// WRITES rather than evidence about what has been released: it says a
+// release has not been built here, not that none exists, and somebody
+// filling it in by hand would have retired the row without publishing
+// anything. A tag reachable from the commit under test is the thing the
+// sentence is actually about.
+func reachableReleaseTags(t *testing.T, root string) []string {
+	t.Helper()
+	cmd := exec.Command("git", "tag", "--merged", "HEAD")
+	cmd.Dir = root
+	cmd.Env = gitSafeEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("asking git which tags this commit reaches: %v", err)
+	}
+	var tags []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if tag := strings.TrimSpace(line); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
+}
+
 // TestReadmePublicationStateRow holds the README to the one-directional
-// row: when npm/checksums.json is the placeholder {}, present-tense
-// install copy and the absent disclaimer both require a reachable release
-// tag that this tree does not have, so the disclaimer and the
-// future-tense framing must both be present. The row says nothing about
-// the other direction — a tagged tree may drop either — because nothing
-// requires present tense once a tag exists. An earlier version of this
-// row asserted both directions at once; the converse was never true,
-// since a tree that has a tag is free to go on saying what it said
-// before one existed.
+// rule: with no release tag reachable from this commit, the page must
+// say so where a reader will meet it, and must describe installing in
+// the future tense. The row says nothing about the other direction — a
+// tagged tree may drop either — because nothing requires present tense
+// once a release exists. An earlier version asserted both directions at
+// once; the converse was never true, since a tree that has a tag is free
+// to go on saying what it said before one existed.
 func TestReadmePublicationStateRow(t *testing.T) {
 	root := moduleRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "npm", "checksums.json"))
-	if err != nil {
-		t.Fatalf("reading npm/checksums.json: %v", err)
-	}
-	var checksums map[string]any
-	if err := json.Unmarshal(raw, &checksums); err != nil {
-		t.Fatalf("npm/checksums.json does not decode as an object: %v", err)
-	}
-	if len(checksums) != 0 {
-		// The checkable proxy says a release has happened. Nothing is
-		// required of the README in that direction, so this row has
-		// nothing to check — the day this tree carries real checksums is
-		// the day a person decides what the README now says.
-		t.Skip("npm/checksums.json is no longer the {} placeholder; the publication-state row " +
-			"requires nothing of the README once a release exists")
+	if tags := reachableReleaseTags(t, root); len(tags) > 0 {
+		t.Skipf("this commit reaches %d release tag(s) (%s), and the publication-state rule "+
+			"requires nothing of the README once a release exists",
+			len(tags), strings.Join(tags, ", "))
 	}
 
-	readme := normalizeSpace(readReadmeFile(t, root))
-	if !strings.Contains(readme, noReleaseDisclaimer) {
-		t.Errorf("npm/checksums.json is {} (no reachable release), and README.md does not carry "+
-			"the disclaimer sentence %q", noReleaseDisclaimer)
+	readme := readReadmeFile(t, root)
+	if top := renderedProse(readmeTopSection(readme)); !strings.Contains(top, noReleaseDisclaimer) {
+		t.Errorf("no release tag is reachable from this commit, and the README's opening does "+
+			"not carry the sentence %q as prose a reader sees.\nIt is the first thing somebody "+
+			"deciding whether they can install this today needs to know, so it belongs above "+
+			"the fold rather than in the section they reach afterwards — and a sentence inside "+
+			"an HTML comment is rendered to nothing.", noReleaseDisclaimer)
 	}
-	if !strings.Contains(readme, futureTenseInstall) {
-		t.Errorf("npm/checksums.json is {} (no reachable release), and README.md does not carry "+
+	if body := renderedProse(readme); !strings.Contains(body, futureTenseInstall) {
+		t.Errorf("no release tag is reachable from this commit, and README.md does not carry "+
 			"the future-tense framing %q", futureTenseInstall)
 	}
 }

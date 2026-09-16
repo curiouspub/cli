@@ -15,7 +15,8 @@ public.
 
 ## Status: pre-release
 
-The platform is not yet open. What exists here today:
+**Nothing is published yet.** There is no release, and no package on any
+registry. The platform is not open either. What exists here today:
 
 - **`pkg/wire`** — the `/v1` wire contract (types only, stdlib-only,
   importable as `github.com/curiouspub/cli/pkg/wire`).
@@ -71,11 +72,13 @@ address your site answers at.
 
 ## Installing it
 
-**Nothing is published yet.** There is no release and no package on any
-registry, so the commands below are what installing will look like
-rather than what works today. This section says so out loud because a
-repository describing unbuilt things in the present tense has told its
-reader something false.
+**Still nothing to install.** As the top of this page says, there is no
+release yet, so the commands below are what installing will look like
+rather than what works today. This section repeats it rather than
+relying on you having read that one, because a repository describing
+unbuilt things in the present tense has told its reader something false
+— and the reader most likely to act on it is the one who came straight
+here.
 
 What is in the tree now is the npm wrapper, under
 [`npm/`](./npm) — a package whose postinstall fetches the release build
@@ -135,10 +138,15 @@ sitting.
 ## What gets uploaded
 
 `curious` packs the project directory you point it at, and nothing more.
-[`.gitignore`](https://git-scm.com/docs/gitignore) is respected — if git
-would not track it, `curious` will not send it — and on top of your own
-rules a small, fixed set is always left out. You deserve to know what
-leaves your machine before it does.
+It honours the project's own
+[`.gitignore`](https://git-scm.com/docs/gitignore) files **and nothing
+else**: a personal exclude list, and the repository-local exclude file
+git keeps outside the project's tree, are not read. Both belong to a
+machine rather than to the project, and a packer that consulted them
+would let two people pack one commit and publish two different sites,
+with the difference invisible to both. On top of your own rules a small,
+fixed set is always left out. You deserve to know what leaves your
+machine before it does.
 
 | name | matches |
 |---|---|
@@ -199,10 +207,9 @@ next deploy asks you to log in again.
 ## Principles
 
 **Zero telemetry.** No analytics, no auto-update, no phone-home, no
-exceptions. Every run's network traffic is exactly two things: it
-authenticates to the API you tell it to talk to, and, once per deploy,
-it uploads the packed archive to a single address that API hands back
-for that deploy alone. Nothing else is contacted at runtime — installing
+exceptions. A run talks to the API you point it at, and — once per
+deploy — uploads the packed archive to the address that API hands back
+for that deploy alone. Nothing else is contacted at run time; installing
 the tool is a separate step, covered under Installing it above.
 
 **The wire contract is additive-only.** Released clients keep working,
