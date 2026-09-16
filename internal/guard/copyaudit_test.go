@@ -453,6 +453,54 @@ var (
 // use in prose describing this project either.
 func forbiddenTokenHits(text string, typeNames map[string]bool, isDoc bool) []string {
 	var hits []string
+	seen := map[string]bool{}
+	for _, paragraph := range forbiddenScanUnits(text) {
+		for _, hit := range forbiddenTokensIn(paragraph, typeNames, isDoc) {
+			if seen[hit] {
+				continue
+			}
+			seen[hit] = true
+			hits = append(hits, hit)
+		}
+	}
+	return hits
+}
+
+// forbiddenScanUnits is what this rule actually matches against:
+// paragraphs, each with every run of whitespace — the line breaks a
+// hand-wrapped sentence carries included — collapsed to one space.
+//
+// THE UNIT IS A PARAGRAPH, AND THAT IS A CORRECTION RATHER THAN A
+// REFINEMENT. Every phrase this rule forbids is two words, and this
+// project wraps its copy at AUTHOR time, so a phrase straddles a line
+// break in exactly the copy most likely to carry one. Matched against the
+// raw text, the wrapped spelling walked past a scan that caught the
+// unwrapped one — the same words, the same file, and a green tick,
+// decided by where the line happened to end.
+//
+// IT IS NOT THE WHOLE DOCUMENT EITHER, and that half matters as much.
+// Collapsing a README to one string joins the last word of one paragraph
+// to the first of the next, which invents phrases nobody wrote and would
+// red on them. A paragraph is the largest unit whose whitespace is
+// definitely layout.
+//
+// The normaliser is the one the sibling row already uses. A second
+// definition of "collapse the whitespace" is two answers to one question,
+// free to disagree about the case nobody tested.
+func forbiddenScanUnits(text string) []string {
+	var out []string
+	for _, paragraph := range strings.Split(text, "\n\n") {
+		if normalised := normalizeSpace(paragraph); normalised != "" {
+			out = append(out, normalised)
+		}
+	}
+	return out
+}
+
+// forbiddenTokensIn reports every forbidden pattern one scan unit
+// carries.
+func forbiddenTokensIn(text string, typeNames map[string]bool, isDoc bool) []string {
+	var hits []string
 	if failedToPattern.MatchString(text) {
 		hits = append(hits, `"failed to"`)
 	}
@@ -558,6 +606,22 @@ func TestForbiddenCopyRedsOnAKnownBadPhraseAndTheExceptionHolds(t *testing.T) {
 	typeNames := map[string]bool{"APIError": true}
 	if hits := forbiddenTokenHits("curious failed to open config.", typeNames, false); len(hits) == 0 {
 		t.Error(`"curious failed to open config." was not flagged`)
+	}
+	// THE WRAPPED SPELLING, PERMANENTLY. This is the copy most likely to
+	// exist, because this project wraps at author time — and it is the one
+	// a raw-text match walked straight past.
+	if hits := forbiddenTokenHits("curious failed\nto open config.", typeNames, false); len(hits) == 0 {
+		t.Error("the same phrase wrapped across a line break was not flagged. This project " +
+			"wraps its copy at author time, so that is the spelling most likely to be " +
+			"written, and a scan that reads raw lines cannot see it.")
+	}
+	// AND THE OTHER HALF: a phrase that exists only because two paragraphs
+	// were joined is a phrase nobody wrote.
+	if hits := forbiddenTokenHits("the deploy failed\n\nto nobody's surprise, it worked.",
+		typeNames, false); len(hits) != 0 {
+		t.Errorf("a phrase invented by joining two paragraphs was flagged: %v\n"+
+			"Normalising a whole document into one string manufactures wording that is not "+
+			"in it, which is a red nobody can fix by editing their own copy.", hits)
 	}
 	if hits := forbiddenTokenHits("curious.pub is not taking deploys right now.", typeNames, false); len(hits) != 0 {
 		t.Errorf("ordinary copy was flagged: %v", hits)

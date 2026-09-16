@@ -73,7 +73,154 @@ func unexportedIntConst(t *testing.T, path, name string) int {
 	return 0
 }
 
-var exitCodeRowPattern = regexp.MustCompile(`(?m)^\|\s*(\d+)\s*\|[^|]+\|\s*$`)
+var exitCodeRowPattern = regexp.MustCompile(`(?m)^\|\s*(\d+)\s*\|([^|]+)\|\s*$`)
+
+// dispatchExitLiterals reads the exit codes main.go RETURNS, out of its
+// own source.
+//
+// THE NUMBERS USED TO BE TYPED HERE. Three of the five — a plain success,
+// a wrong invocation, a stop with copy — are literals rather than named
+// constants, so the row that held the README to "the real values" held
+// three of them to a list a person maintained in this file. Changing one
+// in the dispatch moved the program and nothing went red: the table and
+// the test agreed with each other, and both had stopped agreeing with the
+// binary.
+//
+// EVERY RETURNED INTEGER LITERAL IN THAT FILE IS AN EXIT CODE, which is
+// what makes the walk this simple and is a property of the file rather
+// than an assumption about it: that package is dispatch and holds no
+// logic, so an integer it returns is a code the process exits with.
+func dispatchExitLiterals(t *testing.T, path string) map[int]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	out := map[int]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, result := range ret.Results {
+			lit, ok := result.(*ast.BasicLit)
+			if !ok || lit.Kind != token.INT {
+				continue
+			}
+			code, err := strconv.Atoi(lit.Value)
+			if err != nil {
+				continue
+			}
+			out[code] = true
+		}
+		return true
+	})
+	if len(out) == 0 {
+		t.Fatalf("%s returns no integer literal at all, so this row read nothing and the "+
+			"table below would be held to the two named constants alone", path)
+	}
+	return out
+}
+
+// exitMeaningStopWords are the words that carry no evidence of a binding.
+//
+// THEY ARE FUNCTION WORDS AND ONE CONTENT WORD, and the content word is
+// the reason this list exists at all rather than a distinctiveness
+// calculation. "run" appears in one constant's documentation and in BOTH
+// of the sentences the table writes, because both of these codes are
+// things that happen to a run — so left in, it binds each cell to the
+// wrong constant as readily as to the right one, which is precisely the
+// confusion the row is built to detect.
+var exitMeaningStopWords = map[string]bool{
+	"and": true, "are": true, "the": true, "that": true, "this": true, "with": true,
+	"for": true, "from": true, "was": true, "were": true, "has": true, "have": true,
+	"not": true, "but": true, "you": true, "your": true, "its": true, "it": true,
+	"what": true, "which": true, "when": true, "where": true, "how": true, "why": true,
+	"every": true, "all": true, "any": true, "some": true, "each": true, "other": true,
+	"rather": true, "because": true, "while": true, "into": true, "out": true,
+	"only": true, "also": true, "both": true, "than": true, "then": true, "there": true,
+	"run": true, "number": true, "code": true, "exit": true, "reports": true,
+}
+
+// meaningWords is the content vocabulary of a sentence.
+func meaningWords(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, word := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return r < 'a' || r > 'z'
+	}) {
+		if len(word) > 2 && !exitMeaningStopWords[word] {
+			out[word] = true
+		}
+	}
+	return out
+}
+
+// documentedConstantWords is the vocabulary of the doc comments naming a
+// constant, read out of the source rather than restated here.
+//
+// IT READS MORE THAN ONE NAME PER CODE, and that is forced by where the
+// meaning actually lives. A number's own doc comment says what the
+// process reports; what the number MEANS to a person — the door being
+// shut — is documented on the sentinel beside it, which that comment
+// names as the scope behind the number. Reading only the constant leaves
+// this row comparing a first-timer's sentence against a maintainer's, and
+// those two share no content word at all. Measured before it was written:
+// against the constant alone the overlap is empty, and the row would have
+// been unbuildable rather than merely weak.
+func documentedConstantWords(t *testing.T, root string, names map[string][]string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for file, wanted := range names {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(file)), nil,
+			parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", file, err)
+		}
+		found := map[string]bool{}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) == 0 {
+					continue
+				}
+				for _, want := range wanted {
+					if vs.Names[0].Name != want {
+						continue
+					}
+					found[want] = true
+					// A single-spec declaration carries its doc on the
+					// declaration; one inside a parenthesised group carries
+					// it on the spec. Both spellings are in this tree.
+					for _, doc := range []*ast.CommentGroup{vs.Doc, gen.Doc} {
+						if doc == nil {
+							continue
+						}
+						for word := range meaningWords(doc.Text()) {
+							out[word] = true
+						}
+					}
+				}
+			}
+		}
+		for _, want := range wanted {
+			if !found[want] {
+				t.Fatalf("%s declares no constant or variable named %s, so this row read no "+
+					"documentation for it", file, want)
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the named declarations carry no documentation, so the comparison below " +
+			"would pass against an empty vocabulary")
+	}
+	return out
+}
 
 // TestReadmeExitCodeTableMatchesConstants holds the README's exit-code
 // table to the real values AS DATA: ui.ExitServerClosed, the unexported
@@ -91,30 +238,87 @@ func TestReadmeExitCodeTableMatchesConstants(t *testing.T) {
 		t.Fatal("README.md carries no exit-code table row in the `| <code> | ... |` shape, " +
 			"so this row compared nothing")
 	}
-	got := map[int]bool{}
+	meaning := map[int]string{}
 	for _, m := range matches {
 		n, err := strconv.Atoi(m[1])
 		if err != nil {
 			t.Fatalf("exit-code table row %q does not parse: %v", m[0], err)
 		}
-		if got[n] {
+		if _, seen := meaning[n]; seen {
 			t.Errorf("exit-code table names %d more than once", n)
 		}
-		got[n] = true
+		meaning[n] = strings.TrimSpace(m[2])
 	}
 
-	interruptCode := unexportedIntConst(t, filepath.Join(root, "internal", "ui", "interrupt.go"), "interruptExitCode")
-	want := map[int]bool{0: true, 1: true, 2: true, ui.ExitServerClosed: true, interruptCode: true}
+	interruptCode := unexportedIntConst(t, filepath.Join(root, "internal", "ui", "interrupt.go"),
+		"interruptExitCode")
+	want := dispatchExitLiterals(t, filepath.Join(root, "cmd", "curious", "main.go"))
+	want[ui.ExitServerClosed] = true
+	want[interruptCode] = true
 
 	for n := range want {
-		if !got[n] {
+		if _, named := meaning[n]; !named {
 			t.Errorf("README's exit-code table does not name %d", n)
 		}
 	}
-	for n := range got {
+	for n := range meaning {
 		if !want[n] {
-			t.Errorf("README's exit-code table names %d, which is none of 0, 1, 2, "+
-				"ui.ExitServerClosed (%d) or interruptExitCode (%d)", n, ui.ExitServerClosed, interruptCode)
+			t.Errorf("README's exit-code table names %d, which the dispatch never returns and "+
+				"which is neither ui.ExitServerClosed (%d) nor interruptExitCode (%d)",
+				n, ui.ExitServerClosed, interruptCode)
+		}
+	}
+
+	// THE MEANING COLUMN, AND NOT ONLY THE NUMBERS. A table naming exactly
+	// the right set of codes says nothing about which sentence sits beside
+	// which one, and the two that have a constant behind them are the two a
+	// reader is least able to check for themselves: a script author reading
+	// "3" wants to know it is the closed door rather than the interrupt.
+	// Swapping those two cells left every assertion above satisfied.
+	//
+	// The comparison is against the documentation those constants carry,
+	// so the table is held to the program rather than to a second sentence
+	// in this file. Sharing a word with your own is what makes the binding
+	// evidence; sharing one with the OTHER — and not with your own — is
+	// what a swap looks like from here.
+	docs := map[int]map[string]bool{
+		ui.ExitServerClosed: documentedConstantWords(t, root, map[string][]string{
+			"internal/ui/errors.go": {"ExitServerClosed", "ErrServerClosed"},
+		}),
+		interruptCode: documentedConstantWords(t, root, map[string][]string{
+			"internal/ui/interrupt.go": {"interruptExitCode"},
+		}),
+	}
+	for code, own := range docs {
+		cell, named := meaning[code]
+		if !named {
+			continue // already reported above
+		}
+		words := meaningWords(cell)
+		shared := false
+		for word := range words {
+			if own[word] {
+				shared = true
+			}
+		}
+		if !shared {
+			t.Errorf("the table's meaning for %d shares no word with the documentation of the "+
+				"constant behind it: %q\nThe column is what a reader acts on, and nothing tied "+
+				"it to the program. If the wording is right, the documentation is where the "+
+				"meaning is stated and the two should agree somewhere.", code, cell)
+		}
+		for other, otherDocs := range docs {
+			if other == code {
+				continue
+			}
+			for word := range words {
+				if otherDocs[word] && !own[word] {
+					t.Errorf("the table's meaning for %d uses %q, which belongs to the "+
+						"documentation of %d and not to its own: %q\nThese two rows have most "+
+						"likely exchanged their sentences, which every check on the numbers "+
+						"alone is satisfied by.", code, word, other, cell)
+				}
+			}
 		}
 	}
 }
@@ -496,6 +700,142 @@ func TestEveryComposedEntryDescribesWhatItsMessageNames(t *testing.T) {
 	}
 	if !t.Failed() {
 		t.Logf("%d composed ids, each describing what its message names", composed)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The block as TRIPLES, not as three global sets.
+// ---------------------------------------------------------------------
+
+// readmeTriple is one thing the block states: this id, at this stage,
+// quotes this headline.
+type readmeTriple struct {
+	id       string
+	stage    string
+	headline string
+}
+
+// readmeStageHeading matches the bold stage line that opens each of an
+// entry's stages, capturing the stage's own value.
+var readmeStageHeading = regexp.MustCompile(`^\*\*(.+?)\.\*\*`)
+
+// readmeHeadlineTriples reads the block as what it actually claims.
+//
+// THE TWO ROWS EITHER SIDE OF THIS ONE COMPARE GLOBAL SETS, and a global
+// set cannot see the arrangement. Every headline the catalog carries
+// appears somewhere in the block, and every line the block quotes is a
+// headline the catalog carries — both true, and both still true after two
+// ids have swapped bodies entirely. What a reader uses the section for is
+// the pairing, and the pairing was the one thing nothing checked.
+//
+// A headline is filed under (id, Stage), so that is the unit read here:
+// the id from its heading, the stage from the bold line above the
+// quotation, and the quotation itself.
+func readmeHeadlineTriples(t *testing.T, readme string) []readmeTriple {
+	t.Helper()
+	begin := strings.Index(readme, readmeHeadlinesBegin)
+	if begin < 0 {
+		t.Fatal("README.md carries no failure-headlines block")
+	}
+	end := strings.Index(readme[begin:], readmeHeadlinesEnd)
+	if end < 0 {
+		t.Fatalf("README.md opens a %s block and never closes it", readmeHeadlinesBegin)
+	}
+
+	var out []readmeTriple
+	var id, stage string
+	for _, line := range strings.Split(readme[begin:begin+end], "\n") {
+		trimmed := strings.TrimSpace(line)
+		if m := readmeTroubleshootingHeadingPattern.FindStringSubmatch(line); m != nil {
+			id, stage = m[1], ""
+			continue
+		}
+		if m := readmeStageHeading.FindStringSubmatch(trimmed); m != nil {
+			stage = m[1]
+			continue
+		}
+		if text, ok := strings.CutPrefix(trimmed, "> "); ok {
+			out = append(out, readmeTriple{id: id, stage: stage,
+				headline: strings.TrimSpace(text)})
+		}
+	}
+	return out
+}
+
+// catalogHeadlineTriples is the same claim, from the artefact the block
+// is quoting.
+func catalogHeadlineTriples(catalog publicCatalog) []readmeTriple {
+	var out []readmeTriple
+	for _, f := range catalog.Failures {
+		for stage, headline := range f.Headline {
+			if headline == nil {
+				continue
+			}
+			out = append(out, readmeTriple{id: f.ID, stage: stage,
+				headline: renderedHeadline(*headline)})
+		}
+	}
+	return out
+}
+
+// TestTheReadmeBlockAndTheCatalogAgreeTripleForTriple compares the two
+// sets of triples in both directions.
+//
+// IT IS ONE COMPARISON RATHER THAN THREE, and that is the point. Holding
+// the ids, the stages and the headlines to the catalog as three separate
+// sets is satisfied by any arrangement that uses each of them the right
+// number of times — including one where two entries have exchanged their
+// contents, and one where a stage's line is deleted while an identical
+// line under some other id keeps the global set complete.
+func TestTheReadmeBlockAndTheCatalogAgreeTripleForTriple(t *testing.T) {
+	root := moduleRoot(t)
+	readme := readReadmeFile(t, root)
+	raw, err := os.ReadFile(filepath.Join(root, "catalog.json"))
+	if err != nil {
+		t.Fatalf("reading catalog.json: %v", err)
+	}
+	var catalog publicCatalog
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatalf("catalog.json does not decode as the published shape: %v", err)
+	}
+
+	inReadme := map[readmeTriple]int{}
+	for _, tr := range readmeHeadlineTriples(t, readme) {
+		inReadme[tr]++
+	}
+	inCatalog := map[readmeTriple]int{}
+	for _, tr := range catalogHeadlineTriples(catalog) {
+		inCatalog[tr]++
+	}
+	if len(inCatalog) == 0 {
+		t.Fatal("catalog.json carries no quotable headline, so this row compared nothing")
+	}
+	if len(inReadme) == 0 {
+		t.Fatal("README.md's block quotes no headline, so this row compared nothing")
+	}
+
+	for tr, n := range inCatalog {
+		switch got := inReadme[tr]; {
+		case got == 0:
+			t.Errorf("the catalog files %q at stage %q under the headline %q, and README.md "+
+				"does not quote that line under that id and stage.\nA headline belongs to an "+
+				"(id, stage) pair; quoting it somewhere else in the block is not the same "+
+				"claim.", tr.id, tr.stage, tr.headline)
+		case got != n:
+			t.Errorf("README.md quotes %q under %q/%q %d time(s) and the catalog files it %d",
+				tr.headline, tr.id, tr.stage, got, n)
+		}
+	}
+	for tr := range inReadme {
+		if inCatalog[tr] == 0 {
+			t.Errorf("README.md quotes %q under the id %q at stage %q, and the catalog files "+
+				"no such headline there.\nEither the line is wording typed by hand, or it "+
+				"belongs to another entry and has been filed under this one.",
+				tr.headline, tr.id, tr.stage)
+		}
+	}
+	if !t.Failed() {
+		t.Logf("%d (id, stage, headline) triples, agreeing in both directions", len(inCatalog))
 	}
 }
 

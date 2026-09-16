@@ -140,11 +140,13 @@ func humanMB(n int) string {
 
 // TestReadmeLimitsMatchWireConstants holds the four local limits the
 // README states to the four wire.Max* constants they are read from,
-// rather than to a second, hand-typed copy of them. Each check requires
-// the constant's own name, backticked, within a short distance of the
-// human figure derived from its value — close enough to catch the number
-// drifting from the constant, loose enough to survive a rewritten
-// sentence around it.
+// rather than to a second, hand-typed copy of them.
+//
+// EACH CONSTANT IS BOUND TO ITS OWN FIGURE ON ITS OWN LINE, and the
+// figure is matched as a whole token. The looser shape this replaced —
+// the constant's name within a couple of hundred characters of the figure
+// — is satisfied by a neighbour in any list short enough to read, and by
+// any longer number that happens to end in the same digits.
 func TestReadmeLimitsMatchWireConstants(t *testing.T) {
 	root := moduleRoot(t)
 	readme := readReadme(t, root)
@@ -158,14 +160,71 @@ func TestReadmeLimitsMatchWireConstants(t *testing.T) {
 		{"MaxSourceTotalBytes", humanMB(wire.MaxSourceTotalBytes) + " MB"},
 		{"MaxPackedBytes", humanMB(wire.MaxPackedBytes) + " MB"},
 	}
+	lines := strings.Split(readme, "\n")
 	for _, c := range cases {
-		pattern := regexp.MustCompile(
-			"`" + regexp.QuoteMeta(c.constant) + "`[\\s\\S]{0,200}?" + regexp.QuoteMeta(c.human))
-		reverse := regexp.MustCompile(
-			regexp.QuoteMeta(c.human) + "[\\s\\S]{0,200}?`" + regexp.QuoteMeta(c.constant) + "`")
-		if !pattern.MatchString(readme) && !reverse.MatchString(readme) {
-			t.Errorf("README does not show %q within 200 characters of `%s` (in either order); "+
-				"the README's limits section should read this figure off the constant", c.human, c.constant)
+		bound := false
+		for _, line := range lines {
+			if limitBinding(line, c.constant, c.human) {
+				bound = true
+				break
+			}
 		}
+		if !bound {
+			t.Errorf("no line of the README names `%s` and its figure %q together.\n"+
+				"The binding is per LINE and the figure is matched as a whole token, so a "+
+				"neighbouring limit's number cannot stand in for this one and a longer number "+
+				"cannot contain it.", c.constant, c.human)
+		}
+	}
+}
+
+// limitBinding reports whether ONE line names a constant and states its
+// figure.
+//
+// THE BINDING IS PER LINE, and that is the correction. It was a window of
+// two hundred characters in either direction, which in a bulleted list of
+// four limits reaches comfortably into the neighbours — so a constant
+// whose own figure was wrong stayed green on the strength of the line
+// below it. A list where every entry can satisfy every other entry's
+// assertion is not four checks; it is one check, repeated.
+func limitBinding(line, constant, human string) bool {
+	return strings.Contains(line, "`"+constant+"`") && anchoredFigure(line, human)
+}
+
+// anchoredFigure matches a figure as a WHOLE token.
+//
+// A SUBSTRING MATCH IS SATISFIED BY A LARGER NUMBER CONTAINING IT: five
+// megabytes is inside fifty-five, thirty inside a hundred and thirty. The
+// figure carries its unit, so what has to be excluded is a digit or a
+// grouping separator immediately before it and a digit immediately after
+// — which is what separates a number from a longer one that merely ends
+// the same way.
+func anchoredFigure(text, human string) bool {
+	return regexp.MustCompile(
+		`(?:^|[^0-9.,])` + regexp.QuoteMeta(human) + `(?:$|[^0-9])`).MatchString(text)
+}
+
+// TestTheLimitBindingIsAnchoredAndPerLine is the permanent fixture for
+// the two ways the previous shape could be satisfied without being true.
+func TestTheLimitBindingIsAnchoredAndPerLine(t *testing.T) {
+	const real = "- `MaxSourceFileBytes` — 5 MB for any single file."
+	if !limitBinding(real, "MaxSourceFileBytes", "5 MB") {
+		t.Errorf("the real line does not bind its own constant to its own figure: %q", real)
+	}
+	// A LONGER NUMBER CONTAINING THE FIGURE.
+	if limitBinding("- `MaxSourceFileBytes` — 55 MB for any single file.",
+		"MaxSourceFileBytes", "5 MB") {
+		t.Error("5 MB matched inside 55 MB, so a figure ten times the real one would pass")
+	}
+	if limitBinding("- `MaxPackedBytes` — 130 MB once packed.", "MaxPackedBytes", "30 MB") {
+		t.Error("30 MB matched inside 130 MB")
+	}
+	// A WRONG FIGURE ON THE CONSTANT'S OWN LINE.
+	if limitBinding("- `MaxPackedBytes` — 90 MB once packed.", "MaxPackedBytes", "30 MB") {
+		t.Error("a line stating the wrong figure for its own constant was accepted")
+	}
+	// A NEIGHBOUR'S FIGURE CANNOT REACH ACROSS.
+	if limitBinding("- `MaxPackedBytes` — the same as above.", "MaxPackedBytes", "30 MB") {
+		t.Error("a constant with no figure of its own was bound to one from somewhere else")
 	}
 }
