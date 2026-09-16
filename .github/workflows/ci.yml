@@ -192,6 +192,17 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
+      # The wrapper's own dependencies, installed from the lockfile.
+      #
+      # --ignore-scripts BECAUSE THIS PACKAGE'S POSTINSTALL DOWNLOADS A
+      # RELEASE. Running it here would reach for a binary that does not
+      # exist yet and fail the job for a reason that has nothing to do
+      # with the change under test. The suite drives that script itself,
+      # in a copied package against a server it stands up, which is where
+      # it can be observed rather than merely survived.
+      - name: npm ci
+        shell: bash
+        run: cd npm && npm ci --ignore-scripts --no-audit --no-fund
       - name: make test-npm
         shell: bash
         run: make test-npm

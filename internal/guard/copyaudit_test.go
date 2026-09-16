@@ -1,10 +1,13 @@
 package guard
 
 import (
+	"bytes"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -54,10 +57,17 @@ import (
 // mechanical one, and this file's own rule is to say so rather than let
 // the gap pass as coverage.
 //
-// README.md, npm/README.md and npm/install.js are read as prose and
-// scanned whole rather than field by field, because neither markdown nor
-// the install script has a "field" for this scanner to key on the way a
-// struct literal does.
+// THE TWO DOCUMENTS ARE READ WHOLE — README.md and npm/README.md —
+// because markdown has no "field" for this scanner to key on the way a
+// struct literal does, and because describing this repository's own
+// layout is what those files are for.
+//
+// THE WRAPPER'S RUNTIME SOURCES ARE NOT DOCUMENTS. Its install script,
+// its command shim and its platform table are parsed, and each string
+// they carry enters the corpus on its own, taking the same checks a Go
+// copy site takes. What a person sees when an install refuses is a
+// message this project wrote; reading it as prose about the repository
+// excused it from rules the Go half has always been held to.
 
 // ---------------------------------------------------------------------
 // Resolving an expression to the text it prints, when it can be known
@@ -173,16 +183,20 @@ type copyItem struct {
 	text   string
 	origin string // "path:line" for Go sites, "path" for whole-document ones
 
-	// isDoc marks a whole-document item — README.md, npm/README.md,
-	// npm/install.js — rather than one Go copy field. The package-path
-	// and Go-type-name rules below are scoped OFF this half of the
-	// corpus: those two rules exist to catch an internal implementation
-	// detail leaking into a RUNTIME message, and a document whose whole
-	// job is describing this repository's own layout and its own public
-	// import path (`import "github.com/curiouspub/cli/pkg/wire"`, the
-	// README's own words about `pkg/wire`) legitimately names both. The
-	// other four forbidden tokens — "failed to", "unable to", "error:",
-	// "nil", "0x" — still apply everywhere, doc or not.
+	// isDoc marks a whole-document item — README.md and npm/README.md —
+	// rather than one piece of copy. The package-path and Go-type-name
+	// rules are scoped OFF that half of the corpus, because a document
+	// whose job is describing this repository's own layout says where the
+	// walk lives and what the contract is called, and a rule that forbade
+	// it would forbid the README from being a README.
+	//
+	// WHAT IT NO LONGER HAS TO EXCUSE is this project's own public import
+	// path. That was a hit once, from any origin, so the document flag was
+	// carrying two jobs: excusing a genuine internal path in prose, and
+	// excusing the module naming itself. The second was the rule being too
+	// broad rather than the document being special, and it is fixed where
+	// the rule is written. The four wording tokens still apply everywhere,
+	// document or not.
 	isDoc bool
 }
 
@@ -406,36 +420,108 @@ func goCorpus(t *testing.T, root string) []copyItem {
 
 // itoa is streams_test.go's own helper, reused here too.
 
-// jsStringLiteralPattern is a deliberately narrow reader of npm/install.js:
-// a single- or double-quoted JavaScript string with no embedded quote of
-// its own kind, or a template literal with no ${...} interpolation. It
-// is not a JavaScript parser, and it does not need to be one — install.js
-// has no dependency and is meant to be read in one sitting by a person,
-// which is exactly the property that makes a small regex adequate for a
-// mechanical second reader too. A literal outside this shape (an escaped
-// quote, an interpolated template) contributes nothing, the same
-// fail-closed posture the Go side takes for an expression it cannot
-// resolve.
-var jsStringLiteralPattern = regexp.MustCompile(
-	"'([^'\\\\]*)'" + `|"([^"\\]*)"` + "|`([^`$]*)`")
+// wrapperSources are the wrapper's own runtime files, relative to the
+// package directory. All three speak to a person: the install script, the
+// command shim, and the table that decides what this machine is called.
+var wrapperSources = []string{"install.js", "bin/curious.js", "lib/platform.js"}
 
+// jsStringExtractor reads those files with a REAL PARSER and prints every
+// string they contain.
+//
+// A REGULAR EXPRESSION WAS READING THEM, and it dropped things silently.
+// It could not see a string containing an escaped quote of its own kind,
+// and it could not see any template carrying an interpolation — which is
+// most of the copy in the install script, because almost every sentence
+// it writes has a value in it. Those were not edge cases in the corpus;
+// they were the corpus. A reader that fails to see text reports a clean
+// scan, which is the failure mode this whole file exists to avoid.
+//
+// The quasis of a template are collected as well as plain literals: the
+// words around an interpolated value are authored copy, and the value
+// between them is not this program's to check.
+const jsStringExtractor = `
+const acorn = require('acorn');
+const fs = require('fs');
+const out = [];
+function visit(node, file) {
+  if (!node || typeof node.type !== 'string') return;
+  if (node.type === 'Literal' && typeof node.value === 'string') {
+    out.push({file: file, line: node.loc.start.line, text: node.value});
+  }
+  if (node.type === 'TemplateLiteral') {
+    for (const q of node.quasis) {
+      out.push({file: file, line: q.loc.start.line, text: q.value.cooked});
+    }
+  }
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    if (Array.isArray(value)) { for (const child of value) visit(child, file); }
+    else if (value && typeof value.type === 'string') visit(value, file);
+  }
+}
+for (const file of process.argv.slice(1)) {
+  const source = fs.readFileSync(file, 'utf8');
+  visit(acorn.parse(source, {ecmaVersion: 'latest', locations: true}), file);
+}
+process.stdout.write(JSON.stringify(out));
+`
+
+// jsString is one string the parser found, and where.
+type jsString struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+// jsCorpus is every string the wrapper's runtime files contain.
+//
+// THEY ARE COPY RATHER THAN A DOCUMENT, so they take the whole check set
+// — the package-path and Go-type-name rules included. What a person sees
+// when an install refuses is a message this project wrote, and it is held
+// to the same standard as a message the Go half writes. The two README
+// files remain documents, because describing this repository's layout is
+// their job.
 func jsCorpus(t *testing.T, root string) []copyItem {
 	t.Helper()
-	path := filepath.Join(root, "npm", "install.js")
-	data, err := os.ReadFile(path)
+	npmDir := filepath.Join(root, "npm")
+
+	cmd := exec.Command("node", append([]string{"-e", jsStringExtractor}, wrapperSources...)...)
+	cmd.Dir = npmDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
+		// IT FAILS RATHER THAN SKIPPING, and names the likely cause. A
+		// skipped row prints nothing without -v, so a corpus that quietly
+		// lost the whole wrapper would look exactly like one that read it
+		// and found nothing wrong.
+		t.Fatalf("the wrapper's sources could not be parsed: %v\n%s\n"+
+			"The parser is a devDependency of npm/, installed by `make test-npm` — which "+
+			"runs BEFORE `make test-go` in the gate for exactly this reason. Reaching this "+
+			"from a clean checkout means either that ordering has changed, or the install "+
+			"has not been run here; `cd npm && npm ci --ignore-scripts` is what test-npm "+
+			"does.", err, strings.TrimSpace(stderr.String()))
 	}
+
+	var found []jsString
+	if err := json.Unmarshal(out, &found); err != nil {
+		t.Fatalf("the parser's output did not decode: %v", err)
+	}
+	if len(found) == 0 {
+		t.Fatalf("the parser read %d wrapper source(s) and found no string at all, so this "+
+			"half of the corpus is empty and every rule over it passes silently",
+			len(wrapperSources))
+	}
+
 	var items []copyItem
-	for i, line := range strings.Split(string(data), "\n") {
-		for _, m := range jsStringLiteralPattern.FindAllStringSubmatch(line, -1) {
-			text := m[1] + m[2] + m[3]
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
-			items = append(items, copyItem{text: text,
-				origin: "npm/install.js:" + itoa(i+1), isDoc: true})
+	for _, s := range found {
+		if strings.TrimSpace(s.Text) == "" {
+			continue
 		}
+		items = append(items, copyItem{
+			text:   s.Text,
+			origin: "npm/" + filepath.ToSlash(s.File) + ":" + itoa(s.Line),
+		})
 	}
 	return items
 }
@@ -556,14 +642,44 @@ func TestForbiddenTokenExceptionSetHasExactlyOneMember(t *testing.T) {
 }
 
 var (
-	failedToPattern    = regexp.MustCompile(`(?i)failed to`)
-	unableToPattern    = regexp.MustCompile(`(?i)unable to`)
-	errorColonPatter   = regexp.MustCompile(`(?i)error:`)
-	nilPattern         = regexp.MustCompile(`\bnil\b`)
-	hexPrefixPattern   = regexp.MustCompile(`0x[0-9a-fA-F]`)
+	failedToPattern  = regexp.MustCompile(`(?i)failed to`)
+	unableToPattern  = regexp.MustCompile(`(?i)unable to`)
+	errorColonPatter = regexp.MustCompile(`(?i)error:`)
+	nilPattern       = regexp.MustCompile(`\bnil\b`)
+	hexPrefixPattern = regexp.MustCompile(`0x[0-9a-fA-F]`)
+
+	// ownPublicModulePath is this repository's own import path and
+	// everything built out of it: the releases URL, the line telling
+	// somebody how to install from source, the import a reader is invited
+	// to write.
+	//
+	// IT IS PUBLIC BY DEFINITION, and that is why it is removed before the
+	// rule below looks at anything. The rule exists to catch an INTERNAL
+	// implementation detail reaching a message; the name of the module
+	// itself is the opposite — it is the one path this project publishes
+	// on purpose, and the wrapper's refusal copy names it to tell somebody
+	// where to get a binary or how to build one. A rule that cannot tell
+	// those apart forbids the program from naming itself.
+	ownPublicModulePath = regexp.MustCompile(`github\.com/curiouspub/cli[A-Za-z0-9_./@-]*`)
+
+	// packagePathPattern is a path INTO this module's packages, which is
+	// the thing worth keeping out of copy: a reader handed one is being
+	// shown where the program keeps its source, which they cannot act on.
 	packagePathPattern = regexp.MustCompile(
-		`github\.com/curiouspub/cli|\b(?:internal|cmd|pkg)/[a-zA-Z0-9_.]+(?:/[a-zA-Z0-9_.]+)*`)
+		`\b(?:internal|cmd|pkg)/[a-zA-Z0-9_.]+(?:/[a-zA-Z0-9_.]+)*`)
 )
+
+// packagePathIn returns the internal package path a piece of copy names,
+// or empty when it names none.
+//
+// THE ORDER IS THE WHOLE OF IT. The module's own path is struck out
+// first, so a go-install line ending in a package directory is not read
+// as though somebody had written that directory into a sentence. Matching
+// first and excusing afterwards cannot work: the two overlap, and the
+// public spelling CONTAINS the private-looking one.
+func packagePathIn(text string) string {
+	return packagePathPattern.FindString(ownPublicModulePath.ReplaceAllString(text, " "))
+}
 
 // forbiddenTokenHits reports every forbidden pattern text contains,
 // named the way this project's three-part copy shape names its own
@@ -650,8 +766,8 @@ func forbiddenTokensIn(text string, typeNames map[string]bool, isDoc bool) []str
 	if isDoc {
 		return hits
 	}
-	if packagePathPattern.MatchString(text) {
-		hits = append(hits, "a package path ("+packagePathPattern.FindString(text)+")")
+	if path := packagePathIn(text); path != "" {
+		hits = append(hits, "a package path ("+path+")")
 	}
 	for _, word := range strings.FieldsFunc(text, func(r rune) bool {
 		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9')
@@ -761,13 +877,38 @@ func TestForbiddenCopyRedsOnAKnownBadPhraseAndTheExceptionHolds(t *testing.T) {
 	if hits := forbiddenTokenHits("the *APIError type carries the code.", typeNames, false); len(hits) == 0 {
 		t.Error("a Go type name leaking into copy was not flagged")
 	}
+	// THIS REPOSITORY'S OWN PUBLIC PATH IS NOT A HIT FROM EITHER ORIGIN.
+	// It was, from a runtime one — and the copy that names it is the
+	// wrapper's refusal telling somebody where to fetch a binary or how to
+	// build one from source. That is the program naming itself, which is
+	// the opposite of leaking where it keeps its source.
+	for _, origin := range []struct {
+		name  string
+		isDoc bool
+	}{{"a document", true}, {"a runtime message", false}} {
+		for _, text := range []string{
+			"import \"github.com/curiouspub/cli/pkg/wire\"",
+			"take a binary from https://github.com/curiouspub/cli/releases",
+			"build it yourself: go install github.com/curiouspub/cli/cmd/curious@latest",
+		} {
+			if hits := forbiddenTokenHits(text, typeNames, origin.isDoc); len(hits) != 0 {
+				t.Errorf("%s naming this repository's own public path was flagged: %v\n%q",
+					origin.name, hits, text)
+			}
+		}
+	}
+	// AND THE RULE STILL DOES ITS JOB, which is what the assertion above
+	// would otherwise quietly retire: a path INTO this module's packages,
+	// in a runtime message, is still a hit — and is still scoped off a
+	// document, whose business is describing this repository's layout.
 	if hits := forbiddenTokenHits(
-		"import \"github.com/curiouspub/cli/pkg/wire\"", typeNames, true); len(hits) != 0 {
-		t.Errorf("a doc-origin item naming this repository's own public import path was flagged: %v", hits)
+		"curious could not read internal/flow/upload.go", typeNames, false); len(hits) == 0 {
+		t.Error("a path into this module's own packages was not flagged in a runtime " +
+			"message, so narrowing the rule has retired it rather than aimed it")
 	}
 	if hits := forbiddenTokenHits(
-		"import \"github.com/curiouspub/cli/pkg/wire\"", typeNames, false); len(hits) == 0 {
-		t.Error("the same text from a non-doc origin was not flagged, so isDoc is not actually scoping anything")
+		"the walk lives in internal/pack, and the contract in pkg/wire", typeNames, true); len(hits) != 0 {
+		t.Errorf("a document describing this repository's own layout was flagged: %v", hits)
 	}
 	// THE EXEMPTION IS ONE TOKEN AT ONE SITE, and all four corners of that
 	// are fixtured here because the shape it replaced satisfied only the

@@ -59,11 +59,24 @@ build:
 # the number a pending leg has to report is the one taken under it, and a
 # run that stopped before the race pass would hand an operator the
 # friendlier of two figures with nothing on the line to say which it was.
+# THE WRAPPER'S SUITE NOW RUNS BEFORE THE GO HALF, and the order is a
+# dependency rather than a preference. test-npm is what installs the
+# parser the copy audit reads the wrapper's own sources with, and that
+# audit runs in test-go — so with the old order a clean checkout failed
+# in test-go, complaining about a package the very next target would have
+# installed. The Go row says so when it cannot find it, but an ordering
+# that makes the message necessary is the wrong ordering.
+#
+# THIS PUTS NO NEW REQUIREMENT ON THE GATE, which is worth saying because
+# it looks like it does. The wrapper's suite has always been part of
+# `make test`, and installing that package's dependencies is what running
+# it means; the gate has therefore always needed the registry here. What
+# changed is that one devDependency now exists to install.
 test:
 	@status=0; \
 	$(MAKE) test-race || status=1; \
-	$(MAKE) test-go || status=1; \
 	$(MAKE) test-npm || status=1; \
+	$(MAKE) test-go || status=1; \
 	exit $$status
 
 # -timeout FOR THE SAME REASON THE RACE PASS CARRIES ONE, and it was
@@ -176,6 +189,7 @@ test-npm:
 		echo "Install Node (the floor is in npm/package.json), or run make test-go for the Go half."; \
 		exit 1; \
 	}
+	cd npm && npm ci --ignore-scripts --no-audit --no-fund
 	cd npm && node --test "test/**/*.test.js"
 
 # The end-to-end run: pack the wrapper, serve a built binary from this
