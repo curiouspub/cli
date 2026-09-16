@@ -133,6 +133,14 @@ func dispatchExitLiterals(t *testing.T, path string) map[int]bool {
 // things that happen to a run — so left in, it binds each cell to the
 // wrong constant as readily as to the right one, which is precisely the
 // confusion the row is built to detect.
+//
+// KEEPING IT LISTED WAS DECIDED RATHER THAN OVERLOOKED, and the
+// measurement is recorded here so nobody has to retake it to find out
+// whether the line is load bearing. With "run" left in, the cell for the
+// interrupt carries a word distinctive to the closed door: the two
+// sentences could then be exchanged and every assertion below would
+// still be satisfied. That swap is the one failure this row exists for,
+// so the word that hides it does not get to stay.
 var exitMeaningStopWords = map[string]bool{
 	"and": true, "are": true, "the": true, "that": true, "this": true, "with": true,
 	"for": true, "from": true, "was": true, "were": true, "has": true, "have": true,
@@ -169,6 +177,14 @@ func meaningWords(s string) map[string]bool {
 // those two share no content word at all. Measured before it was written:
 // against the constant alone the overlap is empty, and the row would have
 // been unbuildable rather than merely weak.
+//
+// THE PAIRING IS THE CODE'S OWN, NOT THIS ROW'S CONVENIENCE, which is
+// the difference between following a link and widening a rule until an
+// assertion passes. The constant's documentation names the sentinel and
+// calls it the scope behind the number; the sentinel's documentation
+// names the constant back. Reading the two together is reading one
+// statement the program already makes in two places, and a row that
+// refused to would be insisting on a separation the code does not have.
 func documentedConstantWords(t *testing.T, root string, names map[string][]string) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
@@ -412,12 +428,33 @@ func reachableReleaseTags(t *testing.T, root string) []string {
 // once a release exists. An earlier version asserted both directions at
 // once; the converse was never true, since a tree that has a tag is free
 // to go on saying what it said before one existed.
+// publicationDisclaimerRequired is the rule's single decision, lifted out
+// of the row so that both of its answers can be exercised.
+//
+// THE OTHER DIRECTION CANNOT BE REACHED BY EDITING A FILE. Whether a
+// release exists is a property of this repository's tags rather than of
+// any text a change could touch, so with the decision written inline
+// there was no way to show the tagged branch behaves: it would sit
+// unexercised until the first release, which is the worst moment
+// available to discover it is wrong.
+func publicationDisclaimerRequired(tags []string) bool { return len(tags) == 0 }
+
 func TestReadmePublicationStateRow(t *testing.T) {
 	root := moduleRoot(t)
-	if tags := reachableReleaseTags(t, root); len(tags) > 0 {
-		t.Skipf("this commit reaches %d release tag(s) (%s), and the publication-state rule "+
-			"requires nothing of the README once a release exists",
-			len(tags), strings.Join(tags, ", "))
+	tags := reachableReleaseTags(t, root)
+	if !publicationDisclaimerRequired(tags) {
+		// A PASS RATHER THAN A SKIP, and the difference is who meets the
+		// consequence. This rule is one-directional: with a release
+		// reachable it requires nothing of the page, so the row has
+		// nothing left to refuse and has answered — which is a pass.
+		//
+		// Spelled as a skip it becomes an UNDECLARED skip the moment the
+		// first tag lands, and this suite fails a run on one of those. The
+		// red would arrive in front of whoever is cutting the release,
+		// about a row behaving exactly as designed, at the one moment
+		// nobody has attention to spare for it.
+		t.Logf("release tag present; disclaimer not required (%s)", strings.Join(tags, ", "))
+		return
 	}
 
 	readme := readReadmeFile(t, root)
@@ -431,6 +468,28 @@ func TestReadmePublicationStateRow(t *testing.T) {
 	if body := renderedProse(readme); !strings.Contains(body, futureTenseInstall) {
 		t.Errorf("no release tag is reachable from this commit, and README.md does not carry "+
 			"the future-tense framing %q", futureTenseInstall)
+	}
+}
+
+// TestThePublicationRuleIsOneDirectional fixtures both answers, because
+// only one of them is reachable on this tree and it is not the
+// interesting one.
+//
+// A rule that has never been observed saying "nothing is required" is a
+// rule whose quiet direction is a guess. The day a tag lands is the day
+// that direction runs for the first time, in front of whoever is cutting
+// the release — so it runs here instead, now, against a value this row
+// controls.
+func TestThePublicationRuleIsOneDirectional(t *testing.T) {
+	if !publicationDisclaimerRequired(nil) {
+		t.Error("with no release reachable the disclaimer is required, and the rule said " +
+			"otherwise — which would let the page claim to be installable before anything " +
+			"is published")
+	}
+	if publicationDisclaimerRequired([]string{"v0.1.0"}) {
+		t.Error("with a release reachable the rule still demanded the disclaimer.\n" +
+			"It is one-directional: once something is published the page may say so, and a " +
+			"row that refused would fail a tagged tree for telling the truth.")
 	}
 }
 
