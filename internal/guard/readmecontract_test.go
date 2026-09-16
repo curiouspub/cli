@@ -123,8 +123,8 @@ func TestReadmeExitCodeTableMatchesConstants(t *testing.T) {
 // The publication-state row.
 // ---------------------------------------------------------------------
 
-// These two sentences are the checkable half of the one-directional row
-// Scope states: present-tense install copy, and the absence of the
+// These two sentences are the checkable half of the one-directional
+// rule: present-tense install copy, and the absence of the
 // disclaimer, both require a reachable release tag. The row does not
 // parse tense generally — that is not a mechanical question — it holds
 // the README to carrying THESE TWO SENTENCES, verbatim, whenever the
@@ -141,9 +141,11 @@ const (
 // install copy and the absent disclaimer both require a reachable release
 // tag that this tree does not have, so the disclaimer and the
 // future-tense framing must both be present. The row says nothing about
-// the other direction — a tagged tree may drop either — because the
-// ruling that replaced the original biconditional is explicit that
-// nothing requires present tense once a tag exists.
+// the other direction — a tagged tree may drop either — because nothing
+// requires present tense once a tag exists. An earlier version of this
+// row asserted both directions at once; the converse was never true,
+// since a tree that has a tag is free to go on saying what it said
+// before one existed.
 func TestReadmePublicationStateRow(t *testing.T) {
 	root := moduleRoot(t)
 	raw, err := os.ReadFile(filepath.Join(root, "npm", "checksums.json"))
@@ -155,10 +157,10 @@ func TestReadmePublicationStateRow(t *testing.T) {
 		t.Fatalf("npm/checksums.json does not decode as an object: %v", err)
 	}
 	if len(checksums) != 0 {
-		// The checkable proxy says a release has happened. The ruling
-		// requires nothing of the README in that direction, so this row
-		// has nothing to check — the day this tree carries real checksums
-		// is the day a human decides what the README now says.
+		// The checkable proxy says a release has happened. Nothing is
+		// required of the README in that direction, so this row has
+		// nothing to check — the day this tree carries real checksums is
+		// the day a person decides what the README now says.
 		t.Skip("npm/checksums.json is no longer the {} placeholder; the publication-state row " +
 			"requires nothing of the README once a release exists")
 	}
@@ -362,17 +364,17 @@ func TestReadmeTroubleshootingIDSetMatchesCatalog(t *testing.T) {
 // The spelling rule's new home.
 // ---------------------------------------------------------------------
 
-// spellingRuleSentence is the public-safe sentence this card moves into
-// cli/CLAUDE.md, asserted verbatim rather than by a looser "mentions
+// spellingRuleSentence is the public-safe sentence this change moves
+// into cli/CLAUDE.md, asserted verbatim rather than by a looser "mentions
 // spelling" match — a paraphrase living in this test file and a
 // paraphrase living in CLAUDE.md could each change without the other
 // noticing.
 const spellingRuleSentence = "One spelling per file: pick British or American and do not churn."
 
-// TestSpellingRuleIsPresentInCLAUDEMd holds this card's own deliverable to
-// account: the rule that used to exist only in the private repository's
-// CLAUDE.md is moved here, in public-safe wording, into the file the
-// implementer working in this repository can actually open.
+// TestSpellingRuleIsPresentInCLAUDEMd holds this change's own deliverable
+// to account: a rule that governs the copy in this repository is written
+// down IN this repository, in public-safe wording, in the file a person
+// working here can actually open rather than somewhere they cannot.
 func TestSpellingRuleIsPresentInCLAUDEMd(t *testing.T) {
 	root := moduleRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
