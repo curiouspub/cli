@@ -256,6 +256,10 @@ the program actually prints.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the address curious was sending to, reduced to its host, and
+quotes what your machine said when the packed archive could not be opened
+to send it.
+
 ### astro-dep-absent
 
 **pre-flight.** A person is having the project checked before anything leaves the machine.
@@ -372,11 +376,19 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names how many files are over the single-file limit and what that
+limit is, then lists them largest first with their sizes — ten at most,
+and a count of however many more there were.
+
 ### limit-files
 
 **pre-flight.** A person is having the project checked before anything leaves the machine.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names how many files the project holds and how many one deploy may
+carry, then the handful of directories holding the most of them — so you
+have somewhere to point an ignore rule rather than a list to read.
 
 ### limit-packed
 
@@ -384,11 +396,19 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names what the archive weighs, what the limit is, and what your files
+weigh unpacked — the gap between the last two being the archive's own
+overhead — and then the files that compressed least, with their sizes.
+
 ### limit-total
 
 **pre-flight.** A person is having the project checked before anything leaves the machine.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names how much source the project comes to and how much one deploy may
+carry, then the largest files with their sizes — ten at most, and a count
+of however many more there were.
 
 ### lockfile-missing
 
@@ -438,11 +458,20 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the one path that cannot be published and what is wrong with it:
+a space, a character shown with its code point, a mark that attaches to
+the letter before it, or a length in bytes against the limit it passed.
+One message per path, because the reason differs per path.
+
 ### project-dir-missing
 
 **this machine.** A person is getting this machine ready before anything is sent: the project directory, where the login is kept, the API address or the temporary directory.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the full path there is nothing at, resolved from whatever you
+typed — so you can see which directory curious actually went looking in,
+which is usually the whole of the misunderstanding.
 
 ### project-dir-unknown
 
@@ -456,6 +485,9 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the full path curious could not read, and quotes what your
+machine said about it rather than paraphrasing it.
+
 ### project-not-ready
 
 **pre-flight.** A person is having the project checked before anything leaves the machine.
@@ -467,6 +499,10 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 **this machine.** A person is getting this machine ready before anything is sent: the project directory, where the login is kept, the API address or the temporary directory.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the full path, and says it is a file rather than a directory.
+curious deploys the directory holding package.json, not a single file
+inside it.
 
 ### project-unreadable
 
@@ -574,11 +610,19 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the host, and nothing else about the address: a link curious
+could not even build a request from is still a link, and the part of it
+that authorises the upload is not something to print.
+
 ### upload-answer-unrecognised
 
 **uploads.** A person is waiting while curious sends the packed project to the upload address.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the host and the status number that came back, which together
+are the whole of what this client knows about an answer it cannot
+explain.
 
 ### upload-connection-lost
 
@@ -586,11 +630,19 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the host the archive had already reached. Bytes moved before the
+connection went, which is what separates this from an address that never
+answered at all.
+
 ### upload-host-unreachable
 
 **uploads.** A person is waiting while curious sends the packed project to the upload address.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the host nothing was sent to. Not one byte left this machine,
+which is what distinguishes it from a transfer that stopped part way
+through.
 
 ### upload-link-expired
 
@@ -598,11 +650,19 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the host, and says the upload window had already closed when the
+archive got there. Those windows are short on purpose, and a large
+project on a slow connection can outlast one.
+
 ### upload-redirected
 
 **uploads.** A person is waiting while curious sends the packed project to the upload address.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the host and the status number it answered with. curious does
+not follow a redirect while it is sending your project: the address it
+was given is the only one the server put its name to.
 
 ### upload-refused-unexplained
 
@@ -610,17 +670,30 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the host, and then says plainly that it cannot tell which of two
+things happened, because this server does not yet announce when an upload
+window closes. Running again is worth one try.
+
 ### upload-signature-mismatch
 
 **uploads.** A person is waiting while curious sends the packed project to the upload address.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
 
+It names the host, and says the window had not closed yet — so what was
+refused was the archive itself rather than the timing. That is a fault in
+curious rather than anything about your project, and running again will
+not move it.
+
 ### upload-stalled
 
 **uploads.** A person is waiting while curious sends the packed project to the upload address.
 
 _The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the host and how long nothing moved. The connection was open the
+whole time, which is a different situation from one that was never made,
+and the message says so rather than blaming your network.
 
 ### waitlist-declined
 

@@ -361,6 +361,145 @@ func TestReadmeTroubleshootingIDSetMatchesCatalog(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// The composed entries say what their message NAMES.
+// ---------------------------------------------------------------------
+
+// composedDisclaimerMarker is the phrase every composed entry's shared
+// line carries. It is matched rather than quoted whole so that rewording
+// the disclaimer is an ordinary copy change; what this row is about is
+// whether anything stands BESIDE it.
+const composedDisclaimerMarker = "assembled at run time"
+
+// readmeTroubleshootingEntries splits the failure-headlines block into
+// one body per id, keyed by the id its heading declares.
+//
+// Scoped to the marked block for the reason readmeTroubleshootingIDs is:
+// a level-3 heading used for prose elsewhere in the README — the note
+// about composed messages, which sits deliberately outside the block — is
+// not an entry and must not be read as one.
+func readmeTroubleshootingEntries(t *testing.T, readme string) map[string][]string {
+	t.Helper()
+	begin := strings.Index(readme, readmeHeadlinesBegin)
+	if begin < 0 {
+		t.Fatal("README.md carries no failure-headlines block, so it declares no entry")
+	}
+	end := strings.Index(readme[begin:], readmeHeadlinesEnd)
+	if end < 0 {
+		t.Fatalf("README.md opens a %s block and never closes it", readmeHeadlinesBegin)
+	}
+
+	entries := map[string][]string{}
+	current := ""
+	for _, line := range strings.Split(readme[begin:begin+end], "\n") {
+		if m := readmeTroubleshootingHeadingPattern.FindStringSubmatch(line); m != nil {
+			current = m[1]
+			entries[current] = nil
+			continue
+		}
+		if current != "" {
+			entries[current] = append(entries[current], line)
+		}
+	}
+	return entries
+}
+
+// shapeProse is the lines of an entry that describe what its message
+// names: everything that is not the stage line, the disclaimer, or a
+// quoted headline.
+func shapeProse(body []string) []string {
+	var out []string
+	for _, line := range body {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+		case strings.HasPrefix(trimmed, "**"): // the stage and its sentence
+		case strings.HasPrefix(trimmed, ">"): // a quoted headline
+		case strings.Contains(trimmed, composedDisclaimerMarker):
+		default:
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// TestEveryComposedEntryDescribesWhatItsMessageNames holds the half of
+// the troubleshooting section the catalog cannot fill in.
+//
+// A composed What has no fixed sentence, so there is nothing to quote and
+// the block quotes nothing for it. That left eighteen entries saying only
+// that they had nothing to say, which tells a reader with a failure id in
+// front of them precisely nothing about the message they are looking at.
+//
+// WHAT IS REQUIRED IS A DESCRIPTION, NEVER A TEMPLATE. The shapes are
+// readable at the sites that build them — the host an upload was going
+// to, the limit a project broke and the files that broke it, the path
+// that cannot be published — and prose describing those is a claim about
+// the program that stays true when the wording moves. A hand-typed
+// rendering would be wording nothing checks, which is the exact fragility
+// the catalog exists to end, arriving through the section written to
+// explain it. So the marking a quoted headline uses for an interpolated
+// value is refused here as well.
+func TestEveryComposedEntryDescribesWhatItsMessageNames(t *testing.T) {
+	root := moduleRoot(t)
+	readme := readReadmeFile(t, root)
+	raw, err := os.ReadFile(filepath.Join(root, "catalog.json"))
+	if err != nil {
+		t.Fatalf("reading catalog.json: %v", err)
+	}
+	var catalog publicCatalog
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatalf("catalog.json does not decode as the published shape: %v", err)
+	}
+	entries := readmeTroubleshootingEntries(t, readme)
+
+	composed := 0
+	for _, f := range catalog.Failures {
+		hasComposed := false
+		for _, headline := range f.Headline {
+			if headline == nil {
+				hasComposed = true
+			}
+		}
+		if !hasComposed {
+			continue
+		}
+		composed++
+
+		body, declared := entries[f.ID]
+		if !declared {
+			t.Errorf("catalog.json composes %s at run time and README.md declares no "+
+				"troubleshooting entry for it", f.ID)
+			continue
+		}
+		prose := shapeProse(body)
+		if len(prose) == 0 {
+			t.Errorf("%s composes its message at run time and its README entry carries the "+
+				"disclaimer and nothing else.\nAn entry that says only that it has no sentence "+
+				"to quote tells a reader holding that failure id nothing at all. Say what the "+
+				"message NAMES — the address, the limit and the files that broke it, the path "+
+				"— which is readable at the site that builds it and stays true when the "+
+				"wording moves.", f.ID)
+			continue
+		}
+		for _, line := range prose {
+			if strings.Contains(line, "<…>") {
+				t.Errorf("%s's README entry carries the marking a quoted headline uses for an "+
+					"interpolated value: %q\nThese entries describe what a message names; they "+
+					"do not template it. A hand-typed rendering is wording nothing checks.",
+					f.ID, line)
+			}
+		}
+	}
+
+	if composed == 0 {
+		t.Fatal("catalog.json carries no composed headline, so this row compared nothing")
+	}
+	if !t.Failed() {
+		t.Logf("%d composed ids, each describing what its message names", composed)
+	}
+}
+
+// ---------------------------------------------------------------------
 // The spelling rule's new home.
 // ---------------------------------------------------------------------
 
