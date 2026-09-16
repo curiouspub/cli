@@ -264,10 +264,63 @@ func goCorpus(t *testing.T, root string) []copyItem {
 			add(fset, fi.path, ret.Results[0], consts)
 		}
 
+		// THE TERMINAL PACKAGE WRITES DIRECTLY as well as through its own
+		// narration methods, and one of those writes is a whole message: a
+		// person who cancels a run sees a single word, printed straight to
+		// the stream. It reaches a reader exactly as much as a Failure
+		// does, and nothing in the five shapes below could see it.
+		//
+		// The direct-write shapes are read ONLY in that package, which is
+		// the boundary that owns every byte a person sees. Elsewhere in
+		// this module the same call is an operator diagnostic — a tool
+		// reporting to whoever ran it — and pulling those into a corpus
+		// about product copy would be judging one kind of writing by the
+		// other's rules.
+		inTerminal := strings.HasPrefix(displayPath(root, fi.path), "internal/ui/")
+
 		ast.Inspect(fi.file, func(n ast.Node) bool {
 			switch node := n.(type) {
+			case *ast.AssignStmt:
+				// A copy field WRITTEN AFTER CONSTRUCTION. The composite
+				// literal below is the ordinary way these are set, so an
+				// assignment reads as an edge case — and it is exactly
+				// where the debug path rewrites what a reader is told to
+				// do next, which is the one paragraph a refusal cannot do
+				// without.
+				for _, lhs := range node.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok {
+						continue
+					}
+					switch sel.Sel.Name {
+					case "What", "Why", "NextText", "Message", "Next":
+						for _, rhs := range node.Rhs {
+							add(fset, fi.path, rhs, consts)
+						}
+					}
+				}
+
 			case *ast.CallExpr:
+				if inTerminal {
+					switch calleeName(node.Fun) {
+					case "Fprint", "Fprintln", "Fprintf":
+						// Everything after the stream is copy; the stream
+						// itself is not.
+						for _, arg := range node.Args[min(1, len(node.Args)):] {
+							add(fset, fi.path, arg, consts)
+						}
+					}
+				}
 				switch calleeName(node.Fun) {
+				case "objectSchema":
+					// THE INPUT SCHEMA IS PROSE. Its descriptions are what
+					// a model reads to decide how to fill a field in, so
+					// they are copy in the same sense a tool's own
+					// description is — and they were the half of the
+					// agent-facing surface nothing read.
+					for _, arg := range node.Args {
+						add(fset, fi.path, arg, consts)
+					}
 				case "Step", "Result", "Help":
 					for _, arg := range node.Args {
 						add(fset, fi.path, arg, consts)
@@ -292,6 +345,27 @@ func goCorpus(t *testing.T, root string) []copyItem {
 				}
 			case *ast.CompositeLit:
 				switch typeName(node.Type) {
+				case "Tool":
+					// A TOOL'S TITLE IS SHOWN TO A PERSON. The description
+					// beside it was already reached, because it is written
+					// as a constant or returned from a function of its own
+					// — so the field a client actually displays was the one
+					// piece of this surface nothing read, purely because of
+					// how it happens to be spelled.
+					for _, elt := range node.Elts {
+						kv, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := kv.Key.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						switch key.Name {
+						case "Title", "Description":
+							add(fset, fi.path, kv.Value, consts)
+						}
+					}
 				case "Failure":
 					for _, elt := range node.Elts {
 						kv, ok := elt.(*ast.KeyValueExpr)
@@ -402,18 +476,75 @@ var forbiddenTokenExceptions = map[string]bool{
 	"errorNarration": true,
 }
 
-// originIsExempt reports whether origin is the one recorded exception's
-// own site.
-func originIsExempt(origin string) bool {
-	// The exception is scoped to the one declaration site recorded
-	// above: internal/flow/stream.go's errorNarration
-	// constant. A go/ast const declaration's own position is its name,
-	// so the corpus item for it carries that file with the line the
-	// name sits on — checked here by file rather than by line, because a
-	// file this narrow (one named exception) is what makes "checked by
-	// file" safe: nothing else in stream.go is allowed to say "error:".
-	return strings.HasSuffix(origin, "internal/flow/stream.go") ||
-		strings.Contains(origin, "internal/flow/stream.go:")
+// exemptedToken is the ONE token the recorded exception is allowed to
+// carry. The exception exists because that constant frames somebody
+// else's content on the build-log stream; it is not a licence to say
+// anything else.
+const exemptedToken = `"error:"`
+
+// exemptionSites resolves each name in forbiddenTokenExceptions to the
+// file and line it is DECLARED at, by reading the source.
+//
+// THE MAP WAS DECORATION AND THE CHECK WAS A FILE MATCH. Nothing
+// consulted the set of names at all: the question asked was whether an
+// origin lay in that file, so every copy site in it was exempt from every
+// forbidden token, and adding a second name to the map changed nothing
+// whatsoever. An exemption that cannot be narrowed by editing the thing
+// that describes it is not an exemption; it is a hole with a comment over
+// it.
+//
+// Resolving the NAME to its own declaration is what makes the map load
+// bearing: remove the entry and the site stops being exempt, which is the
+// property a reader assumes the map already had.
+func exemptionSites(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	sites := map[string]bool{}
+	found := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, path := range goFiles(t, root, false) {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != 1 {
+					continue
+				}
+				name := vs.Names[0].Name
+				if !forbiddenTokenExceptions[name] {
+					continue
+				}
+				found[name] = true
+				sites[displayPath(root, path)+":"+
+					itoa(fset.Position(vs.Names[0].Pos()).Line)] = true
+			}
+		}
+	}
+	for name := range forbiddenTokenExceptions {
+		if !found[name] {
+			t.Fatalf("the recorded exception %q is declared nowhere in this module, so it "+
+				"exempts nothing and the entry is describing a site that has moved or gone",
+				name)
+		}
+	}
+	return sites
+}
+
+// exemptHit reports whether one finding is the recorded exception: the
+// one token, at the one site.
+//
+// BOTH HALVES ARE THE RULE. A second forbidden token on the exempted line
+// is not exempt, and the exempted token anywhere else in the same file is
+// not exempt either — which is the narrowing the previous file-wide match
+// could not express.
+func exemptHit(sites map[string]bool, origin, hit string) bool {
+	return hit == exemptedToken && sites[origin]
 }
 
 func TestForbiddenTokenExceptionSetHasExactlyOneMember(t *testing.T) {
@@ -589,11 +720,12 @@ func TestNoAuthoredCopyContainsAForbiddenToken(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatal("the copy-audit corpus is empty, so this row compared nothing")
 	}
+	sites := exemptionSites(t, root)
 	for _, item := range items {
-		if originIsExempt(item.origin) {
-			continue
-		}
 		for _, hit := range forbiddenTokenHits(item.text, typeNames, item.isDoc) {
+			if exemptHit(sites, item.origin, hit) {
+				continue
+			}
 			t.Errorf("%s contains %s: %q", item.origin, hit, item.text)
 		}
 	}
@@ -637,10 +769,22 @@ func TestForbiddenCopyRedsOnAKnownBadPhraseAndTheExceptionHolds(t *testing.T) {
 		"import \"github.com/curiouspub/cli/pkg/wire\"", typeNames, false); len(hits) == 0 {
 		t.Error("the same text from a non-doc origin was not flagged, so isDoc is not actually scoping anything")
 	}
-	if !originIsExempt("internal/flow/stream.go:127") {
-		t.Error("the recorded exception's own origin was not treated as exempt")
+	// THE EXEMPTION IS ONE TOKEN AT ONE SITE, and all four corners of that
+	// are fixtured here because the shape it replaced satisfied only the
+	// first of them.
+	sites := map[string]bool{"internal/flow/stream.go:127": true}
+	if !exemptHit(sites, "internal/flow/stream.go:127", `"error:"`) {
+		t.Error("the recorded exception's own site and token were not treated as exempt")
 	}
-	if originIsExempt("internal/flow/upload.go:127") {
+	if exemptHit(sites, "internal/flow/stream.go:500", `"error:"`) {
+		t.Error("the exempted token was excused somewhere else in the same file, which is the " +
+			"file-wide match this narrowing exists to replace")
+	}
+	if exemptHit(sites, "internal/flow/stream.go:127", `"failed to"`) {
+		t.Error("a second forbidden token was excused at the exempted site; the exception is " +
+			"for one token, not for one line")
+	}
+	if exemptHit(sites, "internal/flow/upload.go:127", `"error:"`) {
 		t.Error("an unrelated file was treated as exempt")
 	}
 }
@@ -701,8 +845,16 @@ func dispatchTokens(t *testing.T, root string) map[string]bool {
 // — "curious couldn't finish logging you in." — never matches this
 // pattern at all, which is what keeps ordinary sentences out of scope by
 // construction rather than by an exception list.
+// BOTH QUOTE STYLES, and the second one is not hypothetical: this
+// program's own usage text tells a reader how to ask a subcommand for its
+// flags, and it quotes the invocation with an apostrophe because the
+// sentence around it is already inside a backquoted string. Matching
+// backticks alone left that line — the one piece of copy that names a
+// command position in this binary's own help — outside the rule
+// entirely, and the fixture written for it passed by never matching
+// anything at all.
 var commandPositionPattern = regexp.MustCompile(
-	"`(?:curious|npx curiouspub) (<[a-zA-Z]+>|[a-z][a-z0-9_-]*)")
+	"[`'](?:curious|npx curiouspub) (<[a-zA-Z]+>|[a-z][a-z0-9_-]*)")
 
 // fencedCommandLinePattern is the third position: a literal invocation at
 // the start of a line inside a fenced code block, with no backticks of
@@ -769,6 +921,16 @@ func TestCommandTokenRuleFixture(t *testing.T) {
 	if bad := unregisteredCommandMentions(
 		"Run 'curious <command> -h' for a command's own flags.", registered); len(bad) != 0 {
 		t.Errorf("the declared <command> placeholder was flagged: %v", bad)
+	}
+	// AND THE SAME SENTENCE WITH A REAL TOKEN IN IT, which is what makes
+	// the assertion above mean anything. Under a backtick-only pattern
+	// neither line matched, so the placeholder "passed" by never being
+	// read — a row satisfied by being blind rather than by being right.
+	if bad := unregisteredCommandMentions(
+		"Run 'curious frobnicate -h' for a command's own flags.", registered); len(bad) != 1 {
+		t.Errorf("a single-quoted unregistered token was not caught: %v\n"+
+			"If this passes while the placeholder row also passes, the pattern is matching "+
+			"neither and both rows are measuring nothing.", bad)
 	}
 	if bad := unregisteredCommandMentions(
 		"```\ncurious frobnicate\n```", registered); len(bad) != 1 {
