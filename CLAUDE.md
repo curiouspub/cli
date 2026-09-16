@@ -86,7 +86,20 @@ are not files, so they are read by a **second** check — `make
 surface-check`, which runs in CI over the range being published and in an
 optional pre-push hook before it leaves your machine. It reads the same
 two rule files this one does, at both ends of the range, and it is
-described where it lives.
+described where it lives. **A PUSH IS CHAINED TO IT WITH `&&`**, exactly
+as a commit is chained to the gate: a check whose exit code does not
+decide whether the thing it guards happens is a decoration, and it costs
+its full runtime to buy nothing.
+
+That sentence gained the word *push* because of one run here. The check
+and the push were written into a single command chain separated by an
+`echo`, so the push proceeded on the check's exit code being irrelevant
+rather than on it being zero — and what went out was a message the check
+had flagged in that very run. Disclosed by the author rather than found
+later, which is the only reason it is a short paragraph. Every commit in
+it had been gated green individually; the gate does not carry this check,
+and that is precisely why the chaining has to be written down rather than
+remembered.
 
 That check exists because the hand-check it replaces failed twice here,
 once by the same hand that had written the sentence describing the hole.
