@@ -1011,10 +1011,22 @@ func heldItsFloor(requested int, s *timing.Sustained) bool {
 //     the comparison was reaching for, or the fix is a deletion wearing
 //     a rewrite's name.
 //
-//  2. Make the listener skip the pin on its FIRST accepted connection.
-//     Reds on the count, which is the positive control doing its job:
+//     AND THE RED CAME FROM THE BENCH AND NOT FROM THE SOCKETS, which
+//     is why that bench is load-bearing rather than decoration. In that
+//     same run the two live connections both read back 131072 and
+//     agreed: the disagreement on real sockets is INTERMITTENT — twice
+//     in months, and only ever under whole-repo contention — so this
+//     mutation graded on live sockets alone would have come back green
+//     and proved nothing at all.
 //
-//     the store accepted 1 connection(s) and this row made 2, so either
+//  2. Make the listener skip the pin while its own record is still
+//     empty. That record only advances when a pin is applied, so this
+//     pins NOTHING, which is the positive control in its strongest
+//     form: a pin applied to nothing reports no error and no
+//     disagreement, and reads exactly like a pin that worked on every
+//     connection there was. Reds on the count:
+//
+//     the store accepted 0 connection(s) and this row made 2, so either
 //     a connection was never accepted or two requests shared one — and
 //     a row that pins nothing reports exactly what a row that pins
 //     everything does
