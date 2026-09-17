@@ -185,6 +185,52 @@ curious_in() {
 		"$BIN" "$@"
 }
 
+# How long the answer's side of the terminal stays open after typing. It
+# only has to outlast the program's walk of a fixture, which is
+# milliseconds; the rest is margin for a loaded machine.
+PTY_HOLD="${PTY_HOLD_SECONDS:-8}"
+PTY_FLAVOUR="none"
+
+# pty_answer runs the binary with a REAL TERMINAL on both its input and
+# its diagnostics, and types one answer at the question it asks. Both
+# have to be terminals before the program will ask anything at all, so a
+# pipe cannot reach this path however it is fed.
+#
+# STDIN IS HELD OPEN AFTER THE ANSWER, and that is the mechanism rather
+# than a flourish. Closing it immediately hands the program END-OF-INPUT
+# before it has finished asking, and end-of-input with nothing typed is
+# ITSELF a decline — so the run prints "cancelled" whatever was typed.
+# Measured: an answer of "y" delivered through a pipe that closed at once
+# cancelled the deploy and packed nothing, which is indistinguishable
+# from a correct refusal. A declining row built that way is green without
+# the answer ever being read.
+#
+# The defence is that both rows share this helper. If answers stopped
+# arriving, the accepting row would cancel too and would red — so the
+# pair cannot quietly rot one at a time.
+pty_answer() {
+	local answer="$1" home="$2"
+	shift 2
+	if [ "$PTY_FLAVOUR" = "gnu" ]; then
+		# util-linux takes the command as one string after -c.
+		local quoted
+		quoted="$(printf '%q ' "$BIN" "$@")"
+		{
+			printf '%s\n' "$answer"
+			sleep "$PTY_HOLD"
+		} | env -u CURIOUS_CONFIG HOME="$home" XDG_CONFIG_HOME="${home}/.config" \
+			CURIOUS_API_URL="$API" \
+			script -qec "$quoted" /dev/null 2>&1 | tr -d '\r'
+		return
+	fi
+	{
+		printf '%s\n' "$answer"
+		sleep "$PTY_HOLD"
+	} | env -u CURIOUS_CONFIG HOME="$home" XDG_CONFIG_HOME="${home}/.config" \
+		CURIOUS_API_URL="$API" \
+		script -q /dev/null "$BIN" "$@" 2>&1 | tr -d '\r'
+}
+
 # log_mark and requests_since turn the service's own access log into a
 # counter. The mark is a line count rather than a timestamp: two runs
 # inside the same second are indistinguishable by time and are not
@@ -307,7 +353,7 @@ means a login failed earlier and said so somewhere this run did not stop for"
 
 setup() {
 	local missing=()
-	for tool in jq curl tar awk node go docker shasum; do
+	for tool in jq curl tar awk node go docker shasum script; do
 		command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 	done
 	# Every missing tool at once. Naming only the first costs the reader a
@@ -508,7 +554,15 @@ itself — so every build would fail while downloading the source."
 		fail "deploy" "the object store at ${OBJECT_STORE} must answer from BOTH this \
 machine and a container, and it does not: this machine got ${host_status}, a container got \
 ${container_status}. One address has to satisfy both, because this machine uploads the archive \
-and the per-build container downloads it."
+and the per-build container downloads it.
+    THE FIX IS ONE LINE AND IT IS AN OPERATOR ACTION, which is why this names it rather than \
+doing it: add a hosts entry mapping the container runtime's name for this machine to loopback, \
+in /etc/hosts, needing sudo —
+        127.0.0.1 host.docker.internal
+    then set OBJECT_STORE_URL to that name and start the service with the SAME value, since the \
+service signs the upload link and the container follows it. That one name then answers from \
+here, where the object store is published, and from inside a container, which is the pair of \
+answers no other address on this machine gave."
 	fi
 	pass "deploy — the object store answers from this machine (${host_status}) and from a container (${container_status})"
 
@@ -570,6 +624,68 @@ JSON
 	done
 
 	pass "deploy — the archive uploaded, the build ran, and the service recorded the whole sequence"
+}
+
+# --- the question, asked where it can be answered -----------------------
+
+scenario_prompt() {
+	echo "With a real terminal the question is asked out loud, and both answers are honoured."
+
+	if script -q /dev/null true >/dev/null 2>&1; then
+		PTY_FLAVOUR=bsd
+	elif script -qec true /dev/null >/dev/null 2>&1; then
+		PTY_FLAVOUR=gnu
+	else
+		fail "the question" "no 'script' on this machine can allocate a terminal in \
+either the BSD or the util-linux form, so these rows cannot run. They are NOT skipped and NOT \
+passed: a check that quietly does not run looks exactly like one that did."
+	fi
+
+	local home out
+	home="$(isolate declined)"
+	out="$(pty_answer n "$home" deploy testdata/projects/computed-srcdir || true)"
+
+	grep -q 'Continue anyway? \[Y/n\]' <<<"$out" ||
+		fail "the question" "with a terminal the question was never asked; got: ${out}"
+	# THE STOP IS ASSERTED AS THE THING THAT DID NOT HAPPEN, rather than
+	# as a label for it. Declining is not a failure: it mints no failure
+	# id, prints "cancelled" and exits 0, because a person saying no has
+	# not hit a fault. So what proves the run stopped is that no archive
+	# was ever built — which is the observable the row is really about,
+	# and a stronger claim than any name for it would be.
+	if grep -q 'Packed' <<<"$out"; then
+		fail "the question" "declining still packed the project; got: ${out}"
+	fi
+	grep -q 'cancelled' <<<"$out" ||
+		fail "the question" "declining did not say so; got: ${out}"
+	pass "the question — with a terminal it is asked, and declining stops before anything is packed"
+
+	# Accepting needs a stored credential, because the question is asked
+	# BEFORE the login step: a machine with no login would answer this
+	# one and then stop at a question no pipe can answer.
+	local ahome email token
+	ahome="$(isolate accepted)"
+	email="question-$(date +%s)-$$@example.com"
+	token="$(login_as "$email")"
+	seed_login "$ahome" "$token"
+
+	out="$(pty_answer y "$ahome" deploy testdata/projects/computed-srcdir || true)"
+	grep -q 'Continue anyway? \[Y/n\]' <<<"$out" ||
+		fail "the question" "the question was not asked before accepting; got: ${out}"
+	grep -qE 'Packed [0-9]+ files' <<<"$out" ||
+		fail "the question" "accepting did not carry on into the pack; got: ${out}"
+	pass "the question — accepting carries on into the pack"
+
+	# THE PAIR'S OWN CONTROL. If answers were not reaching the program,
+	# the terminal would hand it end-of-input, which reads as a decline —
+	# so this row would have cancelled and packed nothing, and the
+	# declining row above would have been asserting a stop it never
+	# caused. One of the two cannot break without this saying so.
+	if grep -q 'cancelled' <<<"$out"; then
+		fail "the question" "accepting was read as a decline, so the answer is not \
+reaching the program and the declining row above proves nothing"
+	fi
+	pass "the question — control: accepting is not read as a decline, so both answers are really read"
 }
 
 # --- 4) the release pipeline, proved without publishing anything --------
@@ -847,6 +963,10 @@ echo "home directory."
 run_scenario "setup" setup
 run_scenario "isolation" scenario_isolation
 run_scenario "1) the project is checked before anything is sent" scenario_preflight
+# The question rows sit OUTSIDE scenario 1 deliberately: accepting
+# carries on into a real deploy and therefore sends things, and scenario
+# 1's whole claim is that nothing is sent.
+run_scenario "the question a terminal can answer" scenario_prompt
 run_scenario "4) the release pipeline" scenario_pipeline
 run_scenario "5) a second login ends the first machine's session" scenario_second_login
 run_scenario "7) the agent surface, over the protocol" scenario_agent
