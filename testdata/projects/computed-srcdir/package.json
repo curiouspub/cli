@@ -1,0 +1,7 @@
+{
+  "name": "computed-srcdir-fixture",
+  "private": true,
+  "dependencies": {
+    "astro": "^5.0.0"
+  }
+}
