@@ -1,12 +1,12 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -312,9 +312,40 @@ type socketPin struct {
 // record into "the last thing that happened" rather than "what this run
 // was measured under".
 //
-// TWO CONNECTIONS DISAGREEING IS ALSO A FAILURE. A pin that means one
-// thing on one socket and another on the next is not a condition, and a
-// gap measured across both was measured under neither.
+// TWO CONNECTIONS ASKING FOR DIFFERENT SIZES IS ALSO A FAILURE. A pin
+// that means one thing on one socket and another on the next is not a
+// condition, and a gap measured across both was measured under neither.
+// The comparison is over the REQUEST because the request is ours: every
+// caller here hands one fixed size to every connection it pins, so two
+// requests differing inside one run is a fixture pinning two connections
+// differently — the defect this rule exists to catch — and nothing a
+// kernel does can produce it.
+//
+// TWO READ-BACKS DISAGREEING IS NOT A FAILURE, and that correction was
+// paid for twice. This comparison used to be made over the READ-BACK,
+// which is an instant rather than a condition: one of the three legs
+// ships a kernel whose own receive autosizing moves an accepted socket's
+// buffer whatever SO_RCVBUF asked for, so the second of two connections
+// can report several times what the first did with both requests
+// honoured. That leg's entry in internal/timing says exactly this, in as
+// many words, and has since it was written. Compared here — with no
+// record in hand to say whether this leg claims a held pin at all — it
+// read as "there is no single condition", which named the kernel's
+// answer and blamed the pin.
+//
+// WHAT IT COST: two red runs, months apart, both on that leg, both
+// inside whole-repo runs, and never once reproducible alone — five
+// consecutive isolated runs under the race detector passed on the very
+// machine that had just produced the second. A refusal that fires only
+// under whole-repo contention is reporting on the machine.
+//
+// THE READ-BACK IS STILL COMPARED, against the RECORD, one function down
+// in confirmPin where the record is in hand: a pin the record CLAIMS is
+// held and this run did not hold is a real stop, and telling that apart
+// from a kernel moving a buffer it never promised to hold is precisely
+// what needs the record. What replaces the refusal here is a DURATION
+// rather than a second instant — the buffer is sampled while the body
+// moves and the range it ran over is written down. See socketPin.sample.
 func (p *socketPin) applied(requested, readBack int, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -325,11 +356,11 @@ func (p *socketPin) applied(requested, readBack int, err error) {
 	switch {
 	case err != nil:
 		p.pin = timing.Pin{Requested: requested, Err: err.Error()}
-	case p.uses > 1 && p.pin.ReadBack != readBack:
+	case p.uses > 1 && p.pin.Requested != requested:
 		p.pin = timing.Pin{Requested: requested, Err: fmt.Sprintf(
-			"two connections in one run read back different buffer sizes, %d then %d, "+
+			"two connections in one run were pinned to different sizes, %d then %d, "+
 				"so there is no single condition this run's gap was measured under",
-			p.pin.ReadBack, readBack)}
+			p.pin.Requested, requested)}
 	default:
 		p.pin = timing.Pin{Requested: requested, ReadBack: readBack}
 	}
@@ -371,12 +402,18 @@ func pinBuffer(conn net.Conn, size, option int, into *socketPin) {
 	// is a measurement rather than tidiness. Through the standard
 	// library's SetReadBuffer they are several operations apart, and on
 	// darwin the kernel's receive autosizing can move the buffer inside
-	// that gap: the row asserting that two connections in one run agree
-	// saw 16,384 on the first and 277,696 on the second, both having had
-	// the same request honoured. Closed to two adjacent syscalls, the
-	// read-back is an answer to the request rather than a race with the
-	// kernel. It is still only an INSTANT — see socketPin.sample for what
-	// happens to that buffer afterwards.
+	// that gap: the row below, over two connections in one run, saw
+	// 16,384 on the first and 277,696 on the second, both having had the
+	// same request honoured. Closed to two adjacent syscalls the window
+	// is as narrow as a read-back can be made.
+	//
+	// AND ON THAT LEG IT IS STILL NOT NARROW ENOUGH, which is the fact
+	// deciding what a condition is established BY. Through this very
+	// pairing, a 131,072-byte request on an accepted socket read back
+	// 392,384 — the autosizing had already moved it between the two
+	// adjacent calls. So a read-back is an INSTANT and is treated as one;
+	// see socketPin.sample for the buffer over the seconds that follow,
+	// which is what the rows here actually claim.
 	var readBack int
 	var opErr error
 	if err := raw.Control(func(fd uintptr) {
@@ -873,39 +910,108 @@ func pinnedUploadRun(t *testing.T, root string, size int) (run *deployRun, clien
 	return run, client, run.store.pin
 }
 
-// TestEveryConnectionOneRunAcceptsReadsBackTheSameBuffer protects a
-// measurement's CONDITION rather than a measurement.
+// sampledBody is how much body each of this row's connections carries,
+// and it is sized by what the SAMPLER needs rather than by what the
+// socket needs.
+//
+// The claim below is about a buffer over a duration, so the duration has
+// to exist. A body the kernel swallows whole is handed over in
+// microseconds: the socket is shut before a tick fires, the sampler sees
+// nothing, and the row then reds on its own control having proved
+// nothing at all. Paced at the store's own drain rate this is sixteen
+// chunks, so every connection stays alive for at least sixteen sampling
+// steps — a FLOOR the fixture guarantees rather than a duration the
+// scheduler might grant, which is the difference between a row that is
+// slow and a row that is flaky.
+const sampledBody = 1 << 20
+
+// heldItsFloor reports whether a buffer sampled over a body never fell
+// below the size that was asked for.
+//
+// A PIN HOLDS A FLOOR AND THE CEILING IS THE KERNEL'S. Measured on the
+// leg that moves: re-setting the option on every drain step held the
+// floor at the requested size and moved the ceiling not at all. So "the
+// pin held" is a claim about the BOTTOM of the range, and a range
+// reaching above it is that kernel's own autosizing — recorded and
+// reported, never refused. It is also the one comparison that reads the
+// same on all three legs: a kernel that answers a request with twice the
+// size and holds there is honouring it, and sits above its floor like
+// any other.
+//
+// NIL IS NOT A HELD FLOOR, and neither is a range with no samples in it.
+// That is nobody having looked, which these rows keep separate from a
+// buffer that moved.
+func heldItsFloor(requested int, s *timing.Sustained) bool {
+	return s != nil && s.Samples > 0 && s.Low >= requested
+}
+
+// TestEveryConnectionOneRunAcceptsHoldsTheSamePinWhileItsBodyMoves
+// protects a measurement's CONDITION rather than a measurement.
 //
 // A window is five times a gap, and a gap is that number only under the
 // buffers it was taken over. A run whose connections were not all pinned
 // the same way has no single condition at all: its worst gap might have
 // come from the pinned connection or from the one that autotuned, and
 // nothing in the number says which. That is not a theoretical hole. It
-// is what round 2 shipped, and what round 2's own runtime refusal
-// reported when the suite was finally run under -race —
+// is what round 2 shipped, and its own runtime refusal reported it when
+// the suite was finally run under the race detector — a worst gap of
+// 267.2 ms against a record of 154.4 ms, because the connection that
+// autotuned was three times the pinned size and the gap is a fraction of
+// the buffer divided by the drain rate.
 //
-//	receive NOT PINNED (two connections in one run read back different
-//	buffer sizes, 392384 then 131072, so there is no single condition
-//	this run's gap was measured under)
+// # THE CONDITION IS WHAT EVERY CONNECTION ASKED FOR AND HELD, NOT WHAT TWO OF THEM REPORTED ONCE
 //
-// — with a worst gap of 267.2 ms against a record of 154.4 ms, because
-// the connection that autotuned was three times the pinned size and the
-// gap is a fraction of the buffer divided by the drain rate.
+// This row used to establish it by comparing two READ-BACKS: make two
+// requests, close the idle connection between them so the second has to
+// dial, and refuse when the two sockets reported different sizes. On one
+// of the three legs that is the wrong instrument, and this repository's
+// own record has said so all along — that leg's entry in internal/timing
+// states that its kernel's receive autosizing moves an accepted socket's
+// buffer whatever SO_RCVBUF asked for, and that two connections in one
+// run can read back different sizes. A row refusing exactly that was
+// refusing the kernel's answer and calling it a fixture defect.
 //
-// THE RUNTIME REFUSAL STAYS, and this row is not a replacement for it.
-// They answer different questions. The refusal in socketPin.applied is a
-// property of every run of every write-side row, on every leg, including
-// the ones nobody is looking at; this row is a property of the FIXTURE,
-// checked once, cheaply, where a reader can see what is being claimed.
-// A kernel that clamps one connection and not the next would be caught
-// by the first and not by the second; a constructor that lets a
-// connection in before the pin exists is caught by both, which is how
-// the defect was found.
+// IT COST TWO RED RUNS, months apart, both on that leg, both inside
+// whole-repo runs, and never once reproducible alone: five consecutive
+// isolated runs under the race detector passed on the very machine that
+// had just produced the second. The failing run reported 131072 and then
+// 392384 on the accepting end, both requests honoured — one kernel
+// growing one buffer between two reads. A row that reds only under
+// whole-repo contention is measuring the machine rather than the code.
 //
-// REQUIRED MUTATIONS, RUN 2026-09-10 — three, and the third is the one
-// worth reading, because it did NOT do what the round predicted.
+// So the condition is established the way the write-side probes beside
+// it establish theirs: the buffer is SAMPLED WHILE THE BODY MOVES, and
+// what is claimed is the floor every connection held across its
+// transfer rather than the number two of them happened to report at one
+// instant. The range above that floor is the kernel's, and it goes into
+// this row's log line rather than into a refusal. See socketPin.sample
+// and heldItsFloor.
 //
-//  1. Make the listener skip the pin on its FIRST accepted connection.
+// WHICH IS WHY THE BODIES HERE ARE PACED RATHER THAN SMALL. The old row
+// sent sixty-four bytes, on the argument that its subject is the socket
+// and not the transfer — true of a read-back, false of a duration. See
+// sampledBody.
+//
+// THE RUNTIME REFUSAL STAYS, re-aimed at the request, and this row is
+// not a replacement for it. They answer different questions. The refusal
+// in socketPin.applied is a property of every run of every write-side
+// row, on every leg, including the ones nobody is looking at; this row
+// is a property of the FIXTURE, checked once, cheaply, where a reader
+// can see what is being claimed. A constructor that lets a connection in
+// before the pin exists is caught by both, which is how that defect was
+// found.
+//
+// REQUIRED MUTATIONS, RUN 2026-09-17 — five, and the first is the one
+// this row exists for.
+//
+//  1. Put the read-back comparison back in socketPin.applied. Reds on
+//     the bench case that replays the moving leg's own numbers: two
+//     connections that both asked for the pinned size, one of which read
+//     back 392384. A row rewritten to sample has to keep refusing what
+//     the comparison was reaching for, or the fix is a deletion wearing
+//     a rewrite's name.
+//
+//  2. Make the listener skip the pin on its FIRST accepted connection.
 //     Reds on the count, which is the positive control doing its job:
 //
 //     the store accepted 1 connection(s) and this row made 2, so either
@@ -913,37 +1019,50 @@ func pinnedUploadRun(t *testing.T, root string, size int) (run *deployRun, clien
 //     a row that pins nothing reports exactly what a row that pins
 //     everything does
 //
-//  2. Pin the first connection to 392,384 — round 2's own reported
-//     number — and the rest to the pinned size. Reds through the
-//     runtime refusal, naming both: "two connections in one run read
-//     back different buffer sizes, 392384 then …".
+//  3. Pin the first accepted connection to 392,384 and the rest to the
+//     pinned size. Reds through the runtime refusal, naming the two
+//     sizes ASKED rather than two sizes reported.
 //
-//  3. PUT THE SIZE BACK WHERE ROUND 2 HAD IT: a field on the store,
-//     written after the server has started, read under the store's
-//     mutex at accept. This row STAYED GREEN, and so did the upload row
-//     beside it, and the race detector said nothing. That is not a hole
-//     in this row — it is a correction to the diagnosis. Round 2's write
-//     through pinnedUpload took the store's mutex and the accept-side
-//     read took it too, so that path was synchronised; and in every call
-//     site the assignment happens before anything dials the store, so no
-//     connection was ever accepted in the gap. The race the detector
-//     really reported was one line further out — the PROBE assigned the
-//     same field with no lock at all (stall_probe_test.go, round 2) —
-//     and that one reproduces on the round-2 tree every time.
+//  4. Drop the two watch calls below. Both ends red, each saying it was
+//     never sampled while a body was moving — which is the difference
+//     between a run that watched a buffer hold and one that never
+//     looked.
 //
-// So the parameterisation is right and it removes a real race, and the
-// symptom quoted above it has a SECOND cause that the parameterisation
-// does not touch: darwin moves an accepted socket's receive buffer on
-// its own, so a read-back taken two syscalls after the request can
-// already be the kernel's number rather than ours. That is why this
-// round also samples the buffer while the body moves rather than trusting
-// the read-back. See socketPin.sample.
-func TestEveryConnectionOneRunAcceptsReadsBackTheSameBuffer(t *testing.T) {
+//  5. Pin the accepting end to half the size this row asked for, on
+//     every connection. The requests agree with each other and not with
+//     the row, and it reds naming both numbers.
+//
+// AND ONE MUTATION FROM AN EARLIER ROUND IS KEPT, because it did NOT do
+// what that round predicted. Putting the receive size back where it
+// began — a field on the store, written after the server had started and
+// read under the store's mutex at accept — left this row green, and the
+// upload row beside it green, with the race detector silent. That is not
+// a hole in this row; it is a correction to the diagnosis. That write
+// took the store's mutex and the accept-side read took it too, and in
+// every call site the assignment happened before anything dialled, so no
+// connection was ever accepted in the gap. The race the detector really
+// reported was one line further out, in the probe, which assigned the
+// same field with no lock at all.
+func TestEveryConnectionOneRunAcceptsHoldsTheSamePinWhileItsBodyMoves(t *testing.T) {
 	store := newObjectStore(t, &deployJournal{}, pinnedBuffer)
 	store.acceptAnyLength = true
+	// PACED, BECAUSE THE CLAIM IS ABOUT A DURATION. The store swallows a
+	// chunk and pauses, which is what keeps each connection alive long
+	// enough to be sampled more than once, and what makes the client wait
+	// on buffer space rather than on nothing at all. The knobs and the
+	// rate are the write-side probes' own, so this row and those cannot
+	// drift into measuring two different fixtures.
+	store.readChunk = pacedChunk
+	store.readPause = pacedPause
+	store.pauseUntil = sampledBody
 
 	transport, client := pinnedTransport(pinnedBuffer)
 	t.Cleanup(transport.CloseIdleConnections)
+	// ARMED BEFORE ANYTHING DIALS. A sampler started after the first
+	// request would miss the connection it exists to watch, and the row
+	// would then be asserting over whatever was left.
+	client.watch(t, pacedPause)
+	store.pin.watch(t, pacedPause)
 	httpClient := &http.Client{Transport: transport}
 
 	// TWO, because one connection cannot disagree with anything. The
@@ -953,7 +1072,7 @@ func TestEveryConnectionOneRunAcceptsReadsBackTheSameBuffer(t *testing.T) {
 	const connections = 2
 	for i := 0; i < connections; i++ {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, store.url,
-			strings.NewReader("a body small enough to be about the socket and not the transfer"))
+			bytes.NewReader(make([]byte, sampledBody)))
 		if err != nil {
 			t.Fatalf("building request %d: %v", i+1, err)
 		}
@@ -970,55 +1089,126 @@ func TestEveryConnectionOneRunAcceptsReadsBackTheSameBuffer(t *testing.T) {
 	// applied to nothing reports no error and no disagreement — it
 	// reports nothing at all, which reads exactly like a pin that worked
 	// on every connection there was.
-	receive, receiveUses := store.pin.record()
+	_, receiveUses := store.pin.record()
 	if receiveUses != connections {
 		t.Fatalf("the store accepted %d connection(s) and this row made %d, so either "+
 			"a connection was never accepted or two requests shared one — and a row "+
 			"that pins nothing reports exactly what a row that pins everything does",
 			receiveUses, connections)
 	}
-	send, sendUses := client.record()
+	_, sendUses := client.record()
 	if sendUses != connections {
 		t.Fatalf("the client dialled %d time(s) and this row made %d requests, so the "+
 			"send end was not pinned once per connection", sendUses, connections)
 	}
 
+	// THE PAIR, EACH WITH THE RANGE IT WAS ACTUALLY OBSERVED AT. This is
+	// the same fold the write-side rows hand to the record, so what this
+	// row checks and what those rows write down are one shape.
+	got := observedPin(client, store.pin)
 	for _, end := range []struct {
 		which string
 		pin   timing.Pin
-	}{{"the store fixture's SO_RCVBUF", receive}, {"the client's SO_SNDBUF", send}} {
+	}{{"the store fixture's SO_RCVBUF", got.Receive}, {"the client's SO_SNDBUF", got.Send}} {
 		if end.pin.Err != "" {
 			t.Errorf("%s: %s.\nThe two connections this row opened were not one "+
 				"condition, so a gap measured across them would be a margin over "+
 				"whichever of the two happened to be slower.", end.which, end.pin.Err)
 			continue
 		}
-		if end.pin.ReadBack <= 0 {
-			t.Errorf("%s asked for %d bytes and read nothing back, so this row proved "+
-				"the two connections agreed about a size neither of them has",
-				end.which, end.pin.Requested)
+		if end.pin.Requested != pinnedBuffer {
+			t.Errorf("%s was pinned to %d bytes and this row asked for %d, so the "+
+				"size these connections agree on is not the size any window here is a "+
+				"margin under", end.which, end.pin.Requested, pinnedBuffer)
+			continue
+		}
+		if end.pin.Sustained == nil || end.pin.Sustained.Samples == 0 {
+			t.Errorf("%s was never sampled while a body was moving, so this row can "+
+				"say what the kernel answered at the instant it was asked and nothing "+
+				"about the seconds a gap would be measured over", end.which)
+			continue
+		}
+		if !heldItsFloor(end.pin.Requested, end.pin.Sustained) {
+			t.Errorf("%s asked for %d bytes and was found at %d while a body was "+
+				"moving, over %d samples.\nA pin holds a FLOOR: a buffer observed "+
+				"BELOW the size that was asked for is a kernel that took the request "+
+				"and then gave less, and every connection in this run was supposed to "+
+				"be one condition.", end.which, end.pin.Requested,
+				end.pin.Sustained.Low, end.pin.Sustained.Samples)
 		}
 	}
-	t.Logf("two connections, one condition: send asked %d read back %d; receive asked "+
-		"%d read back %d", send.Requested, send.ReadBack, receive.Requested, receive.ReadBack)
+	// RENDERED THE WAY EVERY OTHER ROW RENDERS IT: the read-back beside
+	// the range it really ran over, in the words that tell "it held"
+	// apart from "the kernel moved it". On the moving leg this line is
+	// the whole finding, and it is a log rather than a failure because
+	// the movement is that kernel's and not this fixture's.
+	t.Logf("two connections, one condition:%s", pinNote(got))
 
 	// THE DETECTOR'S OWN BENCH. Run only over a fixture that agrees, the
 	// checks above can be seen to say yes and never to say no — and a
 	// socketPin that recorded whatever it was told last would pass every
-	// one of them while being exactly the instrument this round exists
-	// to replace.
+	// one of them while being exactly the instrument this row exists to
+	// replace.
 	agree := &socketPin{}
 	agree.applied(pinnedBuffer, pinnedBuffer, nil)
 	agree.applied(pinnedBuffer, pinnedBuffer, nil)
 	if p, n := agree.record(); p.Err != "" || n != 2 {
-		t.Errorf("two connections reading back the same size were recorded as a "+
+		t.Errorf("two connections pinned to the same size were recorded as a "+
 			"failure (%q over %d uses), so this row refuses everything", p.Err, n)
 	}
+
+	// THE KERNEL'S ANSWER IS NOT THE FIXTURE'S DOING, and this is the
+	// case this row exists to tolerate. Both connections asked for the
+	// same size and the second read back three times it — the two numbers
+	// are the ones a red run on the moving leg actually reported. A
+	// comparison made over the READ-BACK calls that two conditions; that
+	// leg's own record calls it the kernel's receive autosizing, in as
+	// many words, and both cannot be true.
+	moved := &socketPin{}
+	moved.applied(pinnedBuffer, pinnedBuffer, nil)
+	moved.applied(pinnedBuffer, 392384, nil)
+	if p, n := moved.record(); p.Err != "" || n != 2 {
+		t.Errorf("two connections that both asked for %d bytes were recorded as a "+
+			"failure (%q over %d uses) because the kernel answered the second with "+
+			"392384.\nA read-back is an instant. On the leg whose kernel moves an "+
+			"accepted socket's buffer whatever was asked for, refusing this refuses "+
+			"the kernel rather than the pin, and it reds a run whose two requests "+
+			"were both honoured — which is what it did, twice, months apart.",
+			pinnedBuffer, p.Err, n)
+	}
+
+	// AND IT STILL REFUSES A FIXTURE THAT PINNED TWO CONNECTIONS
+	// DIFFERENTLY, which is what the read-back comparison was reaching
+	// for and could not name: the size that was ASKED.
 	disagree := &socketPin{}
-	disagree.applied(pinnedBuffer, 392384, nil)
+	disagree.applied(392384, 392384, nil)
 	disagree.applied(pinnedBuffer, pinnedBuffer, nil)
 	if p, _ := disagree.record(); p.Err == "" {
-		t.Errorf("two connections reading back 392384 and %d were recorded as one "+
-			"condition, which is the round-2 defect passing its own guard", pinnedBuffer)
+		t.Errorf("two connections pinned to 392384 and %d were recorded as one "+
+			"condition, so a fixture pinning one of its connections differently "+
+			"would report a single condition this run never had", pinnedBuffer)
+	}
+
+	// AND THE FLOOR CHECK GETS ONE TOO, for the same reason: asked only
+	// about ranges that hold it, it could never be seen to say no.
+	for _, c := range []struct {
+		what string
+		s    *timing.Sustained
+		held bool
+	}{
+		{"nobody looked", nil, false},
+		{"a range with no samples in it", &timing.Sustained{}, false},
+		{"held at the size asked for",
+			&timing.Sustained{Samples: 3, Low: pinnedBuffer, High: pinnedBuffer}, true},
+		{"moved above it",
+			&timing.Sustained{Samples: 3, Low: pinnedBuffer, High: 646336}, true},
+		{"found one byte below it",
+			&timing.Sustained{Samples: 3, Low: pinnedBuffer - 1, High: 646336}, false},
+	} {
+		if held := heldItsFloor(pinnedBuffer, c.s); held != c.held {
+			t.Errorf("a buffer where %s: the floor over %d bytes read as held=%v, "+
+				"and the whole claim this row makes is that one", c.what, pinnedBuffer,
+				held)
+		}
 	}
 }
