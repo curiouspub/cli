@@ -1185,31 +1185,90 @@ func TestBothPublicContentManifestsDriveMatching(t *testing.T) {
 	}
 }
 
-func TestTheIDMigrationPreservedEveryRuleText(t *testing.T) {
+// TestNoRuleIdFromTheMigrationVanishedWithoutARecord holds the property
+// this row can honestly hold, which is not the one its name used to
+// claim.
+//
+// IT COMPARED THE PRE-MIGRATION REVISION AGAINST THE WORKING TREE, and
+// required the rule texts to be identical. Its name said the migration
+// added ids without altering a rule — a one-time fact about one commit —
+// but its subject was "today", so what it actually enforced was that
+// NEITHER MANIFEST MAY EVER GAIN OR LOSE A RULE AGAIN. It passed only
+// because nobody had added one. The first attempt to add a rule reds it,
+// and the only ways out are to delete the new rule or to edit this row —
+// which is a guard being loosened by the thing that tripped it.
+//
+// THE TWO HALVES ARE NOT THE SAME CLAIM. An ADDITION is ordinary: these
+// files exist to grow, and the manifest's own prose tells whoever extends
+// it to add new rules with new ids. A REMOVAL is different, because a
+// rule's id is the handle a recorded match is remembered by: drop the id
+// and every ledger entry naming it describes nothing, silently. So a
+// removal has to be accompanied by a record, and that is what this row
+// requires — the id is gone AND nothing in the ledger refers to it.
+//
+// The endpoint moved with the property. The pre-migration revision spells
+// its rules as bare lines and has no ids to compare; the migration commit
+// itself is the first revision where every rule has the handle this row
+// is about.
+func TestNoRuleIdFromTheMigrationVanishedWithoutARecord(t *testing.T) {
 	r := repo{dir: filepath.Clean("../..")}
+
+	recorded, err := loadBaseline(filepath.Join(r.dir, filepath.FromSlash(publicBaselinePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A LEDGER ENTRY IS THE RECORD. It names a rule by id, so an id still
+	// spoken for there is one whose removal somebody has accounted for.
+	//
+	// AND THE TWO HALVES TOGETHER LEAVE NO GAP, which is what makes this
+	// an exemption rather than a hole. Retiring a rule the ledger NAMES
+	// does not go unnoticed either: every entry naming it stops matching,
+	// and a ledger entry that matches nothing fails the scan by design.
+	// So a removal is caught whichever side it falls — by that check when
+	// the id is recorded, and by this row when it is not — and this row
+	// deliberately stays quiet where the other one already speaks, rather
+	// than reporting the same removal twice in two different vocabularies.
+	remembered := map[string]bool{}
+	for _, e := range recorded {
+		remembered[strings.TrimPrefix(e.PatternID, publicIDPrefix)] = true
+	}
+
 	for _, path := range []string{citationPatternsPath, vendorTermsPath} {
-		before, err := r.run("show", "97cdb9d^:"+path)
+		atMigration, err := r.run("show", "97cdb9d:"+path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		afterData, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(path)))
+		thenRules, err := rulefile.Parse(path+" at the id migration", atMigration)
 		if err != nil {
 			t.Fatal(err)
 		}
-		beforeRules := rulefile.ParseHistorical(path+" before ids", before)
-		afterRules, err := rulefile.Parse(path, string(afterData))
+		if len(thenRules) == 0 {
+			t.Fatalf("%s declared no rule at the migration, so this row compared nothing", path)
+		}
+		nowData, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(path)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var beforeText, afterText []string
-		for _, rule := range beforeRules {
-			beforeText = append(beforeText, rule.Text)
+		nowRules, err := rulefile.Parse(path, string(nowData))
+		if err != nil {
+			t.Fatal(err)
 		}
-		for _, rule := range afterRules {
-			afterText = append(afterText, rule.Text)
+		present := map[string]bool{}
+		for _, rule := range nowRules {
+			present[rule.ID] = true
 		}
-		if !reflect.DeepEqual(beforeText, afterText) {
-			t.Errorf("%s changed rule text during the id migration", path)
+
+		for _, rule := range thenRules {
+			if present[rule.ID] || remembered[rule.ID] {
+				continue
+			}
+			t.Errorf("%s declared the rule %s at the id migration and declares it no longer, "+
+				"and nothing in %s records why.\n"+
+				"A rule's id is the handle a recorded match is remembered by, so retiring one "+
+				"without a record leaves every entry naming it describing nothing at all — "+
+				"silently, and for ever. Adding rules needs no permission from this row; "+
+				"taking one away needs a reason somebody wrote down.",
+				path, rule.ID, publicBaselinePath)
 		}
 	}
 }

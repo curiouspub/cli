@@ -41,6 +41,25 @@
 7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-31	rewrite-ineligible	["internal/guard/guard_test.go"]
 7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-34	rewrite-ineligible	["internal/guard/guard_test.go"]
 7699ff96de82ee6ce937d3355de0379cddfe74b6	public:vendor-38	rewrite-ineligible	["internal/guard/guard_test.go"]
+# THE THREE BELOW CARRY A DIFFERENT REASON, and the difference is the
+# point rather than a spelling. Every other line here stays because
+# removing it would mean rewriting history that is already published.
+# These stay because something READS them: the rules that match them
+# describe ordinary words in a citing context rather than an identifier
+# with a shape, so they cannot be demonstrated against a fixture — a
+# fixture would be the defended thing itself, written into a published
+# file by the check that defends it. The object is the evidence, and a
+# row in internal/guard holds the rules to it in both directions.
+#
+# THEY ARE PERMANENT, which was established rather than assumed. A branch
+# merged here keeps its own commits and is not deleted afterwards, so
+# these objects stay reachable from the trunk once this work lands. Had
+# the history been replayed as a single new commit instead, these three
+# entries would have gone stale on the day of the merge and reded the
+# scan for a reason nobody could act on.
+73d011b9517fb05b29373c50d56f075e2e7c83c8	public:card-section-cited	proof-object	["internal/guard/readmecontract_test.go"]
+73d011b9517fb05b29373c50d56f075e2e7c83c8	public:private-instructions-file	proof-object	["internal/guard/readmecontract_test.go"]
+73d011b9517fb05b29373c50d56f075e2e7c83c8	public:private-ruling-cited	proof-object	["internal/guard/readmecontract_test.go"]
 7e6e626ec6602bb8cacdbfe970b864a7b0ff2e75	public:vendor-01	rewrite-ineligible	["CLAUDE.md"]
 82cbc6ebc10fd7d3e5f24a0f09da24520ba23b6d	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]
 9650c65085d2c8c6581a62ae1c8a5fe3259f7e85	public:vendor-01	rewrite-ineligible	["internal/guard/guard_test.go"]

@@ -1,0 +1,1092 @@
+package guard
+
+import (
+	"bytes"
+	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// THE COPY AUDIT. The corpus is named once: every string that
+// reaches ui — What, Why, NextText — plus check.Finding's authored copy,
+// the MCP tool descriptions and refusal text, the npm postinstall's
+// messages, help text, the README, and any user-facing document in
+// cli/. Detail is in the corpus and is deliberately never linted here —
+// it is somebody else's sentence (ui/failure.go's own words), and
+// editing the rule to reach it would mean asserting a property of a
+// quotation rather than of this program's own writing.
+//
+// WHAT THIS SCANNER RESOLVES, STATED AS A LIMIT RATHER THAN IMPLIED AS
+// COMPLETE. It follows five shapes: a call to ui.NewFailure or ui.Quoted,
+// a composite literal of type Failure or Finding, a call to a method
+// named Step, Result or Help (the terminal's own narration surface,
+// which is how copy reaches a person without ever passing through a
+// Failure — the ui.Failure census this project's own CLAUDE.md warns
+// against treating as complete), a call to ErrorResult or TextResult
+// (the MCP surface's equivalent), and a top-level const or a zero-
+// argument function whose single return statement is one of the above
+// shapes (which is how the four ui.Prose usage constants and the two
+// wire-driven MCP descriptions are reached without naming each one by
+// hand). Within each, only a STRING LITERAL, a concatenation of string
+// literals, an identifier resolving to another such constant, or an
+// fmt.Sprintf call whose format argument is one of those is resolved —
+// a value built any other way (a helper call, a variable computed at
+// run time) contributes nothing, which is the same fail-closed posture
+// the failure catalog's own recogniser takes for a What it cannot read.
+//
+// THE NAMED GAP THIS LEAVES: internal/config builds several of its own
+// diagnostic sentences (a corrupt config file, an ambiguous field, a
+// permissions warning) as plain `error` values returned through helper
+// functions, and at least one of them — NoTokenReason — reaches a
+// person verbatim through deploy's own `deps.Prompt.Step("%s",
+// cfg.NoTokenReason.Error())`. That call site's own format string ("%s")
+// is scanned; the dynamic value behind it is not, because tracing an
+// arbitrary error value back to the function that built it is a
+// data-flow analysis this pass does not attempt. Read by hand for this
+// round (internal/config/config.go's fmt.Errorf and errors.New call
+// sites): none contains a forbidden token or a command-position mention
+// outside the registered set. Named here because a hand check is not a
+// mechanical one, and this file's own rule is to say so rather than let
+// the gap pass as coverage.
+//
+// THE TWO DOCUMENTS ARE READ WHOLE — README.md and npm/README.md —
+// because markdown has no "field" for this scanner to key on the way a
+// struct literal does, and because describing this repository's own
+// layout is what those files are for.
+//
+// THE WRAPPER'S RUNTIME SOURCES ARE NOT DOCUMENTS. Its install script,
+// its command shim and its platform table are parsed, and each string
+// they carry enters the corpus on its own, taking the same checks a Go
+// copy site takes. What a person sees when an install refuses is a
+// message this project wrote; reading it as prose about the repository
+// excused it from rules the Go half has always been held to.
+
+// ---------------------------------------------------------------------
+// Resolving an expression to the text it prints, when it can be known
+// without running the program.
+// ---------------------------------------------------------------------
+
+// packageConsts is every top-level const this package's own files
+// declare that resolves to a plain string, keyed by name. It is built in
+// two passes so a const referring to one declared later in the same
+// package (or in a different file of it) still resolves — the ordinary
+// case for Go source, which does not require declaration order.
+func packageConsts(files []*ast.File) map[string]string {
+	raw := map[string]ast.Expr{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
+					continue
+				}
+				raw[vs.Names[0].Name] = vs.Values[0]
+			}
+		}
+	}
+	resolved := map[string]string{}
+	for pass := 0; pass < 3; pass++ {
+		for name, expr := range raw {
+			if _, done := resolved[name]; done {
+				continue
+			}
+			if v, ok := literalString(expr, resolved); ok {
+				resolved[name] = v
+			}
+		}
+	}
+	return resolved
+}
+
+// literalString resolves e to a compile-time string when e is built
+// entirely from string literals, concatenation, a reference to a name in
+// consts, or fmt.Sprintf applied to such a format string. See the file
+// doc comment for what this deliberately does not follow.
+func literalString(e ast.Expr, consts map[string]string) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		if v.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(v.Value)
+		if err != nil {
+			return "", false
+		}
+		return s, true
+	case *ast.ParenExpr:
+		return literalString(v.X, consts)
+	case *ast.Ident:
+		s, ok := consts[v.Name]
+		return s, ok
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		x, ok := literalString(v.X, consts)
+		if !ok {
+			return "", false
+		}
+		y, ok := literalString(v.Y, consts)
+		if !ok {
+			return "", false
+		}
+		return x + y, true
+	case *ast.CallExpr:
+		switch calleeName(v.Fun) {
+		case "Sprintf":
+			if len(v.Args) == 0 {
+				return "", false
+			}
+			return literalString(v.Args[0], consts)
+		case "Prose", "FailureID", "Stage", "Secret":
+			// A defined-type conversion — ui.Prose(x) and the like — carries
+			// the same text as its argument; only the type changes.
+			if len(v.Args) == 1 {
+				return literalString(v.Args[0], consts)
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}
+
+// calleeName and typeName — the bare, unqualified name a call or a
+// composite literal's type is written with, "Sprintf" for both
+// fmt.Sprintf and a dot-imported Sprintf, "Failure" for both Failure{}
+// and ui.Failure{} — are settings_test.go's own helpers, reused rather
+// than redeclared: this package already has one definition of "what is
+// this expression's bare name", and a second one is exactly the drift
+// this project's own CLAUDE.md warns a reshaped copy invites.
+
+// ---------------------------------------------------------------------
+// The corpus: every copy site this scanner can read, across every
+// published non-test Go file, plus README.md, npm/README.md and
+// npm/install.js.
+// ---------------------------------------------------------------------
+
+// copyItem is one resolved piece of authored copy, with enough origin to
+// name in a finding and to check against the one recorded exception.
+type copyItem struct {
+	text   string
+	origin string // "path:line" for Go sites, "path" for whole-document ones
+
+	// isDoc marks a whole-document item — README.md and npm/README.md —
+	// rather than one piece of copy. The package-path and Go-type-name
+	// rules are scoped OFF that half of the corpus, because a document
+	// whose job is describing this repository's own layout says where the
+	// walk lives and what the contract is called, and a rule that forbade
+	// it would forbid the README from being a README.
+	//
+	// WHAT IT NO LONGER HAS TO EXCUSE is this project's own public import
+	// path. That was a hit once, from any origin, so the document flag was
+	// carrying two jobs: excusing a genuine internal path in prose, and
+	// excusing the module naming itself. The second was the rule being too
+	// broad rather than the document being special, and it is fixed where
+	// the rule is written. The four wording tokens still apply everywhere,
+	// document or not.
+	isDoc bool
+}
+
+// goCorpus walks every published non-test .go file and returns every
+// copy site the five shapes above resolve.
+func goCorpus(t *testing.T, root string) []copyItem {
+	t.Helper()
+	fset := token.NewFileSet()
+	byDir := map[string][]*ast.File{}
+	type fileInfo struct {
+		file *ast.File
+		path string
+	}
+	var all []fileInfo
+	for _, path := range goFiles(t, root, false) {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		dir := filepath.Dir(path)
+		byDir[dir] = append(byDir[dir], f)
+		all = append(all, fileInfo{f, path})
+	}
+	if len(all) == 0 {
+		t.Fatal("no published non-test Go file found, so the copy-audit corpus would be empty")
+	}
+	constsByDir := map[string]map[string]string{}
+	for dir, files := range byDir {
+		constsByDir[dir] = packageConsts(files)
+	}
+
+	var items []copyItem
+	add := func(fset *token.FileSet, path string, e ast.Expr, consts map[string]string) {
+		if e == nil {
+			return
+		}
+		s, ok := literalString(e, consts)
+		if !ok || strings.TrimSpace(s) == "" {
+			return
+		}
+		items = append(items, copyItem{text: s, origin: displayPath(root, path) + ":" +
+			itoa(fset.Position(e.Pos()).Line)})
+	}
+
+	for _, fi := range all {
+		consts := constsByDir[filepath.Dir(fi.path)]
+
+		// Every resolvable top-level const, directly — this is how the
+		// four ui.Prose usage texts, the login flow's prompts and hints,
+		// and every *Description const reach the corpus without this
+		// scanner having to know each one's name.
+		for _, decl := range fi.file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != 1 {
+					continue
+				}
+				add(fset, fi.path, vs.Names[0], consts)
+			}
+		}
+
+		// Every zero-argument, no-receiver function whose body is exactly
+		// one return statement — deploySiteDescription and
+		// deployStatusDescription's own shape.
+		for _, decl := range fi.file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Type.Params == nil || len(fd.Type.Params.List) != 0 ||
+				fd.Body == nil || len(fd.Body.List) != 1 {
+				continue
+			}
+			ret, ok := fd.Body.List[0].(*ast.ReturnStmt)
+			if !ok || len(ret.Results) != 1 {
+				continue
+			}
+			add(fset, fi.path, ret.Results[0], consts)
+		}
+
+		// THE TERMINAL PACKAGE WRITES DIRECTLY as well as through its own
+		// narration methods, and one of those writes is a whole message: a
+		// person who cancels a run sees a single word, printed straight to
+		// the stream. It reaches a reader exactly as much as a Failure
+		// does, and nothing in the five shapes below could see it.
+		//
+		// The direct-write shapes are read ONLY in that package, which is
+		// the boundary that owns every byte a person sees. Elsewhere in
+		// this module the same call is an operator diagnostic — a tool
+		// reporting to whoever ran it — and pulling those into a corpus
+		// about product copy would be judging one kind of writing by the
+		// other's rules.
+		inTerminal := strings.HasPrefix(displayPath(root, fi.path), "internal/ui/")
+
+		ast.Inspect(fi.file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.AssignStmt:
+				// A copy field WRITTEN AFTER CONSTRUCTION. The composite
+				// literal below is the ordinary way these are set, so an
+				// assignment reads as an edge case — and it is exactly
+				// where the debug path rewrites what a reader is told to
+				// do next, which is the one paragraph a refusal cannot do
+				// without.
+				for _, lhs := range node.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok {
+						continue
+					}
+					switch sel.Sel.Name {
+					case "What", "Why", "NextText", "Message", "Next":
+						for _, rhs := range node.Rhs {
+							add(fset, fi.path, rhs, consts)
+						}
+					}
+				}
+
+			case *ast.CallExpr:
+				if inTerminal {
+					switch calleeName(node.Fun) {
+					case "Fprint", "Fprintln", "Fprintf":
+						// Everything after the stream is copy; the stream
+						// itself is not.
+						for _, arg := range node.Args[min(1, len(node.Args)):] {
+							add(fset, fi.path, arg, consts)
+						}
+					}
+				}
+				switch calleeName(node.Fun) {
+				case "objectSchema":
+					// THE INPUT SCHEMA IS PROSE. Its descriptions are what
+					// a model reads to decide how to fill a field in, so
+					// they are copy in the same sense a tool's own
+					// description is — and they were the half of the
+					// agent-facing surface nothing read.
+					for _, arg := range node.Args {
+						add(fset, fi.path, arg, consts)
+					}
+				case "Step", "Result", "Help":
+					for _, arg := range node.Args {
+						add(fset, fi.path, arg, consts)
+					}
+				case "NewFailure":
+					if len(node.Args) == 6 {
+						add(fset, fi.path, node.Args[2], consts) // What
+						add(fset, fi.path, node.Args[3], consts) // Why
+						add(fset, fi.path, node.Args[5], consts) // NextText
+					}
+				case "Quoted":
+					if len(node.Args) == 6 {
+						add(fset, fi.path, node.Args[2], consts) // What
+						// Args[3] is Detail — somebody else's sentence,
+						// deliberately excluded by name below.
+						add(fset, fi.path, node.Args[5], consts) // NextText
+					}
+				case "ErrorResult", "TextResult":
+					if len(node.Args) > 0 {
+						add(fset, fi.path, node.Args[0], consts)
+					}
+				}
+			case *ast.CompositeLit:
+				switch typeName(node.Type) {
+				case "Tool":
+					// A TOOL'S TITLE IS SHOWN TO A PERSON. The description
+					// beside it was already reached, because it is written
+					// as a constant or returned from a function of its own
+					// — so the field a client actually displays was the one
+					// piece of this surface nothing read, purely because of
+					// how it happens to be spelled.
+					for _, elt := range node.Elts {
+						kv, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := kv.Key.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						switch key.Name {
+						case "Title", "Description":
+							add(fset, fi.path, kv.Value, consts)
+						}
+					}
+				case "Failure":
+					for _, elt := range node.Elts {
+						kv, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := kv.Key.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						switch key.Name {
+						case "What", "Why", "NextText":
+							add(fset, fi.path, kv.Value, consts)
+						}
+					}
+				case "Finding":
+					for _, elt := range node.Elts {
+						kv, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := kv.Key.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						switch key.Name {
+						case "Message", "What", "Why", "Next":
+							add(fset, fi.path, kv.Value, consts)
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return items
+}
+
+// itoa is streams_test.go's own helper, reused here too.
+
+// wrapperSources are the wrapper's own runtime files, relative to the
+// package directory. All three speak to a person: the install script, the
+// command shim, and the table that decides what this machine is called.
+var wrapperSources = []string{"install.js", "bin/curious.js", "lib/platform.js"}
+
+// jsStringExtractor reads those files with a REAL PARSER and prints every
+// string they contain.
+//
+// A REGULAR EXPRESSION WAS READING THEM, and it dropped things silently.
+// It could not see a string containing an escaped quote of its own kind,
+// and it could not see any template carrying an interpolation — which is
+// most of the copy in the install script, because almost every sentence
+// it writes has a value in it. Those were not edge cases in the corpus;
+// they were the corpus. A reader that fails to see text reports a clean
+// scan, which is the failure mode this whole file exists to avoid.
+//
+// The quasis of a template are collected as well as plain literals: the
+// words around an interpolated value are authored copy, and the value
+// between them is not this program's to check.
+const jsStringExtractor = `
+const acorn = require('acorn');
+const fs = require('fs');
+const out = [];
+function visit(node, file) {
+  if (!node || typeof node.type !== 'string') return;
+  if (node.type === 'Literal' && typeof node.value === 'string') {
+    out.push({file: file, line: node.loc.start.line, text: node.value});
+  }
+  if (node.type === 'TemplateLiteral') {
+    for (const q of node.quasis) {
+      out.push({file: file, line: q.loc.start.line, text: q.value.cooked});
+    }
+  }
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    if (Array.isArray(value)) { for (const child of value) visit(child, file); }
+    else if (value && typeof value.type === 'string') visit(value, file);
+  }
+}
+for (const file of process.argv.slice(1)) {
+  const source = fs.readFileSync(file, 'utf8');
+  visit(acorn.parse(source, {ecmaVersion: 'latest', locations: true}), file);
+}
+process.stdout.write(JSON.stringify(out));
+`
+
+// jsString is one string the parser found, and where.
+type jsString struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+// jsCorpus is every string the wrapper's runtime files contain.
+//
+// THEY ARE COPY RATHER THAN A DOCUMENT, so they take the whole check set
+// — the package-path and Go-type-name rules included. What a person sees
+// when an install refuses is a message this project wrote, and it is held
+// to the same standard as a message the Go half writes. The two README
+// files remain documents, because describing this repository's layout is
+// their job.
+func jsCorpus(t *testing.T, root string) []copyItem {
+	t.Helper()
+	npmDir := filepath.Join(root, "npm")
+
+	cmd := exec.Command("node", append([]string{"-e", jsStringExtractor}, wrapperSources...)...)
+	cmd.Dir = npmDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		// IT FAILS RATHER THAN SKIPPING, and names the likely cause. A
+		// skipped row prints nothing without -v, so a corpus that quietly
+		// lost the whole wrapper would look exactly like one that read it
+		// and found nothing wrong.
+		t.Fatalf("the wrapper's sources could not be parsed: %v\n%s\n"+
+			"The parser is a devDependency of npm/, installed by `make test-npm` — which "+
+			"runs BEFORE `make test-go` in the gate for exactly this reason. Reaching this "+
+			"from a clean checkout means either that ordering has changed, or the install "+
+			"has not been run here; `cd npm && npm ci --ignore-scripts` is what test-npm "+
+			"does.", err, strings.TrimSpace(stderr.String()))
+	}
+
+	var found []jsString
+	if err := json.Unmarshal(out, &found); err != nil {
+		t.Fatalf("the parser's output did not decode: %v", err)
+	}
+	if len(found) == 0 {
+		t.Fatalf("the parser read %d wrapper source(s) and found no string at all, so this "+
+			"half of the corpus is empty and every rule over it passes silently",
+			len(wrapperSources))
+	}
+
+	var items []copyItem
+	for _, s := range found {
+		if strings.TrimSpace(s.Text) == "" {
+			continue
+		}
+		items = append(items, copyItem{
+			text:   s.Text,
+			origin: "npm/" + filepath.ToSlash(s.File) + ":" + itoa(s.Line),
+		})
+	}
+	return items
+}
+
+func docCorpus(t *testing.T, root string, relPath string) copyItem {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, relPath))
+	if err != nil {
+		t.Fatalf("reading %s: %v", relPath, err)
+	}
+	return copyItem{text: string(data), origin: relPath, isDoc: true}
+}
+
+// copyAuditCorpus is the whole corpus this file's two rows share, built
+// once per test binary run so the two checks read exactly the same
+// evidence rather than two passes that could disagree about what exists.
+func copyAuditCorpus(t *testing.T, root string) []copyItem {
+	t.Helper()
+	items := goCorpus(t, root)
+	items = append(items, jsCorpus(t, root)...)
+	items = append(items, docCorpus(t, root, "README.md"))
+	items = append(items, docCorpus(t, root, filepath.Join("npm", "README.md")))
+	return items
+}
+
+// ---------------------------------------------------------------------
+// The forbidden-token rule.
+// ---------------------------------------------------------------------
+
+// forbiddenTokenExceptions is the one origin allowed to carry "error:" —
+// the client's own framing of server content on the build-log stream,
+// which internal/flow/stream.go's own comment names as SOMEBODY ELSE'S
+// CONTENT rather than this program's sentence. Asserted by
+// TestForbiddenTokenExceptionSetHasExactlyOneMember below, so a second
+// entry added here without a matching change to that row is a red rather
+// than a silent widening.
+var forbiddenTokenExceptions = map[string]bool{
+	"errorNarration": true,
+}
+
+// exemptedToken is the ONE token the recorded exception is allowed to
+// carry. The exception exists because that constant frames somebody
+// else's content on the build-log stream; it is not a licence to say
+// anything else.
+const exemptedToken = `"error:"`
+
+// exemptionSites resolves each name in forbiddenTokenExceptions to the
+// file and line it is DECLARED at, by reading the source.
+//
+// THE MAP WAS DECORATION AND THE CHECK WAS A FILE MATCH. Nothing
+// consulted the set of names at all: the question asked was whether an
+// origin lay in that file, so every copy site in it was exempt from every
+// forbidden token, and adding a second name to the map changed nothing
+// whatsoever. An exemption that cannot be narrowed by editing the thing
+// that describes it is not an exemption; it is a hole with a comment over
+// it.
+//
+// Resolving the NAME to its own declaration is what makes the map load
+// bearing: remove the entry and the site stops being exempt, which is the
+// property a reader assumes the map already had.
+func exemptionSites(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	sites := map[string]bool{}
+	found := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, path := range goFiles(t, root, false) {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != 1 {
+					continue
+				}
+				name := vs.Names[0].Name
+				if !forbiddenTokenExceptions[name] {
+					continue
+				}
+				found[name] = true
+				sites[displayPath(root, path)+":"+
+					itoa(fset.Position(vs.Names[0].Pos()).Line)] = true
+			}
+		}
+	}
+	for name := range forbiddenTokenExceptions {
+		if !found[name] {
+			t.Fatalf("the recorded exception %q is declared nowhere in this module, so it "+
+				"exempts nothing and the entry is describing a site that has moved or gone",
+				name)
+		}
+	}
+	return sites
+}
+
+// exemptHit reports whether one finding is the recorded exception: the
+// one token, at the one site.
+//
+// BOTH HALVES ARE THE RULE. A second forbidden token on the exempted line
+// is not exempt, and the exempted token anywhere else in the same file is
+// not exempt either — which is the narrowing the previous file-wide match
+// could not express.
+func exemptHit(sites map[string]bool, origin, hit string) bool {
+	return hit == exemptedToken && sites[origin]
+}
+
+func TestForbiddenTokenExceptionSetHasExactlyOneMember(t *testing.T) {
+	if len(forbiddenTokenExceptions) != 1 {
+		t.Fatalf("forbiddenTokenExceptions has %d member(s), want exactly 1 — a second exception "+
+			"granted here needs a ruling recorded beside it, not a silent widening of the set",
+			len(forbiddenTokenExceptions))
+	}
+}
+
+var (
+	failedToPattern  = regexp.MustCompile(`(?i)failed to`)
+	unableToPattern  = regexp.MustCompile(`(?i)unable to`)
+	errorColonPatter = regexp.MustCompile(`(?i)error:`)
+	nilPattern       = regexp.MustCompile(`\bnil\b`)
+	hexPrefixPattern = regexp.MustCompile(`0x[0-9a-fA-F]`)
+
+	// ownPublicModulePath is this repository's own import path and
+	// everything built out of it: the releases URL, the line telling
+	// somebody how to install from source, the import a reader is invited
+	// to write.
+	//
+	// IT IS PUBLIC BY DEFINITION, and that is why it is removed before the
+	// rule below looks at anything. The rule exists to catch an INTERNAL
+	// implementation detail reaching a message; the name of the module
+	// itself is the opposite — it is the one path this project publishes
+	// on purpose, and the wrapper's refusal copy names it to tell somebody
+	// where to get a binary or how to build one. A rule that cannot tell
+	// those apart forbids the program from naming itself.
+	ownPublicModulePath = regexp.MustCompile(`github\.com/curiouspub/cli[A-Za-z0-9_./@-]*`)
+
+	// packagePathPattern is a path INTO this module's packages, which is
+	// the thing worth keeping out of copy: a reader handed one is being
+	// shown where the program keeps its source, which they cannot act on.
+	packagePathPattern = regexp.MustCompile(
+		`\b(?:internal|cmd|pkg)/[a-zA-Z0-9_.]+(?:/[a-zA-Z0-9_.]+)*`)
+)
+
+// packagePathIn returns the internal package path a piece of copy names,
+// or empty when it names none.
+//
+// THE ORDER IS THE WHOLE OF IT. The module's own path is struck out
+// first, so a go-install line ending in a package directory is not read
+// as though somebody had written that directory into a sentence. Matching
+// first and excusing afterwards cannot work: the two overlap, and the
+// public spelling CONTAINS the private-looking one.
+func packagePathIn(text string) string {
+	return packagePathPattern.FindString(ownPublicModulePath.ReplaceAllString(text, " "))
+}
+
+// forbiddenTokenHits reports every forbidden pattern text contains,
+// named the way this project's three-part copy shape names its own
+// checks: what happened, why, and never a bare implementation leak.
+//
+// isDoc SCOPES OFF THE PACKAGE-PATH AND GO-TYPE-NAME RULES, and that is a
+// finding this row's own first run produced rather than a design
+// decided in advance: applied to the whole of README.md and
+// npm/README.md, "a package path" fired on `pkg/wire` and on
+// `github.com/curiouspub/cli` — this repository's own public import
+// path, named in the sentence that exists to tell a reader they can
+// import it. Those two rules exist to catch an internal implementation
+// detail leaking into a RUNTIME message; a document whose job is
+// describing this repository's own layout is not that, and a rule that
+// cannot tell the two apart would forbid the README from naming the
+// package it is the README for. The other four tokens are unaffected —
+// "failed to", "unable to", "error:", "nil" and "0x" have no legitimate
+// use in prose describing this project either.
+func forbiddenTokenHits(text string, typeNames map[string]bool, isDoc bool) []string {
+	var hits []string
+	seen := map[string]bool{}
+	for _, paragraph := range forbiddenScanUnits(text) {
+		for _, hit := range forbiddenTokensIn(paragraph, typeNames, isDoc) {
+			if seen[hit] {
+				continue
+			}
+			seen[hit] = true
+			hits = append(hits, hit)
+		}
+	}
+	return hits
+}
+
+// forbiddenScanUnits is what this rule actually matches against:
+// paragraphs, each with every run of whitespace — the line breaks a
+// hand-wrapped sentence carries included — collapsed to one space.
+//
+// THE UNIT IS A PARAGRAPH, AND THAT IS A CORRECTION RATHER THAN A
+// REFINEMENT. Every phrase this rule forbids is two words, and this
+// project wraps its copy at AUTHOR time, so a phrase straddles a line
+// break in exactly the copy most likely to carry one. Matched against the
+// raw text, the wrapped spelling walked past a scan that caught the
+// unwrapped one — the same words, the same file, and a green tick,
+// decided by where the line happened to end.
+//
+// IT IS NOT THE WHOLE DOCUMENT EITHER, and that half matters as much.
+// Collapsing a README to one string joins the last word of one paragraph
+// to the first of the next, which invents phrases nobody wrote and would
+// red on them. A paragraph is the largest unit whose whitespace is
+// definitely layout.
+//
+// The normaliser is the one the sibling row already uses. A second
+// definition of "collapse the whitespace" is two answers to one question,
+// free to disagree about the case nobody tested.
+func forbiddenScanUnits(text string) []string {
+	var out []string
+	for _, paragraph := range strings.Split(text, "\n\n") {
+		if normalised := normalizeSpace(paragraph); normalised != "" {
+			out = append(out, normalised)
+		}
+	}
+	return out
+}
+
+// forbiddenTokensIn reports every forbidden pattern one scan unit
+// carries.
+func forbiddenTokensIn(text string, typeNames map[string]bool, isDoc bool) []string {
+	var hits []string
+	if failedToPattern.MatchString(text) {
+		hits = append(hits, `"failed to"`)
+	}
+	if unableToPattern.MatchString(text) {
+		hits = append(hits, `"unable to"`)
+	}
+	if errorColonPatter.MatchString(text) {
+		hits = append(hits, `"error:"`)
+	}
+	if nilPattern.MatchString(text) {
+		hits = append(hits, `"nil"`)
+	}
+	if hexPrefixPattern.MatchString(text) {
+		hits = append(hits, `"0x"`)
+	}
+	if isDoc {
+		return hits
+	}
+	if path := packagePathIn(text); path != "" {
+		hits = append(hits, "a package path ("+path+")")
+	}
+	for _, word := range strings.FieldsFunc(text, func(r rune) bool {
+		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9')
+	}) {
+		if typeNames[word] {
+			hits = append(hits, "a Go type name ("+word+")")
+		}
+	}
+	return hits
+}
+
+// exportedMultiHumpTypeNames is this module's own definition of "looks
+// like a Go type name" for this row: an exported type whose name carries
+// at least two uppercase letters — APIError, LoginRefusal, FailureID,
+// NextAction, ExitServerClosed. A single-hump exported name (Result,
+// Config, Client, Prose, Stage, Secret, Finding, Failure) is also a
+// perfectly ordinary capitalised English word, and checking for it would
+// red on legitimate prose the moment a sentence used one at the start —
+// this project's own copy does, routinely. Stated as the definition
+// rather than left implicit, because a guard's own CLAUDE.md entry says
+// exactly this must be quoted rather than assumed.
+func exportedMultiHumpTypeNames(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, path := range goFiles(t, root, false) {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				name := ts.Name.Name
+				if name == "" || !('A' <= name[0] && name[0] <= 'Z') {
+					continue
+				}
+				uppers := 0
+				for _, r := range name {
+					if 'A' <= r && r <= 'Z' {
+						uppers++
+					}
+				}
+				if uppers >= 2 {
+					names[name] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
+// TestNoAuthoredCopyContainsAForbiddenToken is the mechanical half of the
+// copy audit's forbidden-token rule.
+func TestNoAuthoredCopyContainsAForbiddenToken(t *testing.T) {
+	root := moduleRoot(t)
+	typeNames := exportedMultiHumpTypeNames(t, root)
+	items := copyAuditCorpus(t, root)
+	if len(items) == 0 {
+		t.Fatal("the copy-audit corpus is empty, so this row compared nothing")
+	}
+	sites := exemptionSites(t, root)
+	for _, item := range items {
+		for _, hit := range forbiddenTokenHits(item.text, typeNames, item.isDoc) {
+			if exemptHit(sites, item.origin, hit) {
+				continue
+			}
+			t.Errorf("%s contains %s: %q", item.origin, hit, item.text)
+		}
+	}
+}
+
+// TestForbiddenCopyRedsOnAKnownBadPhraseAndTheExceptionHolds is the
+// row's own fixture: a message containing "failed to open config" reds,
+// the exempted origin does not, and a plain sentence does not.
+func TestForbiddenCopyRedsOnAKnownBadPhraseAndTheExceptionHolds(t *testing.T) {
+	typeNames := map[string]bool{"APIError": true}
+	if hits := forbiddenTokenHits("curious failed to open config.", typeNames, false); len(hits) == 0 {
+		t.Error(`"curious failed to open config." was not flagged`)
+	}
+	// THE WRAPPED SPELLING, PERMANENTLY. This is the copy most likely to
+	// exist, because this project wraps at author time — and it is the one
+	// a raw-text match walked straight past.
+	if hits := forbiddenTokenHits("curious failed\nto open config.", typeNames, false); len(hits) == 0 {
+		t.Error("the same phrase wrapped across a line break was not flagged. This project " +
+			"wraps its copy at author time, so that is the spelling most likely to be " +
+			"written, and a scan that reads raw lines cannot see it.")
+	}
+	// AND THE OTHER HALF: a phrase that exists only because two paragraphs
+	// were joined is a phrase nobody wrote.
+	if hits := forbiddenTokenHits("the deploy failed\n\nto nobody's surprise, it worked.",
+		typeNames, false); len(hits) != 0 {
+		t.Errorf("a phrase invented by joining two paragraphs was flagged: %v\n"+
+			"Normalising a whole document into one string manufactures wording that is not "+
+			"in it, which is a red nobody can fix by editing their own copy.", hits)
+	}
+	if hits := forbiddenTokenHits("curious.pub is not taking deploys right now.", typeNames, false); len(hits) != 0 {
+		t.Errorf("ordinary copy was flagged: %v", hits)
+	}
+	if hits := forbiddenTokenHits("the *APIError type carries the code.", typeNames, false); len(hits) == 0 {
+		t.Error("a Go type name leaking into copy was not flagged")
+	}
+	// THIS REPOSITORY'S OWN PUBLIC PATH IS NOT A HIT FROM EITHER ORIGIN.
+	// It was, from a runtime one — and the copy that names it is the
+	// wrapper's refusal telling somebody where to fetch a binary or how to
+	// build one from source. That is the program naming itself, which is
+	// the opposite of leaking where it keeps its source.
+	for _, origin := range []struct {
+		name  string
+		isDoc bool
+	}{{"a document", true}, {"a runtime message", false}} {
+		for _, text := range []string{
+			"import \"github.com/curiouspub/cli/pkg/wire\"",
+			"take a binary from https://github.com/curiouspub/cli/releases",
+			"build it yourself: go install github.com/curiouspub/cli/cmd/curious@latest",
+		} {
+			if hits := forbiddenTokenHits(text, typeNames, origin.isDoc); len(hits) != 0 {
+				t.Errorf("%s naming this repository's own public path was flagged: %v\n%q",
+					origin.name, hits, text)
+			}
+		}
+	}
+	// AND THE RULE STILL DOES ITS JOB, which is what the assertion above
+	// would otherwise quietly retire: a path INTO this module's packages,
+	// in a runtime message, is still a hit — and is still scoped off a
+	// document, whose business is describing this repository's layout.
+	if hits := forbiddenTokenHits(
+		"curious could not read internal/flow/upload.go", typeNames, false); len(hits) == 0 {
+		t.Error("a path into this module's own packages was not flagged in a runtime " +
+			"message, so narrowing the rule has retired it rather than aimed it")
+	}
+	if hits := forbiddenTokenHits(
+		"the walk lives in internal/pack, and the contract in pkg/wire", typeNames, true); len(hits) != 0 {
+		t.Errorf("a document describing this repository's own layout was flagged: %v", hits)
+	}
+	// THE EXEMPTION IS ONE TOKEN AT ONE SITE, and all four corners of that
+	// are fixtured here because the shape it replaced satisfied only the
+	// first of them.
+	sites := map[string]bool{"internal/flow/stream.go:127": true}
+	if !exemptHit(sites, "internal/flow/stream.go:127", `"error:"`) {
+		t.Error("the recorded exception's own site and token were not treated as exempt")
+	}
+	if exemptHit(sites, "internal/flow/stream.go:500", `"error:"`) {
+		t.Error("the exempted token was excused somewhere else in the same file, which is the " +
+			"file-wide match this narrowing exists to replace")
+	}
+	if exemptHit(sites, "internal/flow/stream.go:127", `"failed to"`) {
+		t.Error("a second forbidden token was excused at the exempted site; the exception is " +
+			"for one token, not for one line")
+	}
+	if exemptHit(sites, "internal/flow/upload.go:127", `"error:"`) {
+		t.Error("an unrelated file was treated as exempt")
+	}
+}
+
+// ---------------------------------------------------------------------
+// The command-token-position rule.
+// ---------------------------------------------------------------------
+
+// dispatchTokens is read from cmd/curious/main.go's own switch — never
+// typed beside it — so a command added there is registered here the
+// moment it is, and a rename is caught the moment it stops matching
+// whatever a reader is still writing about the old name.
+func dispatchTokens(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	path := filepath.Join(root, "cmd", "curious", "main.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	tokens := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		sw, ok := n.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		for _, stmt := range sw.Body.List {
+			cc, ok := stmt.(*ast.CaseClause)
+			if !ok || cc.List == nil {
+				continue // the default clause
+			}
+			for _, expr := range cc.List {
+				lit, ok := expr.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				v, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					continue
+				}
+				tokens[v] = true
+			}
+		}
+		return true
+	})
+	if len(tokens) == 0 {
+		t.Fatal("no case clause found in cmd/curious/main.go's dispatch switch, so no token is registered")
+	}
+	return tokens
+}
+
+// commandPositionPattern finds every backtick-delimited mention of this
+// binary followed by one word: `curious <token>` or `npx curiouspub
+// <token>`. A trailing "<...>" placeholder is captured as-is and
+// recognised as a declared placeholder rather than a token to check —
+// main.go's own usage text writes `curious <command> -h` the same way.
+// Prose that merely follows the word "curious" with no leading backtick
+// — "curious couldn't finish logging you in." — never matches this
+// pattern at all, which is what keeps ordinary sentences out of scope by
+// construction rather than by an exception list.
+// BOTH QUOTE STYLES, and the second one is not hypothetical: this
+// program's own usage text tells a reader how to ask a subcommand for its
+// flags, and it quotes the invocation with an apostrophe because the
+// sentence around it is already inside a backquoted string. Matching
+// backticks alone left that line — the one piece of copy that names a
+// command position in this binary's own help — outside the rule
+// entirely, and the fixture written for it passed by never matching
+// anything at all.
+var commandPositionPattern = regexp.MustCompile(
+	"[`'](?:curious|npx curiouspub) (<[a-zA-Z]+>|[a-z][a-z0-9_-]*)")
+
+// fencedCommandLinePattern is the third position: a literal invocation at
+// the start of a line inside a fenced code block, with no backticks of
+// its own because the fence already delimits it.
+var fencedCommandLinePattern = regexp.MustCompile(
+	`(?m)^\s*(?:curious|npx curiouspub) (<[a-zA-Z]+>|[a-z][a-z0-9_-]*)`)
+
+// fencedBlockPattern finds every ``` ... ``` block in a markdown corpus
+// item, so the third command position is read only inside one.
+var fencedBlockPattern = regexp.MustCompile("(?s)```.*?```")
+
+func unregisteredCommandMentions(text string, registered map[string]bool) []string {
+	var bad []string
+	check := func(token string) {
+		if strings.HasPrefix(token, "<") {
+			return // a declared placeholder, not a token to look up
+		}
+		if !registered[token] {
+			bad = append(bad, token)
+		}
+	}
+	for _, m := range commandPositionPattern.FindAllStringSubmatch(text, -1) {
+		check(m[1])
+	}
+	for _, block := range fencedBlockPattern.FindAllString(text, -1) {
+		for _, m := range fencedCommandLinePattern.FindAllStringSubmatch(block, -1) {
+			check(m[1])
+		}
+	}
+	return bad
+}
+
+// TestNoAuthoredCopyNamesAnUnregisteredCommand is the mechanical half of
+// the command-token-position rule.
+func TestNoAuthoredCopyNamesAnUnregisteredCommand(t *testing.T) {
+	root := moduleRoot(t)
+	registered := dispatchTokens(t, root)
+	items := copyAuditCorpus(t, root)
+	for _, item := range items {
+		for _, bad := range unregisteredCommandMentions(item.text, registered) {
+			t.Errorf("%s names `curious %s` in command position, and %q is not a token "+
+				"cmd/curious/main.go's dispatch switch cases", item.origin, bad, bad)
+		}
+	}
+}
+
+// TestCommandTokenRuleFixture is the row's own fixture: an unregistered
+// token in command position reds, a registered one does not, prose after
+// "curious" with no backtick does not, and the declared placeholder does
+// not.
+func TestCommandTokenRuleFixture(t *testing.T) {
+	registered := map[string]bool{"deploy": true, "version": true, "mcp": true, "help": true}
+
+	if bad := unregisteredCommandMentions("Run `curious frobnicate` first.", registered); len(bad) != 1 {
+		t.Errorf("an unregistered token in command position was not caught: %v", bad)
+	}
+	if bad := unregisteredCommandMentions("Run `curious deploy` again.", registered); len(bad) != 0 {
+		t.Errorf("a registered token was flagged: %v", bad)
+	}
+	if bad := unregisteredCommandMentions(
+		"curious couldn't finish logging you in.", registered); len(bad) != 0 {
+		t.Errorf("prose with no leading backtick was flagged: %v", bad)
+	}
+	if bad := unregisteredCommandMentions(
+		"Run 'curious <command> -h' for a command's own flags.", registered); len(bad) != 0 {
+		t.Errorf("the declared <command> placeholder was flagged: %v", bad)
+	}
+	// AND THE SAME SENTENCE WITH A REAL TOKEN IN IT, which is what makes
+	// the assertion above mean anything. Under a backtick-only pattern
+	// neither line matched, so the placeholder "passed" by never being
+	// read — a row satisfied by being blind rather than by being right.
+	if bad := unregisteredCommandMentions(
+		"Run 'curious frobnicate -h' for a command's own flags.", registered); len(bad) != 1 {
+		t.Errorf("a single-quoted unregistered token was not caught: %v\n"+
+			"If this passes while the placeholder row also passes, the pattern is matching "+
+			"neither and both rows are measuring nothing.", bad)
+	}
+	if bad := unregisteredCommandMentions(
+		"```\ncurious frobnicate\n```", registered); len(bad) != 1 {
+		t.Errorf("an unregistered token inside a fenced block was not caught: %v", bad)
+	}
+	if bad := unregisteredCommandMentions(
+		"```\nnpx curiouspub deploy\n```", registered); len(bad) != 0 {
+		t.Errorf("a registered token inside a fenced block was flagged: %v", bad)
+	}
+
+	// A newly registered command is picked up with no change to this
+	// file: registering it in the map above is the only edit a real
+	// dispatch addition would ever need here.
+	registered["whoami"] = true
+	if bad := unregisteredCommandMentions("Run `curious whoami`.", registered); len(bad) != 0 {
+		t.Errorf("a freshly registered token was flagged: %v", bad)
+	}
+}

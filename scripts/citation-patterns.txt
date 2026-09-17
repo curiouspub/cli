@@ -203,3 +203,42 @@ private-register-name  \bLEARNINGS\b
 private-artefact-phrase  (?i:\bacceptance (table|check|row|bullet)s?\b)
 private-file-phrase  (?i:\bthe task file\b)
 private-possessive-phrase  (?i:\bthe task's\b)
+
+# PRIVATE VOCABULARY: words rather than identifiers, and the last blind
+# spot the rules above share. Every one of them matches something with a
+# SHAPE — a sign and a number, a letter and a hyphen and digits — and a
+# citation needs none. A comment can point at a planning document by
+# naming a heading inside it, at a decision the reader will never be able
+# to read by referring to it as though they already had, or at an
+# instructions file this repository does not publish. None of those three
+# carries an identifier, so the vocabulary above was blind to all of
+# them — the same lesson, a third time, that a checker's field of view is
+# itself an unguarded assumption.
+#
+# EACH IS NARROWED TO A CITING CONTEXT, and the narrowing is measured
+# rather than cautious. As bare words all three red this repository's own
+# published prose. The ordinary word for a settled decision stands on
+# seventeen lines of the working tree, every one of them legitimate; one
+# of the heading words appears inside an everyday English participle, in
+# a test written in another language, where it means nothing of the kind.
+# A rule that reds on honest prose is a rule somebody switches off, and a
+# switched-off rule catches nothing at all.
+#
+# So each asks for the word AND for what a citation does with it: a
+# heading named as the authority for the sentence that follows it, a
+# decision invoked as the thing that settled the rule being described,
+# and a possessive naming a repository this one does not publish. The
+# middle one is the narrowest, and deliberately so — the broader spelling
+# was measured at three matches, two of them prose nobody should have to
+# rewrite.
+#
+# BOTH HALVES WERE MEASURED BEFORE THESE LINES WERE WRITTEN: each fires
+# on the published comment it was written for, and on nothing in the
+# tree. Across every blob this repository has published the three match
+# one object between them, once each. The row that keeps that true reads
+# the evidence out of a git object rather than out of a fixture, because
+# a fixture spelling one of these out would be the citation shipping
+# inside the file that forbids it.
+card-section-cited  \b(Scope|Acceptance|Rationale|Deliverables|Depends)\s+(states?|says?|requires?|lists?)\b
+private-ruling-cited  (?i)\bruling (that|which) (replaced|produced|says|said|requires|governs|settled)\b
+private-instructions-file  \bthe private repo(sitory)?'s\b
