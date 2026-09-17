@@ -498,21 +498,29 @@ func declaredWrapperVersion(t *testing.T, root string) string {
 	return declared
 }
 
-// releaseVersionCore is the MAJOR.MINOR.PATCH a release tag names, with
-// the leading v and any pre-release suffix taken off.
+// releaseTagVersion is the MAJOR.MINOR.PATCH a release tag names, with
+// the leading v taken off, and whether that tag carried a pre-release
+// suffix at all.
 //
-// A PRE-RELEASE COUNTS AS PUBLISHED, which is a decision rather than an
-// oversight. The pipeline a pre-release tag starts builds the same
-// artefacts, publishes the same public release and writes the same
-// registry entry — so "nothing is published yet" is false the moment one
-// lands, and a page still saying it would be describing a registry the
-// reader can already install from.
-func releaseVersionCore(tag string) string {
-	core := strings.TrimPrefix(tag, "v")
-	if dash := strings.IndexByte(core, '-'); dash >= 0 {
-		core = core[:dash]
+// A PRE-RELEASE DOES NOT COUNT AS PUBLISHED. The argument for the other
+// reading is kept here rather than deleted, because it is the one
+// somebody arrives at on their own: the pipeline a pre-release tag
+// starts builds the same artefacts, publishes the same public release
+// and writes the same registry entry, so the page's sentence can look
+// false already.
+//
+// It was decided the other way. A release candidate does not make
+// "nothing is published yet" false, so what retires that sentence is a
+// FINAL version — and the suffix is therefore REPORTED rather than
+// stripped and forgotten. A decision whose rejected alternative is
+// invisible gets re-argued from scratch by whoever next reads only the
+// code.
+func releaseTagVersion(tag string) (version string, preRelease bool) {
+	version = strings.TrimPrefix(tag, "v")
+	if dash := strings.IndexByte(version, '-'); dash >= 0 {
+		return version[:dash], true
 	}
-	return core
+	return version, false
 }
 
 // publicationDisclaimerRequired is the rule's single decision, lifted out
@@ -523,8 +531,9 @@ func releaseVersionCore(tag string) string {
 // defect this signature removes. Any reachable name retired the page's
 // disclaimer — a spike marker, an experiment, a name pushed to move work
 // between machines — and the page then described installing something
-// that is not published. What retires it is a tag that both looks like a
-// release version and names the version this repository is at.
+// that is not published. What retires it is a tag that looks like a
+// release version, carries no pre-release suffix, and names the version
+// this repository is at.
 //
 // IT ANSWERS WITH WHAT IT REFUSED, because a caller cannot reconstruct
 // that from a bool. A tree carrying tags and still owing the disclaimer
@@ -540,7 +549,8 @@ func releaseVersionCore(tag string) string {
 func publicationDisclaimerRequired(releaseTag *regexp.Regexp, tags []string, declared string) (bool, []string) {
 	var rejected []string
 	for _, tag := range tags {
-		if releaseTag.MatchString(tag) && releaseVersionCore(tag) == declared {
+		version, preRelease := releaseTagVersion(tag)
+		if releaseTag.MatchString(tag) && !preRelease && version == declared {
 			return false, nil
 		}
 		rejected = append(rejected, tag)
@@ -625,10 +635,7 @@ func TestThePublicationRuleIsOneDirectional(t *testing.T) {
 	}
 	for _, tags := range [][]string{
 		{"v4.5.6"},
-		// A PRE-RELEASE IS A RELEASE: the same artefacts, the same public
-		// release, the same registry entry.
-		{"v4.5.6-rc.1"},
-		// AND A STRAY TAG BESIDE THE REAL ONE MUST NOT BLOCK IT. The rule
+		// A STRAY TAG BESIDE THE REAL ONE MUST NOT BLOCK IT. The rule
 		// looks for a release among the reachable names; it does not
 		// insist that every name is one.
 		{"spike-pack-walk", "v4.5.6"},
@@ -666,6 +673,15 @@ func TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer(t *testing.T) {
 		"v4.5.7",             // a release version, of a release this tree is not at
 		"v10.5.6",            // the same, sharing its ending with the declared one
 		"release-v4.5.6",     // a name with a release version inside it
+
+		// A PRE-RELEASE OF THE DECLARED VERSION, which is the case this
+		// row was extended to hold after it was decided. It ships the
+		// same artefacts as the final version would, and the page's
+		// sentence is still not made false by a release candidate — so
+		// the disclaimer stays, and the shape that once retired it is
+		// refused right here, where somebody will look for it.
+		"v4.5.6-rc.1",
+		"v4.5.6-beta.2",
 	} {
 		requiredNow, rejected := publicationDisclaimerRequired(pattern, []string{tag}, declared)
 		if !requiredNow {
@@ -706,6 +722,14 @@ func TestTheReleaseTagPatternHasOneHome(t *testing.T) {
 	// translation that had quietly widened to accept anything would
 	// satisfy every row above while retiring the disclaimer on the next
 	// tag of any shape.
+	//
+	// IT ADMITS A PRE-RELEASE ON PURPOSE, and that is not this list
+	// disagreeing with the rule above it. This expression is the release
+	// path's definition of a version somebody may CUT, which is a wider
+	// question than which tags make the README's sentence false: a
+	// pre-release is a version you may tag, and it does not retire the
+	// disclaimer. Narrowing this list to match that rule would narrow a
+	// shared definition to settle something it was never about.
 	for _, tag := range []string{"v0.1.0", "v1.2.3", "v10.20.30", "v1.2.3-rc.1", "v1.2.3-beta.2"} {
 		if !pattern.MatchString(tag) {
 			t.Errorf("the release-version expression refuses %q, which is a release version", tag)
