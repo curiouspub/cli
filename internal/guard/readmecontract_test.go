@@ -420,6 +420,134 @@ func reachableReleaseTags(t *testing.T, root string) []string {
 	return tags
 }
 
+// releaseTagPattern is what a release tag looks like, read from the one
+// place this repository defines it: the script an operator runs before a
+// release refuses any argument that does not match this expression, so
+// the expression IS the definition and this row reads it rather than
+// restating it in Go.
+//
+// A SECOND COPY WOULD BE THE DEFECT RATHER THAN THE CONVENIENCE, and it
+// would drift invisibly in both directions. A looser copy retires the
+// page's disclaimer for a name the release path would have refused; a
+// stricter one goes on demanding the disclaimer after a release that
+// really happened. Neither shows up until the day somebody is cutting a
+// release, which is the day nobody has attention to spare for it.
+//
+// IT FAILS RATHER THAN FALLING BACK. An expression that cannot be found
+// is not an absent rule, it is a rule this row could not read — and a
+// default nobody chose is how a guard comes to pass over a question it
+// never asked.
+func releaseTagPattern(t *testing.T, root string) *regexp.Regexp {
+	t.Helper()
+	const shellMatch = "=~"
+	var found []string
+	for _, line := range strings.Split(readRepoFile(t, root, cutReleaseScript), "\n") {
+		idx := strings.Index(line, shellMatch)
+		if idx < 0 {
+			continue
+		}
+		if fields := strings.Fields(line[idx+len(shellMatch):]); len(fields) > 0 {
+			found = append(found, fields[0])
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s holds %d match expressions, and this row needs exactly the one that "+
+			"defines a release version: %v\nThe pattern has a single home and this is how it "+
+			"is read; a second expression there means the reader can no longer tell which of "+
+			"them is the version.", cutReleaseScript, len(found), found)
+	}
+	expr := found[0]
+	// ANCHORED AT BOTH ENDS, CHECKED RATHER THAN ASSUMED. Unanchored, the
+	// same expression matches a version sitting anywhere inside a longer
+	// name, so a branch-shaped tag that happens to carry one reads as a
+	// release.
+	if !strings.HasPrefix(expr, "^v") || !strings.HasSuffix(expr, "$") {
+		t.Fatalf("the version expression read from %s is %q, which is not anchored to a whole "+
+			"tag name.\nUnanchored it accepts any name with a version somewhere inside it, "+
+			"which is most of them.", cutReleaseScript, expr)
+	}
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		t.Fatalf("the version expression read from %s does not compile here: %v\n"+
+			"It is written for the shell's matching and used by this one; if the two dialects "+
+			"have diverged, this is where that has to be settled rather than worked around.",
+			cutReleaseScript, err)
+	}
+	return re
+}
+
+// declaredWrapperVersion is the version this repository is AT, read from
+// the wrapper's package metadata — the only file in the tree that
+// declares one at all. The binary reports "dev" until a build stamps a
+// version into it, and the release tool takes its version from the tag it
+// is cutting, so there is nothing here for this field to disagree with.
+func declaredWrapperVersion(t *testing.T, root string) string {
+	t.Helper()
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(readRepoFile(t, root, wrapperManifest)), &manifest); err != nil {
+		t.Fatalf("parsing %s: %v", wrapperManifest, err)
+	}
+	declared := strings.TrimSpace(manifest.Version)
+	if declared == "" {
+		t.Fatalf("%s declares no version, so this row cannot tell which release would retire "+
+			"the README's disclaimer.\nWith nothing to compare against, either every tag "+
+			"qualifies or none does, and both answers are wrong.", wrapperManifest)
+	}
+	return declared
+}
+
+// releaseVersionCore is the MAJOR.MINOR.PATCH a release tag names, with
+// the leading v and any pre-release suffix taken off.
+//
+// A PRE-RELEASE COUNTS AS PUBLISHED, which is a decision rather than an
+// oversight. The pipeline a pre-release tag starts builds the same
+// artefacts, publishes the same public release and writes the same
+// registry entry — so "nothing is published yet" is false the moment one
+// lands, and a page still saying it would be describing a registry the
+// reader can already install from.
+func releaseVersionCore(tag string) string {
+	core := strings.TrimPrefix(tag, "v")
+	if dash := strings.IndexByte(core, '-'); dash >= 0 {
+		core = core[:dash]
+	}
+	return core
+}
+
+// publicationDisclaimerRequired is the rule's single decision, lifted out
+// of the row so that every one of its answers is reachable by a call
+// rather than by creating a tag.
+//
+// A TAG IS NOT A RELEASE, and keying on the mere PRESENCE of one was the
+// defect this signature removes. Any reachable name retired the page's
+// disclaimer — a spike marker, an experiment, a name pushed to move work
+// between machines — and the page then described installing something
+// that is not published. What retires it is a tag that both looks like a
+// release version and names the version this repository is at.
+//
+// IT ANSWERS WITH WHAT IT REFUSED, because a caller cannot reconstruct
+// that from a bool. A tree carrying tags and still owing the disclaimer
+// is exactly the state somebody reads as a broken guard, so the rule
+// hands back the names it did not accept and the row says them out loud.
+//
+// THE OTHER DIRECTION CANNOT BE REACHED BY EDITING A FILE. Whether a
+// release exists is a property of this repository's tags rather than of
+// any text a change could touch, so with the decision written inline
+// there was no way to show the released tree behaves: it would sit
+// unexercised until the first release, which is the worst moment
+// available to discover it is wrong.
+func publicationDisclaimerRequired(releaseTag *regexp.Regexp, tags []string, declared string) (bool, []string) {
+	var rejected []string
+	for _, tag := range tags {
+		if releaseTag.MatchString(tag) && releaseVersionCore(tag) == declared {
+			return false, nil
+		}
+		rejected = append(rejected, tag)
+	}
+	return true, rejected
+}
+
 // TestReadmePublicationStateRow holds the README to the one-directional
 // rule: with no release tag reachable from this commit, the page must
 // say so where a reader will meet it, and must describe installing in
@@ -428,21 +556,12 @@ func reachableReleaseTags(t *testing.T, root string) []string {
 // once a release exists. An earlier version asserted both directions at
 // once; the converse was never true, since a tree that has a tag is free
 // to go on saying what it said before one existed.
-// publicationDisclaimerRequired is the rule's single decision, lifted out
-// of the row so that both of its answers can be exercised.
-//
-// THE OTHER DIRECTION CANNOT BE REACHED BY EDITING A FILE. Whether a
-// release exists is a property of this repository's tags rather than of
-// any text a change could touch, so with the decision written inline
-// there was no way to show the tagged branch behaves: it would sit
-// unexercised until the first release, which is the worst moment
-// available to discover it is wrong.
-func publicationDisclaimerRequired(tags []string) bool { return len(tags) == 0 }
-
 func TestReadmePublicationStateRow(t *testing.T) {
 	root := moduleRoot(t)
+	declared := declaredWrapperVersion(t, root)
 	tags := reachableReleaseTags(t, root)
-	if !publicationDisclaimerRequired(tags) {
+	required, rejected := publicationDisclaimerRequired(releaseTagPattern(t, root), tags, declared)
+	if !required {
 		// A PASS RATHER THAN A SKIP, and the difference is who meets the
 		// consequence. This rule is one-directional: with a release
 		// reachable it requires nothing of the page, so the row has
@@ -453,21 +572,33 @@ func TestReadmePublicationStateRow(t *testing.T) {
 		// red would arrive in front of whoever is cutting the release,
 		// about a row behaving exactly as designed, at the one moment
 		// nobody has attention to spare for it.
-		t.Logf("release tag present; disclaimer not required (%s)", strings.Join(tags, ", "))
+		t.Logf("a release tag naming %s is reachable (%s); the disclaimer is not required",
+			declared, strings.Join(tags, ", "))
 		return
+	}
+
+	// WHY IT IS STILL REQUIRED, SAID OUT LOUD. A tree can carry tags and
+	// still owe the disclaimer, and somebody who has just pushed one reads
+	// a silent demand as the row being stuck rather than as the rule
+	// working. The same sentence goes into the failures below, so the
+	// reason travels with them.
+	because := "no tag reachable from this commit names a release of " + declared
+	if len(rejected) > 0 {
+		because += " (considered and refused: " + strings.Join(rejected, ", ") + ")"
+		t.Logf("%s; the disclaimer is required", because)
 	}
 
 	readme := readReadmeFile(t, root)
 	if top := renderedProse(readmeTopSection(readme)); !strings.Contains(top, noReleaseDisclaimer) {
-		t.Errorf("no release tag is reachable from this commit, and the README's opening does "+
-			"not carry the sentence %q as prose a reader sees.\nIt is the first thing somebody "+
-			"deciding whether they can install this today needs to know, so it belongs above "+
-			"the fold rather than in the section they reach afterwards — and a sentence inside "+
-			"an HTML comment is rendered to nothing.", noReleaseDisclaimer)
+		t.Errorf("%s, and the README's opening does not carry the sentence %q as prose a reader "+
+			"sees.\nIt is the first thing somebody deciding whether they can install this today "+
+			"needs to know, so it belongs above the fold rather than in the section they reach "+
+			"afterwards — and a sentence inside an HTML comment is rendered to nothing.",
+			because, noReleaseDisclaimer)
 	}
 	if body := renderedProse(readme); !strings.Contains(body, futureTenseInstall) {
-		t.Errorf("no release tag is reachable from this commit, and README.md does not carry "+
-			"the future-tense framing %q", futureTenseInstall)
+		t.Errorf("%s, and README.md does not carry the future-tense framing %q",
+			because, futureTenseInstall)
 	}
 }
 
@@ -481,15 +612,111 @@ func TestReadmePublicationStateRow(t *testing.T) {
 // the release — so it runs here instead, now, against a value this row
 // controls.
 func TestThePublicationRuleIsOneDirectional(t *testing.T) {
-	if !publicationDisclaimerRequired(nil) {
+	pattern := releaseTagPattern(t, moduleRoot(t))
+	// A VERSION THIS TREE IS NOT AT, so nothing below can pass by
+	// accidentally agreeing with what the wrapper's metadata happens to
+	// declare today.
+	const declared = "4.5.6"
+
+	if requiredNow, _ := publicationDisclaimerRequired(pattern, nil, declared); !requiredNow {
 		t.Error("with no release reachable the disclaimer is required, and the rule said " +
 			"otherwise — which would let the page claim to be installable before anything " +
 			"is published")
 	}
-	if publicationDisclaimerRequired([]string{"v0.1.0"}) {
-		t.Error("with a release reachable the rule still demanded the disclaimer.\n" +
-			"It is one-directional: once something is published the page may say so, and a " +
-			"row that refused would fail a tagged tree for telling the truth.")
+	for _, tags := range [][]string{
+		{"v4.5.6"},
+		// A PRE-RELEASE IS A RELEASE: the same artefacts, the same public
+		// release, the same registry entry.
+		{"v4.5.6-rc.1"},
+		// AND A STRAY TAG BESIDE THE REAL ONE MUST NOT BLOCK IT. The rule
+		// looks for a release among the reachable names; it does not
+		// insist that every name is one.
+		{"spike-pack-walk", "v4.5.6"},
+	} {
+		if requiredNow, _ := publicationDisclaimerRequired(pattern, tags, declared); requiredNow {
+			t.Errorf("with %v reachable the rule still demanded the disclaimer.\n"+
+				"It is one-directional: once something is published the page may say so, and a "+
+				"row that refused would fail a released tree for telling the truth.", tags)
+		}
+	}
+}
+
+// TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer is the row the
+// version-aware decision exists for.
+//
+// The rule used to key on the PRESENCE of a reachable tag, so any name in
+// the repository retired the page's not-yet-released sentence: a spike
+// marker, an experiment nobody published, a version this tree is not at.
+// The page would then describe installing software that does not exist —
+// on a world-readable repository, to the stranger that sentence is
+// written for.
+//
+// EACH CASE NAMES THE TAG BACK. A demand for the disclaimer on a tree
+// that plainly carries tags reads as a stuck guard unless the answer says
+// which names it refused.
+func TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer(t *testing.T) {
+	pattern := releaseTagPattern(t, moduleRoot(t))
+	const declared = "4.5.6"
+
+	for _, tag := range []string{
+		"spike-pack-walk",    // a marker, not a version at all
+		"before-the-rewrite", // the same, and the shape work-in-progress tags take
+		"v4.5",               // short of a patch version
+		"4.5.6",              // the version, with no v — which the release path refuses
+		"v4.5.7",             // a release version, of a release this tree is not at
+		"v10.5.6",            // the same, sharing its ending with the declared one
+		"release-v4.5.6",     // a name with a release version inside it
+	} {
+		requiredNow, rejected := publicationDisclaimerRequired(pattern, []string{tag}, declared)
+		if !requiredNow {
+			t.Errorf("the tag %q retired the disclaimer, and it names no release of %s.\n"+
+				"Any reachable name used to be enough, which leaves a public page describing "+
+				"an install that cannot work.", tag, declared)
+		}
+		if len(rejected) != 1 || rejected[0] != tag {
+			t.Errorf("the rule refused %q and handed back %v rather than the name itself.\n"+
+				"The answer has to carry which tag was refused, or whoever pushed it meets a "+
+				"demand for a disclaimer with nothing pointing at the reason.", tag, rejected)
+		}
+	}
+}
+
+// TestTheReleaseTagPatternHasOneHome reads the expression out of the
+// release script and holds the compiled result to it.
+//
+// The pattern could have been written here in Go in about twenty
+// characters, and that is exactly the change this row exists to prevent:
+// two homes for one rule drift, and this drift is discovered by whoever
+// is cutting a release, when the page and the tag disagree about whether
+// one happened.
+func TestTheReleaseTagPatternHasOneHome(t *testing.T) {
+	root := moduleRoot(t)
+	pattern := releaseTagPattern(t, root)
+
+	// The compiled expression is the script's own bytes rather than a
+	// reading of them. Anything else here would be a transcription, which
+	// is the thing being avoided.
+	if !strings.Contains(readRepoFile(t, root, cutReleaseScript), pattern.String()) {
+		t.Errorf("the expression this row compiled (%q) does not appear in %s as written",
+			pattern.String(), cutReleaseScript)
+	}
+
+	// AND IT BEHAVES, because "it compiled" is not "it means the same
+	// thing here". The two dialects agree on this expression today; a
+	// translation that had quietly widened to accept anything would
+	// satisfy every row above while retiring the disclaimer on the next
+	// tag of any shape.
+	for _, tag := range []string{"v0.1.0", "v1.2.3", "v10.20.30", "v1.2.3-rc.1", "v1.2.3-beta.2"} {
+		if !pattern.MatchString(tag) {
+			t.Errorf("the release-version expression refuses %q, which is a release version", tag)
+		}
+	}
+	for _, tag := range []string{"1.2.3", "v1.2", "v1.2.3.4", "v1.2.3 ", "spike-pack-walk", "release-v1.2.3", ""} {
+		if pattern.MatchString(tag) {
+			t.Errorf("the release-version expression accepts %q, which is not one.\n"+
+				"An expression that admits a name of any shape retires the README's disclaimer "+
+				"on the next tag anybody pushes.", tag)
+		}
 	}
 }
 
