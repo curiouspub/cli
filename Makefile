@@ -7,7 +7,7 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-go test-npm test-race e2e-npm vet fmt lint snapshot surface-check leak-scan leak-scan-private hooks ci guard-a-branch-to-work-on
+.PHONY: build test test-go test-npm test-race e2e-npm exit-test vet fmt lint snapshot surface-check leak-scan leak-scan-private hooks ci guard-a-branch-to-work-on
 
 build:
 	go build -trimpath ./...
@@ -198,6 +198,20 @@ test-npm:
 # and stands up a server, which is minutes rather than seconds.
 e2e-npm:
 	npm/test/e2e-local.sh
+
+# The exit test: the whole client, end to end, against a stack running on
+# this machine. It is NOT part of ci and could not be — it needs a
+# running service, a container runtime and a mail catcher, none of which
+# a checkout has. Everything it demonstrates that CAN be established
+# without those is already in the gate.
+#
+# It takes every address it uses from the environment and compiles none
+# of them in; the script's own header lists them and says what each is
+# for. It never starts the service it tests, because a script that owns
+# the lifecycle of the thing under test can pass for reasons that have
+# nothing to do with it.
+exit-test:
+	scripts/exit-test.sh
 
 vet:
 	go vet ./...
