@@ -7,7 +7,7 @@
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-go test-npm test-race e2e-npm exit-test vet fmt lint snapshot surface-check leak-scan leak-scan-private hooks ci guard-a-branch-to-work-on
+.PHONY: build test test-go test-npm test-race e2e-npm exit-test vet fmt lint snapshot surface-check leak-scan leak-scan-private hooks release-log ci guard-a-branch-to-work-on
 
 build:
 	go build -trimpath ./...
@@ -357,6 +357,66 @@ hooks:
 	chmod +x "$$hook"; \
 	echo "installed $$hook"; \
 	echo "it runs the same check the workflow does, over what you are about to push"
+
+# release-log captures a release run. The output a live run brings back is
+# the whole product of making it, and until now the only record of what a
+# release printed was whatever was still in the operator's scrollback
+# afterwards — a record with a half-life.
+#
+#     make release-log VERSION=<version> [ARGS=--yes]
+#
+# VERSION IS REQUIRED AND HAS NO DEFAULT. A capture of a run nobody named
+# is a log of a refusal, and this is the one sequence here that cannot be
+# taken back.
+#
+# THE CONSENT GATE IS NOT COPIED HERE. The script already refuses anything
+# that is not a version and already changes nothing without --yes, so ARGS
+# goes straight through. A second gate in this file would be one an
+# operator can skip by not typing this command, sitting next to the one
+# they cannot.
+#
+# THE LOG LANDS OUTSIDE THIS REPOSITORY, which is the reason for the
+# default rather than an accident of layout. A release run prints real
+# addresses and real identifiers; this repository is world-readable, and a
+# log written inside it would be an untracked file no ignore rule covers,
+# which is exactly the set the guards read as published. The path is a
+# variable, so it can be pointed elsewhere, and nothing here writes into
+# the tree.
+#
+# THE EXIT STATUS IS CARRIED IN A SIDECAR, because the capture must not be
+# what decides it. script(1) here returns the child's status; other
+# implementations return their own, and a target whose verdict depends on
+# which one is installed reports success for a refused release on somebody
+# else's machine. The status is written beside the log, read back, appended
+# to the log, and this target exits with it — and a status that cannot be
+# read back counts as a failure rather than a pass.
+#
+# The invocation is the BSD/macOS form, `script -q <file> <command>`; a GNU
+# one would need -c.
+#
+# IT IS NOT PART OF ci AND IS NOT A PREREQUISITE OF ANYTHING ci RUNS. It
+# spends a real release; the gate has to stay a command anybody can type on
+# a checkout.
+OPERATOR_LOGS ?= ../operator-logs
+
+release-log:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "release-log needs the version it is capturing:"; \
+		echo; \
+		echo "    make release-log VERSION=<version> [ARGS=--yes]"; \
+		echo; \
+		echo "There is no default. A capture of a run nobody named is a log"; \
+		echo "of a refusal."; \
+		exit 1; \
+	fi
+	@mkdir -p $(OPERATOR_LOGS)
+	@log="$(OPERATOR_LOGS)/release-$$(date -u +%Y%m%dT%H%M%SZ).log"; \
+	echo "operator log: $$log"; \
+	RELEASE_LOG="$$log" script -q "$$log" $(SHELL) -c 'scripts/cut-release.sh $(VERSION) $(ARGS); echo $$? > "$$RELEASE_LOG.rc"'; \
+	rc=$$(cat "$$log.rc" 2>/dev/null || echo 1); rm -f "$$log.rc"; \
+	echo "exit $$rc" >> "$$log"; \
+	echo "operator log written: $$log"; \
+	exit $$rc
 
 # THE DEFAULT BRANCH IS NOT A PLACE TO WORK, and the gate says so before
 # it spends twelve minutes proving the tree is fine.
