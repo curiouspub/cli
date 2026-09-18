@@ -249,13 +249,32 @@ lint:
 # exact pinned version and then runs this target, so the command CI types
 # is the command a person types.
 #
-# --skip=sign, and it is measured rather than assumed. A snapshot skips
-# announcing, publishing and validation; it does NOT skip signing, so
-# without this the target fails at its last step on any machine with no
-# signing tool — which is every machine, since a keyless signature needs
-# an identity that exists only inside an approved release run. Asking for
-# a signature here would mean either a check that cannot pass or an
-# identity on a pull request from a stranger, and the second is worse.
+# THIS TARGET SIGNS, and the flag that used to stop it is gone. A
+# snapshot skips announcing, publishing and validation; it does NOT skip
+# signing, and this target used to pass --skip=sign so that a machine
+# with no signing tool could still run it.
+#
+# THE ARGUMENT FOR THAT FLAG WAS HALF RIGHT, AND THE WRONG HALF COST A
+# RELEASE. It ran: asking for a signature here would mean either a check
+# that cannot pass, or an identity on a pull request from a stranger, and
+# the second is worse. The second clause still holds and always will — no
+# release identity is ever minted for a pull request. The first was false
+# and nobody tested it: a signature does not need an identity, it needs a
+# KEY, and a key pair generated in the job costs nothing and belongs to
+# nobody. While that flag stood, the signing path ran for the first time
+# at the first release and failed in it.
+#
+# So the key pair is generated here, used, and thrown away with the
+# directory. It signs nothing anyone will verify against a public root of
+# trust; its whole job is to make the pinned signer execute the argument
+# list the release will use, on every change, so a pin that moves under
+# that list reds in a pull request instead of at a tag.
+#
+# WHEN THE SIGNER IS ABSENT this target says so and skips signing rather
+# than failing, because it is not a build dependency of this module and a
+# contributor who has never cut a release has no reason to hold it. CI is
+# the other way round: the workflow installs it at a pinned version, so
+# an absent signer there is a failure and never a quiet pass.
 # THE CHECK AFTER THE BUILD is the only thing that can see a
 # member-count error or a misspelled archive name: the release tool's
 # own validator reads the schema, and a format that cannot hold what it
@@ -264,7 +283,17 @@ lint:
 # template and the install script's table are tied together instead of
 # being two restatements of the same six names in different files.
 snapshot:
-	goreleaser release --snapshot --clean --skip=sign
+	@if command -v cosign >/dev/null 2>&1; then \
+		rm -rf .snapshot-keys && mkdir -p .snapshot-keys; \
+		COSIGN_PASSWORD=snapshot COSIGN_YES=true \
+			cosign generate-key-pair --output-key-prefix .snapshot-keys/cosign >/dev/null; \
+		COSIGN_PASSWORD=snapshot goreleaser release --snapshot --clean; \
+	else \
+		echo "cosign is not installed here, so the snapshot's signing step is skipped."; \
+		echo "CI installs it at a pinned version and does not skip it; see the row in"; \
+		echo "internal/guard and its line in scripts/expected-skips.txt."; \
+		goreleaser release --snapshot --clean --skip=sign; \
+	fi
 	node scripts/check-release-assets.js dist
 
 # surface-check reads the surfaces the test suite cannot: the messages,

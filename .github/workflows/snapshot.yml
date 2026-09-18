@@ -6,8 +6,18 @@ name: Snapshot
 # checksum file, and uploads nothing: no credential is available to it,
 # and none is needed.
 #
-# Signing and the tap write are skipped in a snapshot build by the tool
-# itself, so this workflow needs neither an identity nor a token.
+# The tap write is skipped in a snapshot build by the tool itself.
+# SIGNING IS NOT, and this file used to say it was — a sentence the
+# Makefile beside it disproved by passing an explicit flag to skip it.
+# That flag was the only thing standing between this check and the
+# signing path, and while it stood there, NOTHING exercised that path
+# until a real release. The first execution was the first release, which
+# failed in it.
+#
+# So this job signs now, with a key pair generated in the job. That needs
+# no identity and no token: a keyless signature needs one, which is why
+# signing used to be skipped here — but the arguments that go stale are
+# the same either way, and only the IDENTITY has to wait for a release.
 on:
   pull_request:
   push:
@@ -37,6 +47,29 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
+
+      # THE SAME SIGNER, AT THE SAME PIN AS THE RELEASE WORKFLOW, and for
+      # the same reason the release tool is pinned here: a check that
+      # proved a different tool works would prove nothing about the one
+      # that publishes.
+      #
+      # THIS PIN AND THE RELEASE WORKFLOW'S ARE TWO COPIES OF ONE VERSION,
+      # AND NOTHING HOLDS THEM EQUAL. Stated rather than implied, because
+      # the alternative is the defect this whole change exists to remove:
+      # the scheduled update policy bumps action REFERENCES and cannot see
+      # a version passed as an input, so both of these move by hand, and
+      # two hands can disagree. If they do, this check signs with one
+      # signer and the release publishes with another, which is the exact
+      # shape of "a check that proves a different tool works".
+      #
+      # ON CI IT IS INSTALLED, SO AN ABSENT SIGNER IS A FAILURE. The
+      # Makefile target below tolerates a missing signer on a developer
+      # machine and declares that skip; here there is nothing to tolerate,
+      # and a skip would be this check reporting that it ran when it did
+      # not.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
 
       # install-only, at the SAME exact version the release workflow
       # uses. A pull-request check that proves a different tool works has

@@ -19,6 +19,15 @@ go.work*
 /npm/curious
 /npm/curious.exe
 
+# The throwaway key pair the snapshot build signs with. It is generated
+# on every run, used once, and belongs to nobody — but it is still a
+# PRIVATE KEY in a public repository's working tree, and the leak scan
+# reads every untracked file no rule covers. Ignored for the same reason
+# the npm entries above are: not because it could ship, but because
+# nothing here authored it and nothing should scan it as though somebody
+# had.
+/.snapshot-keys/
+
 # test & coverage
 *.test
 coverage.out

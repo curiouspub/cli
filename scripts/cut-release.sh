@@ -225,18 +225,24 @@ main() {
 	printf '  git push origin refs/tags/%s\n\n' "$version"
 
 	# THE STEP AFTER, printed here because here is where its reader is.
-	# Nothing before a real release can exercise the signature: a keyless
-	# one needs an identity, and the only identity is inside an approved
-	# run. So the first time that block runs is the first release, and the
-	# check that it produced something meaningful is a command somebody
-	# has to type. A command written down where the operator already is
-	# gets typed; one written down in a document does not.
+	# A command written down where the operator already is gets typed; one
+	# written down in a document does not.
+	#
+	# THIS COMMENT USED TO SAY NOTHING BEFORE A REAL RELEASE COULD EXERCISE
+	# THE SIGNATURE, and that sentence cost a tag. It was true of the
+	# IDENTITY and false of everything else: a keyless signature needs an
+	# approved run, but the argument list does not, and it was the argument
+	# list that went stale when the signing tool's pin moved to a major
+	# where the old output flags are insufficient. The first execution of
+	# that code path was therefore the first release, which failed in it.
+	# The pull-request check now signs with a key pair generated in the
+	# job, so the flags below and the ones that produce the bundle both run
+	# continuously; only the identity waits for a release.
 	printf '=== after the release finishes, check the signature ===\n\n'
 	printf '  cosign verify-blob \\\n'
 	printf '    --certificate-identity-regexp "^https://github.com/%s/[.]github/workflows/release[.]yml@refs/tags/%s$" \\\n' "$REPO" "$version"
 	printf '    --certificate-oidc-issuer https://token.actions.githubusercontent.com \\\n'
-	printf '    --certificate checksums.txt.pem \\\n'
-	printf '    --signature checksums.txt.sig \\\n'
+	printf '    --bundle checksums.txt.bundle \\\n'
 	printf '    checksums.txt\n\n'
 	printf 'A failure there means the artefacts cannot prove who built them, which is\n'
 	printf 'the whole reason they are signed. Treat it as a release to withdraw.\n\n'
