@@ -118,24 +118,47 @@ checksum:
 # therefore asks for the signing stage to be skipped explicitly, in the
 # Makefile target it runs, where the reason is written down.
 #
-# THE RESIDUE, named rather than left to be found: nothing exercises this
-# block until the first real release. A keyless signature needs an
-# identity, and the only place an identity exists is inside an approved
-# run of the publishing job. The command that checks the result is
-# printed by scripts/cut-release.sh, so whoever cuts that first release
-# meets it.
+# THE RESIDUE THIS PARAGRAPH USED TO NAME IS THE DEFECT THAT CAME DUE, so
+# it is recorded as history rather than deleted. It said: nothing
+# exercises this block until the first real release, because a keyless
+# signature needs an identity and an identity exists only inside an
+# approved publishing run. Every word was true, and naming a gap is not
+# covering one. The signing tool's pin moved to a major where the output
+# flags this block used to pass are insufficient; the first execution of
+# the path was the first release, forty-nine seconds after a person
+# approved the irreversible step, and it failed there.
+#
+# WHAT CHANGED IS WHICH HALF WAITS. The identity still waits for a
+# release — nothing can fake one, and nothing should. The ARGUMENTS do
+# not: the snapshot build signs with a key pair generated in the job, so
+# the flags below run on every pull request and a pin that moves under
+# them reds there instead of at a tag. Only the two identity arms differ
+# between the modes.
+#
+# THE ARMS ARE BOTH REAL FLAGS, WHICH IS NOT COSMETIC. An arm that
+# renders to nothing does not vanish: it becomes an empty argument, and
+# the signer reads it as a path — measured, `reading payload: read .: is
+# a directory`. So the release side repeats a boolean it already passes
+# rather than rendering blank.
+#
+# The bundle is declared as the signature so the tool knows it was
+# produced. Without that it warns, says the warning becomes an error in
+# its next major, and — the part that matters — does not publish the file,
+# which would leave the verify command printed by scripts/cut-release.sh
+# with nothing to download.
 signs:
   - id: checksums
     cmd: cosign
     artifacts: checksum
-    signature: ${artifact}.sig
-    certificate: ${artifact}.pem
+    signature: ${artifact}.bundle
     output: true
     args:
       - sign-blob
       - --yes
-      - --output-signature=${signature}
-      - --output-certificate=${certificate}
+      - --bundle=${artifact}.bundle
+      - '{{ if .IsSnapshot }}--key=.snapshot-keys/cosign.key{{ else }}--yes{{ end }}'
+      - '{{ if .IsSnapshot }}--use-signing-config=false{{ else }}--yes{{ end }}'
+      - '{{ if .IsSnapshot }}--tlog-upload=false{{ else }}--yes{{ end }}'
       - ${artifact}
 
 # The tap lives in its own repository, so the job's own token cannot

@@ -1336,6 +1336,248 @@ func TestReleaseConfigIsAcceptedByTheReleaseTool(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// The signing path, exercised on every run instead of at a tag.
+// ---------------------------------------------------------------------
+
+// snapshotKeyDir is where the snapshot build's throwaway key pair lands.
+//
+// THREE PLACES HOLD THIS PATH — the Makefile target that generates the
+// pair, the release configuration's --key argument, and this row — and
+// nothing holds them equal, which is stated rather than implied. The row
+// below reads the configuration's argument AS WRITTEN and runs the signer
+// with its working directory here, so a disagreement between the
+// configuration and this constant fails loudly the moment the signer
+// cannot find the key. The Makefile is the copy no test reads; it is
+// covered by the snapshot build itself, which is the thing that would
+// stop producing a bundle.
+const snapshotKeyDir = ".snapshot-keys"
+
+// snapshotArm resolves the ONE template form this row understands, and
+// refuses every other one.
+//
+// IT IS A SECOND IMPLEMENTATION OF A RENDERING THE RELEASE TOOL ALREADY
+// DOES, which is the shape this repository keeps ruling against, so it is
+// held to the narrowest possible job: `{{ if .IsSnapshot }}A{{ else }}B{{ end }}`
+// and nothing else. A future arm with a condition this cannot read is a
+// FATAL rather than a quiet mis-render, because a renderer that guesses
+// would make this row assert something adjacent to what it names.
+//
+// BOTH ARMS MUST BE NON-EMPTY, and that is measured rather than tidy. An
+// arm rendering to nothing does not disappear: the tool passes an empty
+// argument, and the signer reads it as a path — `reading payload: read
+// .: is a directory`. The release side therefore repeats a boolean it
+// already passes rather than rendering blank, and this row is what keeps
+// it that way.
+func snapshotArm(t *testing.T, arg string) string {
+	t.Helper()
+	if !strings.Contains(arg, "{{") {
+		return arg
+	}
+	const open, closed, alt = "{{ if .IsSnapshot }}", "{{ end }}", "{{ else }}"
+	if !strings.HasPrefix(arg, open) || !strings.HasSuffix(arg, closed) {
+		t.Fatalf("%s carries a signing argument this row cannot read: %q\n"+
+			"It understands one form, %s…%s…%s, because it re-implements a rendering "+
+			"the release tool owns. Widen it deliberately or write the argument in the "+
+			"form it reads — do not leave it guessing.", releaseConfig, arg, open, alt, closed)
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(arg, open), closed)
+	snap, rest, found := strings.Cut(body, alt)
+	if !found || strings.TrimSpace(snap) == "" || strings.TrimSpace(rest) == "" {
+		t.Fatalf("%s has a signing argument with an empty arm: %q\n"+
+			"An arm that renders to nothing is not dropped — it becomes an empty "+
+			"argument and the signer reads it as a path. Both arms carry a real flag.",
+			releaseConfig, arg)
+	}
+	return snap
+}
+
+// TestTheSnapshotSignsWithAKeyAndTheBundleVerifies runs the release
+// configuration's OWN signing arguments through the pinned signer, with a
+// key pair generated here and thrown away with the directory.
+//
+// WHY THIS ROW EXISTS, stated plainly because it was written after the
+// failure it would have caught. The signing block used to say that
+// nothing exercised it until the first real release: a keyless signature
+// needs an identity, and an identity lives only inside an approved
+// publishing run. That was true of the IDENTITY and false of the
+// ARGUMENTS. The signer's pin moved to a major where the flags the block
+// passed are insufficient, nothing ran the two together, and the first
+// execution of the path was the first release — which failed in it,
+// forty-nine seconds after a person approved the irreversible step.
+//
+// So the arguments are read OUT OF THE CONFIGURATION rather than restated
+// here. A hand-written copy would agree with itself and not with the file
+// that publishes, which is the same defect one artefact along.
+//
+// WHAT IT STILL CANNOT REACH: the keyless arm. `--tlog-upload=true` and
+// the identity exchange need a release by construction, and no row can
+// fake one. What is covered is everything both modes share — the
+// subcommand, the bundle output, and the argument list's shape — which is
+// the part that went stale.
+func TestTheSnapshotSignsWithAKeyAndTheBundleVerifies(t *testing.T) {
+	bin, err := exec.LookPath("cosign")
+	if err != nil {
+		t.Skip("the signing tool is not installed on this machine, so the release " +
+			"configuration's own signing arguments cannot be run here; the snapshot " +
+			"workflow installs it at a pinned version and fails rather than skipping")
+	}
+
+	root := moduleRoot(t)
+	signs, ok := topLevelBlock(readYAMLLines(readRepoFile(t, root, releaseConfig)), "signs")
+	if !ok {
+		t.Fatalf("%s signs nothing, so there are no arguments to exercise", releaseConfig)
+	}
+	args := listOf(signs, "args")
+	if len(args) == 0 {
+		t.Fatalf("%s declares a signing block with no arguments", releaseConfig)
+	}
+
+	// The tool runs with its working directory here, so the key path the
+	// configuration states — a relative one — is exercised AS WRITTEN
+	// rather than substituted. A substituted path would prove that some
+	// key works, not that the one the build produces does.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, snapshotKeyDir), 0o755); err != nil {
+		t.Fatalf("making the key directory: %v", err)
+	}
+	const password = "snapshot"
+	env := append(os.Environ(), "COSIGN_PASSWORD="+password, "COSIGN_YES=true")
+
+	keygen := exec.Command(bin, "generate-key-pair",
+		"--output-key-prefix", filepath.Join(snapshotKeyDir, "cosign"))
+	keygen.Dir, keygen.Env = dir, env
+	if out, err := keygen.CombinedOutput(); err != nil {
+		t.Fatalf("generating the throwaway key pair: %v\n%s", err, out)
+	}
+
+	const fixture = "checksums.txt"
+	body := []byte("0000000000000000000000000000000000000000000000000000000000000000  curious.tar.gz\n")
+	if err := os.WriteFile(filepath.Join(dir, fixture), body, 0o644); err != nil {
+		t.Fatalf("writing the fixture: %v", err)
+	}
+
+	resolved := make([]string, 0, len(args))
+	for _, a := range args {
+		resolved = append(resolved, strings.ReplaceAll(snapshotArm(t, a), "${artifact}", fixture))
+	}
+	sign := exec.Command(bin, resolved...)
+	sign.Dir, sign.Env = dir, env
+	if out, err := sign.CombinedOutput(); err != nil {
+		t.Fatalf("the signer rejected the arguments %s declares: %v\n%s\n"+
+			"This is the row that exists so a pin moving under these arguments reds "+
+			"here rather than at a tag.", releaseConfig, err, out)
+	}
+
+	bundle := fixture + ".bundle"
+	if _, err := os.Stat(filepath.Join(dir, bundle)); err != nil {
+		t.Fatalf("the signer wrote no %s: %v\n"+
+			"The configuration declares the bundle as the signature so the release tool "+
+			"publishes it; a bundle nobody can download is a verify command nobody can run.",
+			bundle, err)
+	}
+
+	// --insecure-ignore-tlog is supplied HERE and not read from the
+	// configuration, because it is a property of this row rather than of
+	// the release: the snapshot arm signs with --tlog-upload=false, so
+	// there is no transparency-log entry to find and asking for one would
+	// fail for the right reason at the wrong time.
+	verify := func(t *testing.T) error {
+		t.Helper()
+		v := exec.Command(bin, "verify-blob",
+			"--key", filepath.Join(snapshotKeyDir, "cosign.pub"),
+			"--bundle", bundle, "--insecure-ignore-tlog=true", fixture)
+		v.Dir, v.Env = dir, env
+		out, err := v.CombinedOutput()
+		if err != nil {
+			return errors.New(string(out))
+		}
+		return nil
+	}
+
+	if err := verify(t); err != nil {
+		t.Fatalf("the bundle does not verify with the key pair that made it:\n%s", err)
+	}
+
+	// THE CONTROL, because a verification asked only about a file that
+	// matches can be seen to say yes and never to say no. Measured: this
+	// answers "invalid signature when validating ASN.1 encoded signature".
+	if err := os.WriteFile(filepath.Join(dir, fixture), append(body, []byte("tampered\n")...), 0o644); err != nil {
+		t.Fatalf("tampering with the fixture: %v", err)
+	}
+	if err := verify(t); err == nil {
+		t.Error("a tampered checksum file verified against the same bundle\n" +
+			"Then this row cannot tell a signature that covers the artefacts from one " +
+			"that covers nothing, and every green above it means nothing either.")
+	}
+}
+
+// TestTheSignerIsPinnedToOneVersionEverywhere holds the two workflow
+// pins equal.
+//
+// They are two copies of one fact, and the update policy cannot see
+// either: it bumps action REFERENCES and a version passed as an INPUT is
+// invisible to it, so both move by hand. If they drift, the pull-request
+// check signs with one signer while the release publishes with another —
+// and the snapshot's proof stops being a proof about the release, which
+// is the only reason that proof is worth running.
+//
+// Recorded as the two-copies fallback rather than as a preference: one
+// home would be better, and there is no mechanism for one home here,
+// because each workflow names its own input.
+func TestTheSignerIsPinnedToOneVersionEverywhere(t *testing.T) {
+	root := moduleRoot(t)
+	pinned := regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+	var where, values []string
+	for _, path := range publishedTextFiles(t, root) {
+		// publishedTextFiles hands back paths as git listed them under
+		// root, not repository-relative names — which is what displayPath
+		// exists for, and what the first draft of this row got wrong. It
+		// filtered on a relative prefix, matched nothing, and reported
+		// zero pins: a row that would have passed vacuously had it been
+		// written to tolerate an empty set, which is the exact failure it
+		// exists to catch elsewhere.
+		rel := displayPath(root, path)
+		if !strings.HasPrefix(rel, ".github/workflows/") {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		for _, l := range readYAMLLines(string(data)) {
+			text := strings.TrimSpace(l.Text)
+			if !strings.HasPrefix(text, "cosign-release:") {
+				continue
+			}
+			v := strings.Trim(strings.TrimSpace(strings.TrimPrefix(text, "cosign-release:")), `"'`)
+			where = append(where, rel+":"+strconv.Itoa(l.N)+" "+v)
+			values = append(values, v)
+		}
+	}
+
+	if len(values) < 2 {
+		t.Fatalf("found %d signer pin(s) in the workflows, want the two this row exists to "+
+			"hold equal: %v\n"+
+			"A workflow that stopped pinning the signer installs whatever is newest, which "+
+			"is how the argument list and the tool drift apart again.", len(values), where)
+	}
+	for i, v := range values {
+		if !pinned.MatchString(v) {
+			t.Errorf("%s is not an exact version\n"+
+				"A moving reference is not a pin, and the whole point of pinning the signer "+
+				"is that the arguments below it are known to work with THAT one.", where[i])
+		}
+		if v != values[0] {
+			t.Errorf("the signer is pinned to two different versions:\n  %s\n  %s\n"+
+				"One of these signs the pull-request check and the other publishes the "+
+				"release, so the check stops proving anything about what ships.",
+				where[0], where[i])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
 // The script a human runs before a release.
 // ---------------------------------------------------------------------
 

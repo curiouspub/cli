@@ -187,6 +187,27 @@ windows github.com/curiouspub/cli/internal/pack TestTheArchiveModeIgnoresWhatIsO
 # directory — is asserted on all three platforms.
 linux,darwin github.com/curiouspub/cli/internal/config TestLoadUnreadableFileIsReportedNotFatal
 
+# The row that signs a snapshot's checksum file with a key pair it
+# generates, and verifies the bundle with that pair's public half. The
+# signing tool is not a build dependency of this module and is not
+# installed by `go`; a contributor who has never cut a release has no
+# reason to hold it, and the skip is honest on their machine.
+#
+# WHAT THE SKIP COSTS, because a line here is a claim and not a note.
+# This row is the only thing that runs the signer with the argument list
+# a release will use. That list went stale once already — a pin moved to
+# a major where the previous flags are insufficient, and because nothing
+# exercised them, the first execution was the first release, which failed
+# in it. So what a skipping machine loses is precisely the signal that
+# would have caught that.
+#
+# IT LOSES NOTHING ON CI, which is the reason the skip is acceptable
+# rather than merely convenient. The snapshot workflow installs the
+# signer at an exact pinned version, so the row runs there on every pull
+# request and an absent signer is a failure rather than a skip. The
+# declaration below covers the developer machine, not the gate.
+* github.com/curiouspub/cli/internal/guard TestTheSnapshotSignsWithAKeyAndTheBundleVerifies
+
 # A directory the walk cannot read has to be built by taking away the
 # read bit, and two environments legitimately refuse to produce it:
 # Windows, where permission bits do not gate a directory read the same
