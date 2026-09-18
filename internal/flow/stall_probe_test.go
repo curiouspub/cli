@@ -5,6 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -968,7 +971,15 @@ func probeBody(t *testing.T, size int64) string {
 // autotuning.
 func TestProbeTheUploadStallGap(t *testing.T) {
 	entry := &timing.UploadSlowIsNotStalled
-	pacing := pacingFor(t, entry.Window)
+	// THE FLOOR IS THE ROW'S, BECAUSE THIS PROBE'S FIXTURE IS THE ROW'S.
+	// The comment above says why the body comes from pacingFor at all:
+	// the probe and the row it measures for must not drift apart as the
+	// window moves. A floor of this probe's own would reintroduce exactly
+	// that drift in the one dimension the window does not cover — so this
+	// is deliberately the same expression the row writes, against the
+	// same entry, and not a number chosen here.
+	floor := blockPointFloor(t, entry)
+	pacing := pacingFor(t, entry.Window, floor)
 
 	path := probeBody(t, pacing.bodySize)
 	store := newObjectStore(t, &deployJournal{}, pinnedBuffer)
@@ -1114,7 +1125,21 @@ func TestProbeTheUploadBlockPoint(t *testing.T) {
 	// whether the ROW's fixture is large enough to make the client
 	// block. A body of some other size would answer it about some other
 	// fixture.
-	bodySize := pacingFor(t, timing.UploadSlowIsNotStalled.Window).bodySize
+	// THE ROW'S FLOOR ALONG WITH THE ROW'S WINDOW, for the reason stated
+	// directly above about the body: this probe answers whether THE ROW's
+	// fixture is large enough to make the client block, so every input
+	// that sizes that fixture has to be the row's too. A floor of this
+	// probe's own would answer the question about a fixture the row does
+	// not use.
+	//
+	// AND THIS PROBE IS THE ONE THAT MEASURES THE BLOCK POINT, so the
+	// circularity is worth naming: on a leg with a record it sizes its
+	// fixture from the block point recorded last time, and what it
+	// reports is whether that is still the right number. That is a
+	// retake, not a tautology — the fixture is built from the old reading
+	// and the new reading is compared against it.
+	floor := blockPointFloor(t, &timing.UploadSlowIsNotStalled)
+	bodySize := pacingFor(t, timing.UploadSlowIsNotStalled.Window, floor).bodySize
 
 	path := probeBody(t, bodySize)
 	store := newObjectStore(t, &deployJournal{}, pinnedBuffer)
@@ -1959,4 +1984,272 @@ func TestAStarvedPassIsRetakenRatherThanCounted(t *testing.T) {
 			t.Errorf("the refusal does not name the assumption that failed:\n%v", err)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------
+// The floor is stated where it is claimed.
+// ---------------------------------------------------------------------
+
+// sharedFloorIdent is the one floor value this package still shares, and
+// the only identifier this row objects to seeing at a call site whose leg
+// has something recorded.
+const sharedFloorIdent = "unmeasuredLegFloor"
+
+// pacingForName is the helper whose floor used to be a constant inside its
+// own body. Named once, so this row and its failure messages cannot
+// disagree about what they are talking about.
+const pacingForName = "pacingFor"
+
+// floorCall is one pacingFor call site and what the SOURCE says about the
+// floor it passes.
+type floorCall struct {
+	file        string
+	line        int
+	row         string // the test function it sits in
+	entry       string // the timing entry the floor is derived from
+	sharesFloor bool   // the floor expression mentions the shared identifier
+}
+
+// TestNoRowInheritsAFloorItDidNotState is the row the floor's move out of
+// pacingFor's body exists for.
+//
+// THE CLAIM IT HOLDS: a caller whose leg has a MEASURED record derives its
+// floor from that record and does not reach for the shared value. The
+// shared value is for a leg with nothing recorded — the only case it was
+// ever right about — and a row reaching for it on a measured leg asserts a
+// minimum it has the evidence to replace.
+//
+// WHY IT READS SOURCE RATHER THAN VALUES. The floor arrives at pacingFor
+// as an int64, and the number cannot answer the question: eight times a
+// block point can land on a shared constant by arithmetic accident, and
+// two different reasons producing one number is exactly the confusion this
+// change is against. "Was this read from a shared constant" is a question
+// about what the caller WROTE.
+//
+// IT REDS ON SCANNING NOTHING, like every guard in this repository. A row
+// that finds no call sites has not confirmed every call site is honest; it
+// has confirmed it cannot see them — which is what renaming the helper
+// would produce, quietly.
+func TestNoRowInheritsAFloorItDidNotState(t *testing.T) {
+	calls := floorCallsInThisPackage(t)
+	if len(calls) == 0 {
+		t.Fatalf("found no %s call sites to read, so this row confirmed nothing.\n"+
+			"Either the helper was renamed and this row's own name for it (%q) is "+
+			"stale, or the calls left this package. A row that scans an empty set "+
+			"passes for the same reason a clean one does.",
+			pacingForName, pacingForName)
+	}
+
+	leg := probeLeg()
+	for _, call := range calls {
+		entry, known := timing.Lookup(call.entry)
+		if !known {
+			t.Errorf("%s:%d (%s) derives its floor from %q, which the timing registry does "+
+				"not carry.\nThis row cannot tell whether that leg has a record, so it "+
+				"cannot tell whether the floor is stated or inherited.",
+				call.file, call.line, call.row, call.entry)
+			continue
+		}
+		measurement := entry.Measurements[leg]
+		if measurement.Measured() && call.sharesFloor {
+			t.Errorf("%s:%d (%s) passes a floor that reads %s, and %s has a MEASURED record "+
+				"on %s — block point %d bytes.\n"+
+				"A shared floor on a leg with a record is a claim this row inherits instead "+
+				"of making. The block point is the measurement the floor stands in for, and "+
+				"where it exists the row derives from it and says so; the shared value is for "+
+				"a leg with nothing recorded.",
+				call.file, call.line, call.row, sharedFloorIdent, call.entry, leg,
+				measurement.BlockPoint)
+		}
+	}
+}
+
+// floorCallsInThisPackage parses the package's own source and reports every
+// pacingFor call with what its floor argument mentions.
+//
+// It resolves a single-assignment alias — `entry := &timing.Name` — and
+// FAILS on one it cannot resolve rather than passing over it. A call site
+// this row cannot attribute is a caller it cannot check, and skipping one
+// silently is how a guard comes to cover less than its name claims.
+//
+// THE FILE LIST IS DERIVED, not written down: it globs the test files
+// beside itself, so a call added in a third file is covered without an
+// edit here. A hard-coded pair of filenames would be the second
+// transcription this repository keeps removing.
+func floorCallsInThisPackage(t *testing.T) []floorCall {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate this file, so the package's own source cannot be read")
+	}
+
+	names, err := filepath.Glob(filepath.Join(filepath.Dir(thisFile), "*_test.go"))
+	if err != nil {
+		t.Fatalf("listing this package's test files: %v", err)
+	}
+	fset := token.NewFileSet()
+	var calls []floorCall
+	for _, name := range names {
+		parsed, perr := parser.ParseFile(fset, name, nil, 0)
+		if perr != nil {
+			t.Fatalf("parsing %s: %v", filepath.Base(name), perr)
+		}
+		for _, decl := range parsed.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if !isFunc || fn.Body == nil {
+				continue
+			}
+			aliases := map[string]string{}
+			floors := map[string]*floorCall{}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.AssignStmt:
+					recordAlias(node, aliases)
+					recordFloor(node, aliases, floors)
+				case *ast.CallExpr:
+					if calleeName(node.Fun) != pacingForName {
+						return true
+					}
+					call := floorCall{
+						file: filepath.Base(name),
+						line: fset.Position(node.Pos()).Line,
+						row:  fn.Name.Name,
+					}
+					if len(node.Args) < 3 {
+						t.Errorf("%s:%d (%s) calls %s with %d argument(s).\n"+
+							"The floor is a parameter with no default on purpose, so a call "+
+							"without one should not compile — this row is looking at something "+
+							"it does not understand.",
+							call.file, call.line, call.row, pacingForName, len(node.Args))
+						return true
+					}
+					if ident, isIdent := node.Args[2].(*ast.Ident); isIdent {
+						built, seen := floors[ident.Name]
+						if !seen {
+							t.Errorf("%s:%d (%s) passes a floor named %q, and this row cannot "+
+								"find where that value was built inside the same function.\n"+
+								"It reads single assignments only, deliberately: a floor "+
+								"assembled somewhere this row cannot follow is a floor no "+
+								"reader can attribute either.",
+								call.file, call.line, call.row, ident.Name)
+							return true
+						}
+						call.entry, call.sharesFloor = built.entry, built.sharesFloor
+					} else {
+						call.entry, call.sharesFloor = floorFromExpr(node.Args[2], aliases)
+					}
+					if call.entry == "" {
+						t.Errorf("%s:%d (%s) passes a floor this row cannot attribute to a "+
+							"timing entry.\nA floor has to name the record it was derived from, "+
+							"or nothing can check that a measured leg is not inheriting a "+
+							"shared minimum.",
+							call.file, call.line, call.row)
+						return true
+					}
+					calls = append(calls, call)
+				}
+				return true
+			})
+		}
+	}
+	return calls
+}
+
+// recordAlias notes `x := &timing.Name` and `x := timing.Name`.
+func recordAlias(assign *ast.AssignStmt, aliases map[string]string) {
+	if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		return
+	}
+	lhs, isIdent := assign.Lhs[0].(*ast.Ident)
+	if !isIdent {
+		return
+	}
+	rhs := assign.Rhs[0]
+	if unary, isUnary := rhs.(*ast.UnaryExpr); isUnary {
+		rhs = unary.X
+	}
+	if name := timingEntryName(rhs); name != "" {
+		aliases[lhs.Name] = name
+	}
+}
+
+// recordFloor notes a local built from a timing entry and whether the
+// shared identifier is ever assigned into it. Both halves of the
+// `floor := 8 * … ; if !… { floor = shared }` shape reach one local, so the
+// second is what makes sharesFloor true.
+func recordFloor(assign *ast.AssignStmt, aliases map[string]string, floors map[string]*floorCall) {
+	if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		return
+	}
+	lhs, isIdent := assign.Lhs[0].(*ast.Ident)
+	if !isIdent {
+		return
+	}
+	entry, shares := floorFromExpr(assign.Rhs[0], aliases)
+	if entry == "" && !shares {
+		return
+	}
+	existing := floors[lhs.Name]
+	if existing == nil {
+		floors[lhs.Name] = &floorCall{entry: entry, sharesFloor: shares}
+		return
+	}
+	if entry != "" {
+		existing.entry = entry
+	}
+	existing.sharesFloor = existing.sharesFloor || shares
+}
+
+// floorFromExpr reports which timing entry an expression derives from and
+// whether it mentions the shared floor identifier.
+func floorFromExpr(expr ast.Expr, aliases map[string]string) (entry string, shares bool) {
+	ast.Inspect(expr, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.Ident:
+			if node.Name == sharedFloorIdent {
+				shares = true
+			}
+			if name, isAlias := aliases[node.Name]; isAlias && entry == "" {
+				entry = name
+			}
+		case *ast.SelectorExpr:
+			if name := timingEntryName(node); name != "" && entry == "" {
+				entry = name
+			}
+		}
+		return true
+	})
+	return entry, shares
+}
+
+// timingEntryName reports the entry name in `timing.Name`, walking past
+// trailing selectors, indexes and calls so that
+// `timing.Name.Measurements[leg].BlockPoint` answers `Name`.
+func timingEntryName(expr ast.Expr) string {
+	for {
+		switch node := expr.(type) {
+		case *ast.IndexExpr:
+			expr = node.X
+		case *ast.CallExpr:
+			expr = node.Fun
+		case *ast.SelectorExpr:
+			if pkg, isIdent := node.X.(*ast.Ident); isIdent && pkg.Name == "timing" {
+				return node.Sel.Name
+			}
+			expr = node.X
+		default:
+			return ""
+		}
+	}
+}
+
+// calleeName is the function name of a call, ignoring any receiver.
+func calleeName(fun ast.Expr) string {
+	switch node := fun.(type) {
+	case *ast.Ident:
+		return node.Name
+	case *ast.SelectorExpr:
+		return node.Sel.Name
+	}
+	return ""
 }
