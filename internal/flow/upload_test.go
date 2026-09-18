@@ -1049,22 +1049,39 @@ const (
 	pacedWindowsNum = 7
 	pacedWindowsDen = 2
 
-	// pacedFloor is the least paced volume this fixture is ever built
-	// with, however small the window gets, and it is a floor on the
-	// MECHANISM rather than on the duration. The client does not begin
+	// unmeasuredLegFloor is the floor for a leg whose record has no
+	// measurement, and it is the ONLY shared floor left. It is a floor on
+	// the MECHANISM rather than on the duration: the client does not begin
 	// waiting on buffer space until it has handed over a block point's
-	// worth of body; a paced phase shorter than that is a phase the
+	// worth of body, so a paced phase shorter than that is a phase the
 	// client spent writing into a buffer, and a row that never blocked
 	// measured nothing at all.
 	//
 	// Six MiB is roughly eight times the largest block point recorded in
 	// internal/timing — 819,200 bytes on darwin, against 589,824 on
 	// linux and 229,376 on windows — and it is deliberately not derived
-	// from that record. A floor exists to
-	// be right when the record is empty, which is the state of two of the
-	// three legs, and a floor computed from a leg's own measurement would
-	// be widest exactly where least is known.
-	pacedFloor = 6 << 20
+	// from that record. A floor exists to be right when the record is
+	// EMPTY, and a floor computed from a leg's own measurement is widest
+	// exactly where least is known.
+	//
+	// THE CLAIM THAT USED TO FOLLOW — that an empty record "is the state
+	// of two of the three legs" — IS STRUCK, and it is struck because it
+	// stopped being true rather than because it was ever wrong. All three
+	// write-side legs now carry a block point for both entries, so every
+	// caller today derives its floor from its own record and NOTHING
+	// reaches this value. It stays for the leg that has nothing recorded,
+	// which is the case it was always for; it is no longer the case any
+	// caller is in. A sentence counting legs is a fact with an expiry
+	// date, and this one expired.
+	//
+	// IT USED TO BE THE FLOOR FOR EVERY CALLER, applied inside pacingFor's
+	// body where no row mentioned it. That made it a global claim four
+	// callers inherited without saying so — and a leg unable to meet it
+	// would have failed rows whose authors never made the claim. Now each
+	// caller passes its own and says why; this value is what a caller
+	// passes when its leg has nothing measured to reason from, and passing
+	// it is a statement about the RECORD rather than about the row.
+	unmeasuredLegFloor = 6 << 20
 
 	// drainTail is how much body is left after the pacing stops, to be
 	// drained at full speed. It matters for the reason the paced phase
@@ -1076,6 +1093,50 @@ const (
 	drainTail = 6 << 20
 )
 
+// blockPointFloor is a caller's floor derived from ITS OWN entry's record
+// on the leg this run is on: eight times the block point.
+//
+// THE MULTIPLE IS THE CLAIM AND IT IS ONE SENTENCE. The block point is the
+// bytes the client hands over before it blocks at all, measured on this
+// leg and recorded beside this window; a paced phase under it is a phase
+// spent filling a buffer, and a row that never blocked measured nothing.
+// Eight times is the margin the retired shared constant was
+// reverse-engineered from, now applied to each leg's own number instead of
+// approximated once for all three.
+//
+// IT IS A DERIVATION AND NOT A DEFAULT, which is the distinction the whole
+// change turns on. It takes the caller's entry as an argument and holds no
+// opinion about which entry that should be; two callers naming different
+// entries get different floors, and two callers naming the same entry are
+// making the same claim on purpose rather than by inheritance.
+//
+// IT REFUSES ON AN EMPTY RECORD rather than falling back. A leg with no
+// block point has nothing for these rows to size a fixture from, and
+// quietly substituting a shared minimum is what this change exists to
+// stop: the substitution would be invisible at the call, and the row would
+// assert a minimum nobody wrote. A caller that has actually reasoned about
+// an empty record passes unmeasuredLegFloor itself, in the open, where a
+// reader and the guard can both see it.
+func blockPointFloor(t *testing.T, entry *timing.Entry) int64 {
+	t.Helper()
+	measurement := entry.Measurements[probeLeg()]
+	if !measurement.Measured() {
+		t.Fatalf("%s has no measurement on %s, so there is no block point to size this "+
+			"row's fixture from.\nThat is a gap in the record rather than a reason to "+
+			"reach for a shared minimum: %s exists for a caller that has reasoned about "+
+			"an empty record and says so at the call. Run this entry's probe on this leg, "+
+			"or pass a floor here and state why.",
+			entry.Name, probeLeg(), "unmeasuredLegFloor")
+	}
+	if measurement.BlockPoint <= 0 {
+		t.Fatalf("%s is measured on %s but records a block point of %d.\n"+
+			"A measured write-side leg carries one by rule, so this is a record that "+
+			"passed its own guard and cannot answer the question this floor asks.",
+			entry.Name, probeLeg(), measurement.BlockPoint)
+	}
+	return 8 * measurement.BlockPoint
+}
+
 // uploadPacing is one built fixture: the store's knobs, how much it
 // paces, and how large the body has to be.
 type uploadPacing struct {
@@ -1086,7 +1147,22 @@ type uploadPacing struct {
 }
 
 // pacingFor derives the fixture from the stall window it has to spend
-// three of.
+// three of, and from the FLOOR ITS CALLER STATES.
+//
+// THE FLOOR IS A PARAMETER AND HAS NO DEFAULT, which is the whole point
+// of it being one. A floor held inside this body was a claim every caller
+// made silently: four rows asserted a minimum none of them had written
+// down, and a leg that could not meet it would have failed rows whose
+// authors never made that claim. There is deliberately no zero-value
+// escape — a caller cannot inherit a floor by omitting the argument,
+// because omitting it does not compile.
+//
+// WHAT A CALLER IS SAYING when it passes one: this is the least paced
+// volume below which MY assertion stops meaning what it says. That is a
+// different sentence for each row, and each one writes it at the call.
+// A caller whose leg has nothing measured to reason from passes
+// unmeasuredLegFloor and is thereby saying something about the record
+// rather than about itself.
 //
 // IT REFUSES RATHER THAN TRUNCATES when the answer will not fit. A
 // window wide enough that the row proving it cannot be built inside this
@@ -1095,12 +1171,18 @@ type uploadPacing struct {
 // windows, are set against each other by one kernel buffer — and the
 // answer to that is to say so, not to quietly build a smaller fixture
 // that passes by asserting less.
-func pacingFor(t *testing.T, window time.Duration) uploadPacing {
+func pacingFor(t *testing.T, window time.Duration, floor int64) uploadPacing {
 	t.Helper()
+	if floor <= 0 {
+		t.Fatalf("pacingFor was given a floor of %d, and a floor is the caller's "+
+			"statement of the least paced volume its assertion still means something "+
+			"over.\nThere is no default here on purpose: a shared floor is a claim "+
+			"every caller makes without writing it down.", floor)
+	}
 	paced := int64(pacedChunk) * pacedWindowsNum * window.Nanoseconds() /
 		(pacedWindowsDen * int64(pacedPause))
-	if paced < pacedFloor {
-		paced = pacedFloor
+	if paced < floor {
+		paced = floor
 	}
 	body := paced + drainTail
 	// The project carries a few hundred bytes of Astro scaffolding
@@ -1207,8 +1289,11 @@ func bulkyProject(t *testing.T, size int64) string {
 // REQUIRED MUTATION: stop resetting the watchdog on progress.
 //
 // REQUIRED MUTATION, RUN 2026-09-10, for the fixture derivation: make
-// pacingFor return its floor whatever the window is. Reds here and
-// nowhere else —
+// the fixture come out at its floor whatever the window is — which was
+// then a matter of editing pacingFor's body, and is now a matter of
+// passing an enormous floor at the call below, the floor having become
+// this row's own argument rather than a constant inside that function.
+// Reds here and nowhere else —
 //
 //	the upload took 2.701646834s, which is under 3s — this row did not
 //	spend long enough to prove a total deadline would have killed it
@@ -1227,7 +1312,22 @@ func TestASlowUploadIsNotAStalledOne(t *testing.T) {
 	// replaced by a number of somebody's own is the hole it exists to
 	// close.
 	stall := timing.UploadSlowIsNotStalled.Window
-	pacing := pacingFor(t, stall)
+	// THE FLOOR IS THIS ROW'S OWN CLAIM, and the claim is about the
+	// ASSERTION rather than about the mechanism: this row asserts the
+	// upload spends at least three windows, and a paced phase too short
+	// to keep the client blocking stops proving that a total deadline
+	// would have killed it. The recorded mutation above measures how
+	// little room there is — the assertion goes quiet by 300 ms.
+	//
+	// EIGHT TIMES THIS LEG'S OWN BLOCK POINT. The block point is the
+	// bytes the client hands over before it blocks at all, measured on
+	// this leg and recorded beside this window; a paced phase under it is
+	// a phase spent filling a buffer. Eight times is the margin the
+	// retired shared constant was reverse-engineered from, said here
+	// against this leg's number instead of approximated once for all
+	// three.
+	floor := blockPointFloor(t, &timing.UploadSlowIsNotStalled)
+	pacing := pacingFor(t, stall, floor)
 
 	run, client, fixture := pinnedUploadRun(t, bulkyProject(t, pacing.bodySize), pinnedBuffer)
 	run.scriptedLogin()
@@ -1286,7 +1386,23 @@ func TestAWedgedUploadStopsAndSaysSo(t *testing.T) {
 	// Written out for the reason its sibling's is, one row up.
 	stall := timing.UploadWedgedStops.Window
 
-	run, client, fixture := pinnedUploadRun(t, bulkyProject(t, pacingFor(t, stall).bodySize), pinnedBuffer)
+	// THIS ROW'S FLOOR IS ABOUT BEING LARGE ENOUGH TO BLOCK, and nothing
+	// else: it takes only the body size, and what it needs of that body
+	// is that the client is still writing when the store stops reading.
+	// It asserts nothing about how long the upload spends, so the
+	// duration reasoning its sibling states does not apply here — which
+	// is why the two floors are written separately even where they come
+	// out equal. Two rows agreeing on a number is not two rows making one
+	// claim.
+	//
+	// Eight times THIS entry's own recorded block point, for the reason
+	// its sibling gives: under the block point the client never blocks,
+	// and this row's whole fixture is "still writing when the far end
+	// stops reading".
+	floor := blockPointFloor(t, &timing.UploadWedgedStops)
+	run, client, fixture := pinnedUploadRun(t,
+		bulkyProject(t, pacingFor(t, stall, floor).bodySize),
+		pinnedBuffer)
 	run.scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.UploadStallTimeout = stall

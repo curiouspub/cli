@@ -62,11 +62,19 @@ launch note: [hello -a- curious.pub]
 
 ## What this is
 
-`curious` packs an Astro project, sends it to curious.pub, and hands you
-back a public address in about the time a build takes — no dashboard, no
-project setup beyond an email address. What comes back is a **temporary
-preview**: every site curious.pub builds for you expires after a period
-of inactivity, which is what makes trying it free of any commitment.
+**Once the platform is up**, `curious` will pack an Astro project, send
+it to curious.pub, and hand you back a public address in about the time a
+build takes — no dashboard, no project setup beyond an email address.
+What comes back will be a **temporary preview**: every site curious.pub
+builds for you expires after a period of inactivity, which is what makes
+trying it free of any commitment.
+
+This paragraph is conditional for the same reason "Try it" below is: the
+tool is released and installs today, and there is nothing at the other
+end of it yet. Describing the finished product in the present tense here
+would undo, three lines later, what the Status section above says — and
+the reader most likely to act on it is the one who came straight to this
+heading to find out what this is.
 
 ## Try it
 
