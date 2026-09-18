@@ -189,12 +189,46 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # THERE IS NO registry-url HERE, AND ITS ABSENCE IS A DECISION
+      # RATHER THAN AN OMISSION. Given one, this action writes an .npmrc
+      # holding //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} and
+      # points the package manager at it through NPM_CONFIG_USERCONFIG.
+      # No such token exists in this repository and none should: the
+      # publish below proves who it is by exchanging this job's identity
+      # token with the registry, which is the whole reason there is no
+      # credential here to leak, rotate or scope wrongly.
+      #
+      # A configured auth entry defeats that. The package manager finds
+      # what looks like a credential, takes that path, and never performs
+      # the exchange — and what it reports is either "you need auth" or a
+      # 404 on a package that plainly exists, neither of which names the
+      # cause. WHERE IT FAILS is the sharp part: this job runs after the
+      # tag is public and the release is already built and signed, so the
+      # result is a published tag with binaries and no installable package
+      # beside them.
+      #
+      # The line also bought nothing when it worked: this publishes to the
+      # default registry, which is where the package manager already
+      # looks.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # The floor the package itself declares, so this is not a
           # second place the version lives.
           node-version-file: npm/package.json
-          registry-url: https://registry.npmjs.org
+
+      # ENSURED, NOT HOPED FOR. The version below is a floor this job
+      # needs and nothing here chooses: it arrives bundled with whatever
+      # Node the package's own declared floor resolves to, and that
+      # resolution follows Node's release train rather than any decision
+      # in this repository. Measured on one run of the gate: the resolved
+      # Node shipped a package manager comfortably past this floor, while
+      # the two ends of the same run's matrix sat on either side of it.
+      # Installing it explicitly is what turns the check below from the
+      # thing that DISCOVERS a too-old package manager — inside the job
+      # that runs after the tag is already public — into the row that
+      # proves a new enough one is present.
+      - name: install the package manager this publish needs
+        run: npm install -g npm@^11.5.1
 
       # TWO DIFFERENT NUMBERS WITH TWO DIFFERENT REASONS. The package
       # declares the package manager a person installing it needs; this
