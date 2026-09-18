@@ -1154,50 +1154,33 @@ var UploadWedgedStops = Entry{
 	Measurements: map[Leg]Measurement{
 		// THE SAME TWELVE PASSES OF TWENTY, 2026-09-11, because this is
 		// a CARRIED measurement and carrying is sharing one run's
-		// evidence rather than agreeing to have some of one's own. The
-		// range, the idle-versus-busy control that failed to find an
-		// axis, and what is not established about the receive end are
-		// all written once, beside UploadSlowIsNotStalled. The guard
-		// below this file requires the two to agree field for field, so
-		// a reader who finds a difference here has found a bug rather
-		// than a nuance.
+		// evidence rather than agreeing to have some of one's own.
 		//
-		// # THE RECEIVE END CARRIES AN ERROR, AND IT IS NOT A FAILURE OF THIS CODE
+		// THE REASONING LIVES ONCE, BESIDE UploadSlowIsNotStalled, and
+		// this entry does not restate it: the receive end's autotuning
+		// and how it was measured three ways, what the send end does,
+		// what is NOT established about which end governs, and the open
+		// ruling about what this leg's write-side figures are worth. Read
+		// it there. The Carried field above names that entry, and the
+		// registry guard resolves the name, so this pointer cannot rot
+		// into a reference to something that no longer exists.
 		//
-		// It is the honest record of a leg that cannot hold a receive
-		// pin. macOS ships net.inet.tcp.doautorcvbuf=1 and setting
-		// SO_RCVBUF does not clear it, so the kernel moves an accepted
-		// socket's buffer on its own — between the setsockopt and the
-		// getsockopt even when they are adjacent syscalls, and
-		// continuously afterwards. Measured three ways: two connections
-		// in one run read back different sizes; sampling the buffer while
-		// a body moved found it between 131,072 and 646,336 against a
-		// request of 131,072; and re-setting the option on every drain
-		// step held the floor and not the ceiling. Windows, on the same
-		// code, reads back what it was asked for and HOLDS there across
-		// every sample.
+		// IT USED TO RESTATE ALL OF IT — about forty-six lines,
+		// byte-identical with the home — and that is why this pointer
+		// exists rather than a row comparing two copies. The guard holds
+		// the two entries to agreeing on their FIELDS: source, reason,
+		// side, instrument, window, and the measurements including the
+		// pins and their read-backs. It compares no comments at all. So
+		// the data could not drift and the prose could, and an edit to
+		// either copy reddened nothing — which made the duplication a
+		// liability that looked like diligence.
 		//
-		// THE SEND END DOES HOLD, and this leg is recorded as exactly
-		// that: send pinned and confirmed across every sample, receive
-		// UNPINNABLE with the range written down. No sentence here says
-		// which end governs in general — that is measured per leg by the
-		// control whose tables sit beside pinnedBuffer in internal/flow,
-		// and this leg is not one the control can ask, because varying
-		// one end needs the other to stay where it is put.
-		//
-		// THE STOP RULE IS ABOUT THE SEND END AND ABOUT A PIN THAT WAS
-		// CLAIMED. A run stops when the send pin fails, or when two
-		// connections in one run read back different sizes for a pin the
-		// record claims is held. A receive pin that cannot be applied is
-		// the CONDITION on this leg and the measurement proceeds under
-		// it — which is why the gate is green here without the rule
-		// having bent: this leg's row is true as written.
-		//
-		// WHAT REMAINS A RULING RATHER THAN A NUMBER is what this leg's
-		// write-side figures are worth, given that the condition behind
-		// them moves across a factor of five while the body goes out.
-		// That is a decision for a person with the evidence in front of
-		// them, and the evidence is all here.
+		// A ROW COMPARING TWO COPIES IS THE FALLBACK FOR WHEN ONE HOME IS
+		// IMPOSSIBLE, and here it was never impossible. This entry can
+		// say what it carries and where the argument is, in a sentence,
+		// and stop — which is this file's own first rule applied to
+		// itself: a constant carried between two places carries its
+		// number, not the reason the number was chosen.
 		Darwin: {
 			WorstGap: 179409167 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
 			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
