@@ -558,14 +558,17 @@ func publicationDisclaimerRequired(releaseTag *regexp.Regexp, tags []string, dec
 	return true, rejected
 }
 
-// TestReadmePublicationStateRow holds the README to the one-directional
-// rule: with no release tag reachable from this commit, the page must
-// say so where a reader will meet it, and must describe installing in
-// the future tense. The row says nothing about the other direction — a
-// tagged tree may drop either — because nothing requires present tense
-// once a release exists. An earlier version asserted both directions at
-// once; the converse was never true, since a tree that has a tag is free
-// to go on saying what it said before one existed.
+// TestReadmePublicationStateRow is the PRE-RELEASE HALF of the rule:
+// with no release tag reachable from this commit, the page must say so
+// where a reader will meet it, and must describe installing in the
+// future tense.
+//
+// IT IS HALF OF TWO, and it used to be the whole thing. What it does not
+// assert is held by TestAReleasedTreeDoesNotSayItIsUnreleased below:
+// once a release IS reachable, the disclaimer has to be gone. Between
+// the two, the page is held at both ends of a release rather than only
+// before one — and the reason that second half exists is written on it,
+// because this one passed in silence while the page was wrong.
 func TestReadmePublicationStateRow(t *testing.T) {
 	root := moduleRoot(t)
 	declared := declaredWrapperVersion(t, root)
@@ -573,16 +576,19 @@ func TestReadmePublicationStateRow(t *testing.T) {
 	required, rejected := publicationDisclaimerRequired(releaseTagPattern(t, root), tags, declared)
 	if !required {
 		// A PASS RATHER THAN A SKIP, and the difference is who meets the
-		// consequence. This rule is one-directional: with a release
-		// reachable it requires nothing of the page, so the row has
-		// nothing left to refuse and has answered — which is a pass.
+		// consequence. With a release reachable THIS half requires
+		// nothing of the page, so it has nothing left to refuse and has
+		// answered — which is a pass. The page is not unguarded in that
+		// state: the other half takes it, and demands the sentence be
+		// absent.
 		//
 		// Spelled as a skip it becomes an UNDECLARED skip the moment the
 		// first tag lands, and this suite fails a run on one of those. The
 		// red would arrive in front of whoever is cutting the release,
 		// about a row behaving exactly as designed, at the one moment
 		// nobody has attention to spare for it.
-		t.Logf("a release tag naming %s is reachable (%s); the disclaimer is not required",
+		t.Logf("a release tag naming %s is reachable (%s); the disclaimer is not required here, "+
+			"and its ABSENCE is required by the released half",
 			declared, strings.Join(tags, ", "))
 		return
 	}
@@ -612,9 +618,95 @@ func TestReadmePublicationStateRow(t *testing.T) {
 	}
 }
 
-// TestThePublicationRuleIsOneDirectional fixtures both answers, because
-// only one of them is reachable on this tree and it is not the
-// interesting one.
+// saysItIsUnreleased is the detection the two halves share: the
+// disclaimer sentence as a READER meets it.
+//
+// It runs over rendered prose for the mirror of the reason the other
+// half does. There, a sentence inside an HTML comment cannot satisfy a
+// demand for a disclaimer, because markdown renders it to nothing and
+// nobody can act on it. Here, the same sentence cannot red a released
+// tree, because a claim nobody can see misleads nobody.
+func saysItIsUnreleased(readme string) bool {
+	return strings.Contains(renderedProse(readme), noReleaseDisclaimer)
+}
+
+// TestAReleasedTreeDoesNotSayItIsUnreleased is the RELEASED HALF, and it
+// exists because the other one went quiet at exactly the moment the page
+// became wrong.
+//
+// MEASURED RATHER THAN ANTICIPATED. v0.1.0 was tagged and published on
+// 2026-09-18, and the page went on saying "Nothing is published yet.
+// There is no release, and no package on any registry" — on a
+// world-readable repository, to the stranger that sentence is written
+// for. The row above passed throughout, correctly: it returns early once
+// a release is reachable, which is right for what it asserts and silent
+// about everything else.
+//
+// THE REASONING THAT LEFT THIS DIRECTION UNGUARDED was that a tree
+// carrying a tag "is free to go on saying what it said before one
+// existed". True of copy that merely became understated. False of this
+// sentence, which became a falsehood — and the interval it is false for
+// is not bounded by anything mechanical, only by somebody remembering on
+// the day of a release.
+//
+// IT CANNOT DEADLOCK THE WAY THE ORIGINAL TWO-WAY ROW WOULD HAVE. That
+// version demanded present-tense INSTALL copy, which no commit could
+// carry before a tag existed, so its two directions could not both be
+// satisfiable. This half demands one thing — that a single sentence be
+// gone — so a tagged commit is always exactly one deletion from green.
+func TestAReleasedTreeDoesNotSayItIsUnreleased(t *testing.T) {
+	root := moduleRoot(t)
+	declared := declaredWrapperVersion(t, root)
+	tags := reachableReleaseTags(t, root)
+	required, _ := publicationDisclaimerRequired(releaseTagPattern(t, root), tags, declared)
+	if required {
+		// A pass and not a skip, for the reason the other half spells
+		// out: on a pre-release tree this half has nothing to refuse,
+		// and an undeclared skip would red the suite the day a tag lands.
+		t.Logf("no reachable tag names a release of %s, so the disclaimer is required and the "+
+			"pre-release half holds the page", declared)
+		return
+	}
+	if saysItIsUnreleased(readReadmeFile(t, root)) {
+		t.Errorf("a release of %s is reachable (%s), and README.md still tells a reader %q.\n"+
+			"That sentence was true until the tag and is false now — and the reader most likely "+
+			"to act on it is the one deciding whether they can install this today. It is one "+
+			"deletion: remove the sentence.",
+			declared, strings.Join(tags, ", "), noReleaseDisclaimer)
+	}
+}
+
+// TestTheReleasedHalfSeesTheSentenceAndOnlyTheSentence fixtures the
+// detection, because on a released tree the row above can only ever be
+// observed passing — and a check nobody has seen refuse is a guess.
+func TestTheReleasedHalfSeesTheSentenceAndOnlyTheSentence(t *testing.T) {
+	if !saysItIsUnreleased("# curious\n\n" + noReleaseDisclaimer + " There is no release.\n") {
+		t.Errorf("the disclaimer sentence was restored and went unseen, so the released half "+
+			"cannot red on it — which is the whole of what that row is for.\nLooked for %q.",
+			noReleaseDisclaimer)
+	}
+	if saysItIsUnreleased("# curious\n\nThe CLI is released; whether the platform lets you in " +
+		"is a separate question.\n") {
+		t.Error("a page carrying no disclaimer was read as carrying one, which would red a " +
+			"released tree for telling the truth")
+	}
+	if saysItIsUnreleased("# curious\n\n<!-- " + noReleaseDisclaimer + " -->\n") {
+		t.Error("a sentence inside an HTML comment reddened a released tree. Markdown renders " +
+			"it to nothing, so no reader can be misled by it — and the other half already " +
+			"refuses to be SATISFIED by one, which is the same rule seen from the other side")
+	}
+}
+
+// TestThePublicationRuleIsOneDirectional fixtures both answers of the
+// DECISION beneath the rule, because only one of them is reachable on
+// this tree and it is not the interesting one.
+//
+// THE RULE IS NOW TWO HALVES, and this row's name describes the decision
+// rather than the rule: before a release the disclaimer must be present,
+// after one it must be absent. What makes that pair satisfiable — where
+// the original two-way version was not — is that NEITHER HALF DEMANDS
+// THE INSTALL COPY BE REWRITTEN. The released half is discharged by
+// deleting one sentence, so no commit is ever caught between them.
 //
 // A rule that has never been observed saying "nothing is required" is a
 // rule whose quiet direction is a guess. The day a tag lands is the day
@@ -641,9 +733,11 @@ func TestThePublicationRuleIsOneDirectional(t *testing.T) {
 		{"spike-pack-walk", "v4.5.6"},
 	} {
 		if requiredNow, _ := publicationDisclaimerRequired(pattern, tags, declared); requiredNow {
-			t.Errorf("with %v reachable the rule still demanded the disclaimer.\n"+
-				"It is one-directional: once something is published the page may say so, and a "+
-				"row that refused would fail a released tree for telling the truth.", tags)
+			t.Errorf("with %v reachable the decision still demanded the disclaimer.\n"+
+				"Once something is published this answer is what hands the page over to the "+
+				"released half, which requires the sentence to be GONE. A demand for it here "+
+				"would fail a released tree for telling the truth, and would put the two halves "+
+				"in contradiction on every tagged commit.", tags)
 		}
 	}
 }
