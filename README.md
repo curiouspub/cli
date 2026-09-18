@@ -13,10 +13,25 @@ want to know exactly what the client sends and receives, read
 [`pkg/wire`](./pkg/wire). That's the point of this repo existing in
 public.
 
-## Status: pre-release
+## Status: released, and not yet deployable
 
-**Nothing is published yet.** There is no release, and no package on any
-registry. The platform is not open either. What exists here today:
+Two facts, and they point in different directions, so they are stated
+separately rather than averaged into one sentence.
+
+**The command line tool is released — `v0.1.0` — and installs today.**
+`npx curiouspub version`, `npm install -g curiouspub` and the Homebrew
+cask all work; the binaries and their checksums are on the release, and
+the checksum file is signed.
+
+**The platform it deploys to is not running yet.** `curious deploy` does
+everything it can do locally — it checks your project, and tells you
+what is wrong with it — and then stops at its first network call,
+because there is nothing at the other end. **Nothing you can do with
+this tool today ends in a deployed site.** When that changes, this
+section says so, and the install commands below do not change when it
+does.
+
+What exists here today:
 
 - **`pkg/wire`** — the `/v1` wire contract (types only, stdlib-only,
   importable as `github.com/curiouspub/cli/pkg/wire`).
@@ -42,8 +57,8 @@ registry. The platform is not open either. What exists here today:
   little while to start answering everywhere, so the tool says the
   deploy was published and tells you what to do if you get there first.
 
-The trial opens in small daily batches. Get the launch note:
-[hello -a- curious.pub]
+When the platform opens it will do so in small daily batches. Get the
+launch note: [hello -a- curious.pub]
 
 ## What this is
 
@@ -55,34 +70,37 @@ of inactivity, which is what makes trying it free of any commitment.
 
 ## Try it
 
-Once the trial is open, this is the whole flow — see "Status:
-pre-release" above and "Installing it" below for what exists today:
+**Once the platform is up**, this is the whole flow. The command below
+is installable today and runs today; what it cannot do yet is reach a
+platform, so it stops at its first network call — see "Status" above.
 
 ```
 npx curiouspub deploy
 ```
 
-The first run asks for your email address, sends a 6-digit code, and
-asks you to type it back — that's the whole login, and it is free to
-repeat if the code expires or you mistype it. Once you're in,
-`curious` checks your project locally first (nothing leaves your
-machine if a check fails), packs it, uploads the archive, and streams
-the build to your terminal. When the build finishes it prints the
-address your site answers at.
+The first run will ask for your email address, send a 6-digit code, and
+ask you to type it back — that's the whole login, and it will be free to
+repeat if the code expires or you mistype it. Once you're in, `curious`
+will check your project locally first (nothing leaves your machine if a
+check fails), pack it, upload the archive, and stream the build to your
+terminal. When the build finishes it will print the address your site
+answers at.
+
+**The local half of that already works**, and it is the half you can
+watch today: point `curious deploy` at a directory and it will check the
+project and tell you what is wrong with it before it tries to reach
+anything.
 
 ## Installing it
 
-**Still nothing to install.** As the top of this page says, there is no
-release yet, so the commands below are what installing will look like
-rather than what works today. This section repeats it rather than
-relying on you having read that one, because a repository describing
-unbuilt things in the present tense has told its reader something false
-— and the reader most likely to act on it is the one who came straight
-here.
+**These work today.** `v0.1.0` is published, and each command below was
+run against the real registry and the real tap before this section was
+written. What they get you is the tool; what the tool cannot do yet is
+deploy, for the reason under "Status" above.
 
-What is in the tree now is the npm wrapper, under
-[`npm/`](./npm) — a package whose postinstall fetches the release build
-for your platform. Its own [README](./npm/README.md) has the detail.
+The npm wrapper lives under [`npm/`](./npm) — a package whose
+postinstall fetches the release build for your platform. Its own
+[README](./npm/README.md) has the detail.
 
 ```
 npx curiouspub deploy       # run it without installing
@@ -92,7 +110,7 @@ npm install -g curiouspub   # install the `curious` command
 The package is `curiouspub` and the command is `curious`. They are
 different names on purpose.
 
-On macOS, once a release exists:
+On macOS:
 
 ```
 brew install curiouspub/tap/curious
