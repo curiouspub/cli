@@ -99,8 +99,11 @@ func goldenCases() []goldenCase {
 		},
 		{
 			// The closed state is the whole point of the endpoint — the
-			// step-zero gate — and the only fixture where the meaningful
-			// values are zero values.
+			// step-zero gate — and the first fixture here whose meaningful
+			// values are zero values. HealthResponseZero below is the
+			// second, and for the same reason: a state the endpoint is
+			// EXPECTED to report needs a fixture of its own, or the only
+			// pinned shape is the populated one.
 			name:    "CapacityResponseClosed",
 			fixture: "capacity_response_closed.json",
 			value: &CapacityResponse{
@@ -109,6 +112,32 @@ func goldenCases() []goldenCase {
 				ResetsAt:     fixedResetsAt,
 			},
 			newEmpty: func() any { return &CapacityResponse{} },
+		},
+		{
+			// Values are SYNTHETIC on purpose. A fixture's job is to pin
+			// field names, not to record a measurement, and this repository
+			// is world-readable: a real digest and a real revision id here
+			// would publish two facts about a private deployment in a file
+			// that only needed three keys.
+			name:    "HealthResponse",
+			fixture: "health_response.json",
+			value: &HealthResponse{
+				UptimeSeconds:  3600,
+				ArtefactSHA256: "1111111122222222333333334444444455555555666666667777777788888888",
+				DeployedCommit: "0abcdef",
+			},
+			newEmpty: func() any { return &HealthResponse{} },
+		},
+		{
+			// The all-zero state is REACHABLE and not a degenerate case: a
+			// supervisor's first poll arrives before a second of uptime has
+			// accrued, a binary that cannot read its own file reports no
+			// digest, and nothing obliges an installation to declare a
+			// revision. All three are 200s, so all three need pinning.
+			name:     "HealthResponseZero",
+			fixture:  "health_response_zero.json",
+			value:    &HealthResponse{},
+			newEmpty: func() any { return &HealthResponse{} },
 		},
 		{
 			name:    "WaitlistRequest",
