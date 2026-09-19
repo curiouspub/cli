@@ -411,6 +411,52 @@ type DeployPublishResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// HealthResponse is the body of GET /v1/health: a LIVENESS answer, and
+// deliberately nothing else. The handler reads no datastore and reaches no
+// other service, so a 200 means "this process is up and serving requests"
+// and never "its dependencies are healthy". Those are two different
+// questions, and one endpoint answering both can only ever answer the
+// weaker one — while reporting the stronger.
+//
+// This route is UNAUTHENTICATED, because a liveness check that needs a
+// credential cannot be used by the thing that starts the process, which is
+// the first caller that needs it. It carries nothing a stranger could not
+// already infer from the service answering at all.
+//
+// No client behaviour depends on this type, and the CLI never calls this
+// route. It is here because the contract is defined once, in this package,
+// for whoever does call it — a supervisor deciding whether to proceed, or a
+// person establishing that a port which accepts connections is attached to
+// a server that answers them.
+//
+// # Both string fields may be empty, and empty is not an error
+//
+// ArtefactSHA256 is what the running binary computes of ITSELF at startup:
+// its own identity rather than an assertion about it, which is the one form
+// of this fact that cannot disagree with reality. A process that cannot
+// read its own file reports nothing here and still serves — a liveness
+// endpoint that failed on self-inspection would not be a liveness endpoint.
+//
+// DeployedCommit is CONFIGURATION, and the field name says so rather than
+// implying the binary knows. Whatever installed this binary is the only
+// thing that knows which source revision produced it, so the value is
+// exactly as trustworthy as that installation and no more. It is not
+// compiled in: stamping a revision at build time would make the binary's
+// bytes depend on where it came from, and the build that produces it is
+// pinned precisely so its output is reproducible from its inputs alone.
+// Empty means nobody told this process, which is a fact worth reporting
+// and not a reason to refuse.
+//
+// UptimeSeconds is measured from one reading taken at startup. It is a
+// count rather than a timestamp deliberately: at zero it reads as zero,
+// where an unset instant renders as a date in year one that every reader
+// has to decode before dismissing.
+type HealthResponse struct {
+	UptimeSeconds  int    `json:"uptime_seconds"`
+	ArtefactSHA256 string `json:"artefact_sha256"`
+	DeployedCommit string `json:"deployed_commit"`
+}
+
 // DeployStatus is the lifecycle state of a deploy, as recorded in the
 // deploy record's status attribute. It is what the record says the deploy IS —
 // contrast Phase, which is what the build pipeline is DOING. The two
