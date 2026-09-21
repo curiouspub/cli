@@ -13,23 +13,25 @@ want to know exactly what the client sends and receives, read
 [`pkg/wire`](./pkg/wire). That's the point of this repo existing in
 public.
 
-## Status: released, and not yet deployable
+## Status: released, and the platform is running
 
-Two facts, and they point in different directions, so they are stated
-separately rather than averaged into one sentence.
+Two facts, and they used to point in different directions. They no longer
+do, and this section moved on the day that changed rather than some time
+afterwards.
 
 **The command line tool is released — `v0.1.0` — and installs today.**
 `npx curiouspub version`, `npm install -g curiouspub` and the Homebrew
 cask all work; the binaries and their checksums are on the release, and
 the checksum file is signed.
 
-**The platform it deploys to is not running yet.** `curious deploy` does
-everything it can do locally — it checks your project, and tells you
-what is wrong with it — and then stops at its first network call,
-because there is nothing at the other end. **Nothing you can do with
-this tool today ends in a deployed site.** When that changes, this
-section says so, and the install commands below do not change when it
-does.
+**The platform it deploys to is running.** `curious deploy` runs the
+whole sequence: it checks your project, logs you in, packs it, uploads
+it, builds it, and prints the address your site answers at. **Capacity
+opens daily to a limited number of accounts**, so the login may tell you
+today's batch is full and offer to let you know when the next one opens.
+
+The install commands below did not change when the platform came up, and
+that was the point of writing them the way they are.
 
 What exists here today:
 
@@ -57,47 +59,42 @@ What exists here today:
   little while to start answering everywhere, so the tool says the
   deploy was published and tells you what to do if you get there first.
 
-When the platform opens it will do so in small daily batches. Get the
-launch note: [hello -a- curious.pub]
+Capacity opens in small daily batches. If today's is full, the tool says
+so and offers the waitlist; you can also write to [hello -a- curious.pub].
 
 ## What this is
 
-**Once the platform is up**, `curious` will pack an Astro project, send
-it to curious.pub, and hand you back a public address in about the time a
-build takes — no dashboard, no project setup beyond an email address.
-What comes back will be a **temporary preview**: every site curious.pub
-builds for you expires after a period of inactivity, which is what makes
-trying it free of any commitment.
+`curious` packs an Astro project, sends it to curious.pub, and hands you
+back a public address in about the time a build takes — no dashboard, no
+project setup beyond an email address. What comes back is a **temporary
+preview**: every site curious.pub builds for you expires after a period
+of inactivity, which is what makes trying it free of any commitment.
 
-This paragraph is conditional for the same reason "Try it" below is: the
-tool is released and installs today, and there is nothing at the other
-end of it yet. Describing the finished product in the present tense here
-would undo, three lines later, what the Status section above says — and
-the reader most likely to act on it is the one who came straight to this
-heading to find out what this is.
+This paragraph was written in the conditional while there was nothing at
+the other end of the tool, and it moved to the present tense on the day
+that changed — in the same commit, for the same reason it was conditional
+to begin with. The reader most likely to act on it is the one who came
+straight to this heading to find out what this is, and a page that is a
+day behind either way misleads exactly that person.
 
 ## Try it
 
-**Once the platform is up**, this is the whole flow. The command below
-is installable today and runs today; what it cannot do yet is reach a
-platform, so it stops at its first network call — see "Status" above.
+This is the whole flow.
 
 ```
 npx curiouspub deploy
 ```
 
-The first run will ask for your email address, send a 6-digit code, and
-ask you to type it back — that's the whole login, and it will be free to
-repeat if the code expires or you mistype it. Once you're in, `curious`
-will check your project locally first (nothing leaves your machine if a
-check fails), pack it, upload the archive, and stream the build to your
-terminal. When the build finishes it will print the address your site
-answers at.
+The first run asks for your email address, sends a 6-digit code, and asks
+you to type it back — that's the whole login, and it is free to repeat if
+the code expires or you mistype it. Once you're in, `curious` checks your
+project locally first (nothing leaves your machine if a check fails),
+packs it, uploads the archive, and streams the build to your terminal.
+When the build finishes it prints the address your site answers at.
 
-**The local half of that already works**, and it is the half you can
-watch today: point `curious deploy` at a directory and it will check the
-project and tell you what is wrong with it before it tries to reach
-anything.
+**The local half runs before any of that**, and you can watch it on its
+own: point `curious deploy` at a directory that is not an Astro project
+and it tells you what is wrong before it reaches anything.
 
 ## Installing it
 
