@@ -233,6 +233,13 @@ test('installing with the scripts turned off still yields a working command', as
     `the command did not fetch after an install with scripts refused:\n${ran.output}`);
   assert.ok(fs.existsSync(path.join(root, 'installed.json')),
     `the fetch left no marker:\n${ran.output}`);
+  // THIS ASSERTION HAS TEETH ON WINDOWS SPECIFICALLY, and it found a
+  // real defect there rather than a fixture problem. spawn() can throw
+  // SYNCHRONOUSLY — Windows does it when the target is not something it
+  // can execute — and a child.on('error') handler does not catch that,
+  // because it is for failures a child reports once it exists. The shim
+  // now catches the throw and refuses politely; before it did, this row
+  // saw a Node stack trace pointing at the shim.
   assert.ok(!/ {4}at /.test(ran.output), `a stack trace reached the user:\n${ran.output}`);
 
   if (process.platform !== 'win32') {

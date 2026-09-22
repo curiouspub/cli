@@ -117,7 +117,23 @@ async function fetchThenRun() {
 // would re-parse it, and a project directory with a space in its name
 // would reach the binary as two arguments.
 function run() {
-  const child = spawn(binary, process.argv.slice(2), { stdio: 'inherit', shell: false });
+  // SPAWN CAN THROW SYNCHRONOUSLY, and the 'error' handler below does
+  // not catch that — it is for failures the child process reports once
+  // it exists. Windows raises `spawn UNKNOWN` before any child exists
+  // when the target is not something it can execute, and without this
+  // the person gets a Node stack trace pointing at this file instead of
+  // a sentence telling them what to do.
+  //
+  // FOUND ON CI, on a path this file only reached once the fetch moved
+  // here: before, a missing or unusable binary was refused by the marker
+  // check above and spawn was never attempted.
+  let child;
+  try {
+    child = spawn(binary, process.argv.slice(2), { stdio: 'inherit', shell: false });
+  } catch (err) {
+    refuse(`the binary could not be started (${err.code || err.message})`);
+    return;
+  }
 
   child.on('error', (err) => {
     if (err.code === 'ENOENT') {
