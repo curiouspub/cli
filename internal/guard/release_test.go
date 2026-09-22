@@ -40,10 +40,12 @@ package guard
 // stated before it was trusted.
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -2055,5 +2057,187 @@ func TestTheQueuesOwnBranchesAreNotPushedRuns(t *testing.T) {
 			"Patterns are read in order and a later match wins, so the pattern after "+
 			"the exclusion overrides it and it excludes nothing.",
 			ciWorkflow, queue, everything, patterns)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The cask's post-install hook, and the migration that is waiting on the
+// release tool.
+// ---------------------------------------------------------------------
+
+// caskHookSchemaDef is the schema type this repository's cask hooks are
+// configured through. Named here rather than inline so the row below
+// fails loudly if the tool renames it, which is itself worth knowing.
+const caskHookSchemaDef = "HomebrewCaskHook"
+
+// TestTheReleaseToolStillCannotEmitDeclarativeCaskSteps is a TRIGGER
+// rather than an assertion about correctness, and it is green today
+// because the capability it watches for does not exist yet.
+//
+// # What is wrong, and why nothing here fixes it
+//
+// The package manager has deprecated the raw-Ruby post-install stanza
+// this project's cask uses, in favour of a DECLARATIVE steps form that
+// takes a fixed vocabulary instead of arbitrary Ruby. Its own linter says
+// so on the rendered cask, and the warning reaches anybody who installs
+// from the tap.
+//
+// The fix is one key in the release configuration — and the pinned
+// release tool has no such key. Its schema for these hooks accepts
+// exactly an install and an uninstall body, and it renders the deprecated
+// stanza from them. Support was added upstream and ships in the next
+// minor version, which at the time of writing exists only as nightly
+// builds:
+//
+//	https://github.com/goreleaser/goreleaser/issues/6870
+//	https://github.com/goreleaser/goreleaser/pull/6873
+//
+// Neither workaround was taken. The tool's free-text block CAN emit the
+// supported form, and does — measured — at the cost of eight new
+// stanza-order offences from the same linter, because that block is
+// rendered before the version stanza; trading one offence for eight in a
+// generated file nobody can hand-fix, to buy a few months, is a poor
+// bargain. And pinning the release tool to a nightly to reach a cosmetic
+// fix would put an unreleased build on the path that publishes this
+// project's binaries.
+//
+// # So this row exists to make the migration TRIGGER itself
+//
+// "Migrate when the new version lands" is a step somebody has to
+// remember at the right moment, and this repository has already recorded
+// what happens to those: the step after an irreversible act is the one
+// nobody is watching for. A pin bump is exactly such a moment — it will
+// be made for some other reason, by somebody who is not thinking about a
+// cask.
+//
+// So the row watches the SCHEMA rather than the version number. The day
+// the pin moves to a tool that offers a declarative-steps key, this reds
+// and says what to do with it. A version comparison would have needed
+// this file to guess which release carries the capability; asking the
+// tool what it accepts needs no guess and cannot be wrong.
+//
+// IT SKIPS WHEN THE TOOL IS ABSENT, declared in the manifest, for the
+// same reason and with the same cost as the row above it: the snapshot
+// workflow installs the tool at the pinned version and renders the real
+// cask, so what a local skip loses is local signal rather than the check.
+func TestTheReleaseToolStillCannotEmitDeclarativeCaskSteps(t *testing.T) {
+	bin, err := exec.LookPath("goreleaser")
+	if err != nil {
+		t.Skip("the release tool is not installed on this machine, so its schema cannot be " +
+			"read here; the snapshot workflow installs it at a pinned version and renders " +
+			"the cask this row is about")
+	}
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "schema.json")
+	cmd := exec.Command(bin, "schema", "-o", out)
+	cmd.Dir = moduleRoot(t)
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("asking the release tool for its schema: %v\n%s", err, combined)
+	}
+
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading the schema the release tool wrote: %v", err)
+	}
+
+	var schema struct {
+		Defs map[string]struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("parsing the release tool's schema: %v", err)
+	}
+
+	def, ok := schema.Defs[caskHookSchemaDef]
+	if !ok {
+		t.Fatalf("the release tool's schema has no %s definition. Either the tool renamed it "+
+			"— in which case this row and the cask hooks in %s both need reading against the "+
+			"new shape — or the schema's layout changed and this row is no longer looking "+
+			"where the answer is.", caskHookSchemaDef, releaseConfig)
+	}
+	if len(def.Properties) == 0 {
+		t.Fatalf("%s declares no properties, so this row inspected nothing and cannot fail",
+			caskHookSchemaDef)
+	}
+
+	// The two keys that exist today. Their presence is what proves the
+	// row is reading the right definition rather than an empty one.
+	for _, expected := range []string{"install", "uninstall"} {
+		if _, ok := def.Properties[expected]; !ok {
+			t.Errorf("%s no longer offers %q — the cask hooks in %s are configured through it, "+
+				"so this is a change that file has to answer", caskHookSchemaDef, expected, releaseConfig)
+		}
+	}
+
+	declarative := declarativeStepKeys(def.Properties)
+
+	if len(declarative) > 0 {
+		t.Errorf("THE RELEASE TOOL NOW OFFERS %v, AND THE CASK SHOULD MOVE TO IT.\n\n"+
+			"This row is a trigger, and it has just fired: the pinned tool has gained the "+
+			"declarative post-install steps key, which means the deprecated raw-Ruby stanza "+
+			"%s still configures can finally be replaced.\n\n"+
+			"What to do: move the cask's post-install hook from the raw body to the "+
+			"declarative form, so the rendered cask stops using the stanza the package "+
+			"manager deprecated. The behaviour to preserve is clearing the quarantine "+
+			"attribute on macOS, which the declarative vocabulary expresses with its own "+
+			"macOS guard and command step.\n\n"+
+			"Then delete this row. It exists only to reach this moment, and a trigger left "+
+			"in place after it fires is a permanent red nobody can clear.",
+			declarative, releaseConfig)
+	}
+}
+
+// declarativeStepKeys names every property that offers the declarative
+// steps form. Extracted from the row above so the DETECTION can be
+// exercised in both directions: the row itself can only ever see the
+// schema this machine's tool happens to have, which today is one that
+// does not have the key — so on its own it is a row that has never been
+// observed to fail.
+func declarativeStepKeys(properties map[string]json.RawMessage) []string {
+	var found []string
+	for name := range properties {
+		if strings.Contains(name, "steps") {
+			found = append(found, name)
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+// TestTheCaskStepsTriggerWouldFire is the instrument's own control, and
+// it is the only way this trigger can be shown to work before the day it
+// matters.
+//
+// The row above reads a real schema and passes because the capability is
+// absent. That is indistinguishable, from the outside, from a row that
+// looks in the wrong place, spells the key wrong, or parses nothing —
+// every one of which also produces a green. So the detection runs here
+// against a schema shaped like the one the next release will have.
+func TestTheCaskStepsTriggerWouldFire(t *testing.T) {
+	today := map[string]json.RawMessage{
+		"install":   json.RawMessage(`{"type":"string"}`),
+		"uninstall": json.RawMessage(`{"type":"string"}`),
+	}
+	if got := declarativeStepKeys(today); len(got) != 0 {
+		t.Errorf("the detection found %v in a schema that has no steps key — it would fire "+
+			"today, which would make the trigger a permanent red rather than a trigger", got)
+	}
+
+	// The shape the upstream change adds, alongside the existing keys.
+	tomorrow := map[string]json.RawMessage{
+		"install":         json.RawMessage(`{"type":"string"}`),
+		"uninstall":       json.RawMessage(`{"type":"string"}`),
+		"install_steps":   json.RawMessage(`{"type":"string"}`),
+		"uninstall_steps": json.RawMessage(`{"type":"string"}`),
+	}
+	got := declarativeStepKeys(tomorrow)
+	want := []string{"install_steps", "uninstall_steps"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("against a schema that HAS the declarative keys the detection found %v, want "+
+			"%v.\nThis is the whole value of the row above: if this comparison is wrong, that "+
+			"row stays green through the release it exists to catch, and the migration is "+
+			"never triggered at all.", got, want)
 	}
 }

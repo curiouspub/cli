@@ -187,8 +187,15 @@ homebrew_casks:
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
-    homepage: https://curious.pub
-    description: Pack an Astro project, upload it, and stream the build.
+    # Both of these are spelled for HOMEBREW'S linter rather than to
+    # match the npm wrapper's copy, which keeps its own: a cask homepage
+    # wants a slash after the domain, and a cask description must not end
+    # in a full stop. `brew style` reports each as its own offence, and a
+    # cask that lints dirty is a thing somebody else eventually opens a
+    # pull request about — at the tap, where this file's output lands and
+    # where a fix would be overwritten by the next release.
+    homepage: https://curious.pub/
+    description: Pack an Astro project, upload it, and stream the build
     license: MIT
     hooks:
       post:
