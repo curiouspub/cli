@@ -111,13 +111,44 @@ test('a missing binary is fetched rather than refused', async (t) => {
     env: { CURIOUS_RELEASE_BASE_URL: server.origin },
   });
 
-  assert.strictEqual(run.code, 0, `the shim did not fetch and run:\n${run.output}`);
+  // WHAT IS ASSERTED HERE RUNS EVERYWHERE, and what the binary does when
+  // started does not — see the row below for why that split exists.
   assert.ok(server.requests.length > 0, 'the shim ran without asking the release for anything');
+  assert.ok(fs.existsSync(path.join(dir, 'installed.json')),
+    `the fetch left no marker, so the next run would fetch again:\n${run.output}`);
   // THE PROGRESS LINE IS ON STDERR, because `curious version` is a
   // command whose output somebody pipes into a file.
   assert.match(run.stderr, /fetching the binary/);
   assert.ok(!/fetching the binary/.test(run.stdout),
     `the progress line reached stdout, where a redirect would capture it:\n${run.stdout}`);
+});
+
+// THE FIXTURE BINARY IS A SHELL SCRIPT, which is why this half is POSIX
+// only and the half above is not.
+//
+// Windows cannot execute `#!/bin/sh`, so the spawn fails with
+// `spawn UNKNOWN` AFTER a fetch that worked perfectly — measured on CI,
+// where the run printed the progress line and then threw. That is a
+// property of the FIXTURE and says nothing about the shim, so asserting
+// it everywhere would have made a green Windows leg impossible for a
+// reason unconnected to the behaviour under test.
+//
+// What Windows still covers is the whole of the fetch: the request, the
+// marker, and the stream the progress line goes to.
+test('the fetched binary is then run', { skip: POSIX_ONLY }, async (t) => {
+  const server = await h.serveAssets(t);
+  const dir = installedPackage(t, {
+    body: null,
+    marker: false,
+    checksums: h.checksumsFor(ALL_ASSET_NAMES),
+  });
+
+  const run = await runShim(dir, ['--version'], {
+    env: { CURIOUS_RELEASE_BASE_URL: server.origin },
+  });
+
+  assert.strictEqual(run.code, 0, `the shim fetched and did not run:\n${run.output}`);
+  assert.match(run.stdout, /curious fixture ok/);
 });
 
 test('a second run does not fetch again', async (t) => {
@@ -130,11 +161,13 @@ test('a second run does not fetch again', async (t) => {
   const env = { CURIOUS_RELEASE_BASE_URL: server.origin };
 
   const first = await runShim(dir, ['--version'], { env });
-  assert.strictEqual(first.code, 0, first.output);
+  assert.ok(server.requests.length > 0, `the first run fetched nothing:\n${first.output}`);
   const afterFirst = server.requests.length;
 
+  // The exit code is deliberately not asserted: on Windows the fixture
+  // binary cannot be executed, and what this row is about is whether a
+  // SECOND fetch happens.
   const second = await runShim(dir, ['--version'], { env });
-  assert.strictEqual(second.code, 0, second.output);
 
   assert.strictEqual(server.requests.length, afterFirst,
     'the second run asked the release for something again — the marker written by the ' +
