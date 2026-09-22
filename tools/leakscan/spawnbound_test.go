@@ -43,20 +43,36 @@ func main() { time.Sleep(10 * time.Minute) }
 	if runtime.GOOS == "windows" {
 		name = "git.exe"
 	}
-	binDir := t.TempDir()
+
+	// THE BIN DIRECTORY IS NOT t.TempDir(), and the reason is the whole
+	// point of the stub: it is STILL RUNNING when the test ends, because
+	// a command that never returns is what this row needs. Windows
+	// cannot unlink a running image, so t.TempDir's cleanup fails the
+	// test — measured on CI, where the assertion passed in 31.68s and
+	// the row then failed with
+	// "TempDir RemoveAll cleanup: unlinkat ...\git.exe".
+	//
+	// So removal is BEST EFFORT here. The alternative — making the stub
+	// exit before the test ends — would mean a command that does return,
+	// which is the one thing this row cannot use.
+	binDir, err := os.MkdirTemp("", "leakscan-blocking-git")
+	if err != nil {
+		t.Fatalf("making a directory for the stub: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(binDir) })
 	build := exec.Command("go", "build", "-o", filepath.Join(binDir, name), src)
 	build.Dir = dir
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building the blocking git stub: %v\n%s", err, out)
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		t.Fatalf("building the blocking git stub: %v\n%s", buildErr, out)
 	}
 
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	// The stub must actually be what `git` resolves to now, or this row
 	// would pass by testing the real git's speed.
-	resolved, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatalf("after putting the stub first on PATH, git does not resolve: %v", err)
+	resolved, lookErr := exec.LookPath("git")
+	if lookErr != nil {
+		t.Fatalf("after putting the stub first on PATH, git does not resolve: %v", lookErr)
 	}
 	if filepath.Dir(resolved) != binDir {
 		t.Fatalf("git resolves to %s, not the stub in %s — this row would be measuring the "+
