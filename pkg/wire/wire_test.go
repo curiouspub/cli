@@ -253,10 +253,21 @@ func goldenCases() []goldenCase {
 			newEmpty: func() any { return &PhaseEvent{} },
 		},
 		{
+			// Origin joined 2026-09-22. The populated value is a FAILED
+			// build attributed to the service, because that is the only
+			// combination in which both fields carry information — and
+			// it is the case that minted the field: a build session the
+			// service refused to create, rendered to a person as a
+			// problem in their project.
+			//
+			// A fully-populated fixture is the guard's requirement, and
+			// `{"status": "built", "origin": "service"}` would satisfy
+			// it while describing something that cannot happen.
 			name:    "DoneEvent",
 			fixture: "done_event.json",
 			value: &DoneEvent{
-				Status: StatusBuilt,
+				Status: StatusFailed,
+				Origin: OriginService,
 			},
 			newEmpty: func() any { return &DoneEvent{} },
 		},
@@ -594,5 +605,42 @@ func TestAllEventTypesOrder(t *testing.T) {
 	want := []EventType{"log", "phase", "error", "done"}
 	if !reflect.DeepEqual(AllEventTypes, want) {
 		t.Fatalf("AllEventTypes = %v, want %v", AllEventTypes, want)
+	}
+}
+
+// TestFailureOriginConstants pins the exact string value of every
+// FailureOrigin constant, mirroring TestDeployStatusConstants and
+// TestPhaseConstants. See TestEveryFailureOriginConstantIsPinned for why
+// the empty value is pinned rather than skipped.
+func TestFailureOriginConstants(t *testing.T) {
+	cases := []struct {
+		origin FailureOrigin
+		want   string
+	}{
+		{OriginUnstated, ""},
+		{OriginProject, "project"},
+		{OriginService, "service"},
+		{OriginLimit, "limit"},
+	}
+	for _, c := range cases {
+		if string(c.origin) != c.want {
+			t.Errorf("FailureOrigin = %q, want %q", string(c.origin), c.want)
+		}
+	}
+	if len(cases) != len(AllFailureOrigins) {
+		t.Errorf("this test pins %d origins and AllFailureOrigins holds %d",
+			len(cases), len(AllFailureOrigins))
+	}
+}
+
+// TestAllFailureOriginsOrder pins the order: unstated first, because it is
+// the zero value and the case a consumer meets before any server sends
+// anything else, then the two attributions.
+func TestAllFailureOriginsOrder(t *testing.T) {
+	want := []FailureOrigin{"", "project", "service", "limit"}
+	if !reflect.DeepEqual(AllFailureOrigins, want) {
+		t.Fatalf("AllFailureOrigins = %v, want %v — unstated first (it is the zero value), "+
+			"then the attributions in joining order, which is the only rule that never "+
+			"moves an existing entry", AllFailureOrigins, want)
 	}
 }

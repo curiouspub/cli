@@ -626,6 +626,112 @@ type PhaseEvent struct {
 // values here.
 type DoneEvent struct {
 	Status DeployStatus `json:"status"`
+
+	// Origin says WHOSE FAULT a failure was, and it exists because the
+	// client could not tell and said something false.
+	//
+	// `status: "failed"` covers two different events — a build that ran
+	// and failed, and a build that never started — and nothing on the
+	// wire distinguished them. So the client's copy told a person that
+	// what went wrong "is a problem in the project rather than in curious
+	// or the service", on a deploy where the service had refused to
+	// create the build session at all. Every clause of that was false,
+	// and the person was sent to fix a project that was fine.
+	//
+	// IT IS A FIELD AND NOT A MESSAGE, deliberately. A client must be
+	// able to branch on this without reading English, and a message that
+	// happens to contain the word "service" is not something a program
+	// can act on.
+	//
+	// IT IS MEANINGFUL ONLY WHEN Status IS StatusFailed. On any other
+	// status there is no failure to attribute, and a server states
+	// OriginUnstated there rather than inventing an attribution for a
+	// build that succeeded.
+	Origin FailureOrigin `json:"origin"`
+}
+
+// FailureOrigin attributes a failed build to the side that caused it.
+//
+// # The zero value is UNSTATED, and that is what makes this addable
+//
+// This contract is additive-only, so a server that predates this field
+// sends no `origin` key and a client decodes the zero value. That value
+// is OriginUnstated, whose meaning is exactly "nobody said" — which is
+// the truth in that case, and is why no separate presence flag is needed
+// and why this field carries no `omitempty` (banned in this package: a
+// key that vanishes at its zero value is a key no fixture pins).
+//
+// # The unknown branch is not optional
+//
+// A consumer MUST have a branch for a value it does not recognise, and
+// that branch must claim NEITHER side. This is the render-unknown
+// obligation stated at the top of this package, and it bites harder here
+// than for DeployStatus or Phase: the values are accusations. A client
+// that treats an unrecognised origin as the project's fault repeats the
+// original defect against every origin added after it shipped, and one
+// that treats it as the service's blames an outage for a broken build.
+//
+// OriginLimit is what that obligation looks like when it is paid: it was
+// added after the first client shipped, and every such client renders it
+// through the unknown branch — accusing nobody, which is worse copy than
+// the limit branch and is not a false statement.
+//
+// OriginUnstated and an unrecognised value are deliberately the SAME
+// branch rather than two. Both mean the client does not know whose fault
+// it was, and a client cannot tell "an old server said nothing" from "a
+// new server said something I predate" in any way that changes what it
+// should tell a person.
+type FailureOrigin string
+
+const (
+	// OriginUnstated is the zero value: no attribution was made. It is
+	// what an older server's absent key decodes to, and what a server
+	// sends on a status that is not a failure.
+	OriginUnstated FailureOrigin = ""
+
+	// OriginProject means the project caused it: a non-zero build, a
+	// missing dependency, a broken config. The log the person just
+	// watched is the explanation, and acting on it is what fixes this.
+	OriginProject FailureOrigin = "project"
+
+	// OriginService means WE caused it: a build session that could not be
+	// created, an image that could not be fetched, a refused call. There
+	// may be NO LOG AT ALL, so copy for this origin may not send anyone
+	// to read one.
+	OriginService FailureOrigin = "service"
+
+	// OriginLimit means a PLATFORM LIMIT was reached — today, the wall
+	// clock a single build is allowed.
+	//
+	// IT IS A THIRD ORIGIN BECAUSE IT IS NEITHER OF THE OTHER TWO, and
+	// filing it under either would produce advice that does not work.
+	// As the service's, the copy says to wait and try again unchanged —
+	// and the same build will reach the same limit every time. As the
+	// project's, it says to fix what the log reports — and the log may
+	// contain no error at all, because nothing failed; the build was
+	// still going when the clock ran out.
+	//
+	// What is true of it is the pair: the person CAN act, and retrying
+	// unchanged will not help. That pair is the whole reason this value
+	// exists, and copy for it has to carry both halves.
+	OriginLimit FailureOrigin = "limit"
+)
+
+// AllFailureOrigins lists every origin this contract defines, in the order
+// above: unstated first, because it is the zero value and the case every
+// consumer meets before any server sends anything else, then the
+// attributions in the order they joined the contract.
+//
+// JOINING ORDER rather than a semantic grouping, deliberately. Any
+// grouping worth having ("who acts", "how bad") is a judgement that would
+// move an existing entry the next time somebody disagreed with it, and
+// the order is pinned by a test — so the rule that never argues with
+// itself is the one where a new value only ever appends.
+var AllFailureOrigins = []FailureOrigin{
+	OriginUnstated,
+	OriginProject,
+	OriginService,
+	OriginLimit,
 }
 
 // The limit constants below are contract, not local policy: the MCP tool
