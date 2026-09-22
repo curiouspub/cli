@@ -16,22 +16,36 @@ installed.
 
 ## What the install does
 
-This package contains no binary. Its postinstall script downloads the
-release build for your platform, checks it, and puts it beside itself.
+This package contains no binary. It downloads the release build for your
+platform, checks it, and puts it beside itself.
+
+**At install time where it can, and on first run where it cannot.** The
+postinstall script is the usual path: the binary is in place before you
+type anything. But package managers are moving towards refusing install
+scripts they have not been shown — npm warns about this one today and
+says a future release will block it — and the approval it wants lives in
+the installing project's `package.json`, which a global install and
+`npx` do not have. So when the postinstall does not run, the first
+`curious` you run fetches the binary itself, prints one line while it
+does, and carries on. Nothing to approve, nothing to remember.
+
+**The check is the same either way.** One implementation of
+fetch-verify-place, called from both, so the digest below cannot hold on
+one path and not the other.
 
 Supported: macOS, Linux and Windows, on x64 and arm64. Anything else
-fails the install with a message saying so, rather than succeeding and
-leaving you with a command that is not there.
+fails with a message saying so, rather than succeeding and leaving you
+with a command that is not there.
 
-Node 22 or newer. The install script checks that before it does
-anything else, because a version check that runs after the download has
-let the thing it was guarding already happen.
+Node 22 or newer, checked before anything else happens — a version check
+that runs after the download has let the thing it was guarding already
+happen.
 
 ## How the download is checked, and what that is worth
 
-A postinstall script that downloads and runs a binary is, mechanically,
-what a malicious package does. The difference is entirely in what
-vouches for the bytes, so it is worth stating exactly:
+A package that downloads and runs a binary is, mechanically, what a
+malicious package does. The difference is entirely in what vouches for
+the bytes, so it is worth stating exactly:
 
 - **The digest is inside this package.** `checksums.json` is written
   when the package is published, from the same run that built the

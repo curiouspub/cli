@@ -960,15 +960,35 @@ async function main() {
   writeMarker(target.binary);
 }
 
-// THE ONE PLACE A FAILURE IS PRINTED, and it never prints a stack
-// trace: a postinstall failure is read by somebody who typed one
+// explain turns any failure into the sentence a person should read. It
+// never prints a stack trace: this is read by somebody who typed one
 // command and expected it to work, and a trace tells them about this
 // file rather than about what to do next.
-main().catch((err) => {
-  const message = err instanceof Refused
+function explain(err) {
+  return err instanceof Refused
     ? err.message
     : `Something went wrong that this installer did not expect:\n\n  ${err && err.message}\n\n` +
       'Please report it.';
-  console.error(`\ncurious could not be installed.\n\n${message}\n`);
-  process.exit(1);
-});
+}
+
+// THIS FILE IS BOTH A SCRIPT AND A MODULE, and the guard below is what
+// keeps the two apart.
+//
+// As a SCRIPT it is the postinstall step, which is what runs wherever
+// the package manager allows install scripts — the common case, where
+// the binary is in place before anybody types the command.
+//
+// As a MODULE it is what the shim calls when it finds no binary,
+// because a package manager that refuses install scripts leaves an
+// installed command with nothing behind it. Requiring this file rather
+// than copying the download is the whole point: there is ONE
+// implementation of fetch-verify-place, and the digest check moves with
+// it rather than being reimplemented somewhere it might drift.
+module.exports = { main, explain, Refused };
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(`\ncurious could not be installed.\n\n${explain(err)}\n`);
+    process.exit(1);
+  });
+}
