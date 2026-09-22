@@ -13,6 +13,34 @@ import (
 	"time"
 )
 
+// unlockableTempDir is a temp directory whose removal is BEST EFFORT,
+// for the directories a process that never returns holds open.
+//
+// t.TempDir removes its directory when the test ends and FAILS THE TEST
+// if it cannot. On Windows it cannot, twice over, and both were found on
+// CI rather than reasoned out here:
+//
+//   - the stub's own image: "unlinkat ...\git.exe" — a running
+//     executable cannot be unlinked;
+//   - the stub's WORKING DIRECTORY: "unlinkat ...\002: The process
+//     cannot access the file because it is being used by another
+//     process" — a process holds its cwd, and this stub is started with
+//     cmd.Dir set to the repository under test.
+//
+// The stub is still running at cleanup BY DESIGN: a command that never
+// returns is the one thing this row cannot do without, and making it
+// exit early would make it a command that returns. So these directories
+// outlive the test and the operating system reclaims them.
+func unlockableTempDir(t *testing.T, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		t.Fatalf("making a temp directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // blockingGitOnPath builds a stub named `git`, puts it first on PATH, and
 // returns nothing but the guarantee that every git invocation from this
 // process now blocks until the test ends.
@@ -44,22 +72,8 @@ func main() { time.Sleep(10 * time.Minute) }
 		name = "git.exe"
 	}
 
-	// THE BIN DIRECTORY IS NOT t.TempDir(), and the reason is the whole
-	// point of the stub: it is STILL RUNNING when the test ends, because
-	// a command that never returns is what this row needs. Windows
-	// cannot unlink a running image, so t.TempDir's cleanup fails the
-	// test — measured on CI, where the assertion passed in 31.68s and
-	// the row then failed with
-	// "TempDir RemoveAll cleanup: unlinkat ...\git.exe".
-	//
-	// So removal is BEST EFFORT here. The alternative — making the stub
-	// exit before the test ends — would mean a command that does return,
-	// which is the one thing this row cannot use.
-	binDir, err := os.MkdirTemp("", "leakscan-blocking-git")
-	if err != nil {
-		t.Fatalf("making a directory for the stub: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(binDir) })
+	// The stub's own image, which it holds open — see unlockableTempDir.
+	binDir := unlockableTempDir(t, "leakscan-blocking-git")
 	build := exec.Command("go", "build", "-o", filepath.Join(binDir, name), src)
 	build.Dir = dir
 	if out, buildErr := build.CombinedOutput(); buildErr != nil {
@@ -97,7 +111,9 @@ func main() { time.Sleep(10 * time.Minute) }
 func TestAGitCallThatNeverReturnsFailsInSeconds(t *testing.T) {
 	blockingGitOnPath(t)
 
-	r := repo{dir: t.TempDir()}
+	// The stub runs with this as its working directory and never exits,
+	// so it holds it open — see unlockableTempDir.
+	r := repo{dir: unlockableTempDir(t, "leakscan-blocked-repo")}
 
 	type outcome struct {
 		err     error
