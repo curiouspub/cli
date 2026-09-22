@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // FetchRefspec is what this scan's universe IS, written once.
@@ -45,11 +46,102 @@ var universeRefs = []string{"refs/remotes/origin/", "refs/tags/"}
 // real run take the same path.
 type repo struct{ dir string }
 
+// gitCallTimeout bounds ONE git invocation end to end — including the
+// time spent waiting for a spawn slot, and including the fork itself.
+//
+// MEASURED, so the number is not an opinion: a full public scan of this
+// repository makes 454 git invocations and its slowest single one is
+// 32.5ms (`rev-list --objects --no-object-names --stdin`; the next two
+// are 28.4ms and 19.5ms). Apple arm64, idle, 2026-09-22. This bound is
+// roughly nine hundred times that, which is not caution for its own
+// sake: the failure it exists to catch ran for twenty-five minutes, so
+// there are four orders of magnitude of daylight between the slowest
+// legitimate call and the pathological one, and a bound placed anywhere
+// in that gap separates them.
+//
+// THE FIGURE IS LOCAL AND A CI LEG IS UNMEASURED. A hosted runner is
+// slower and a larger history makes rev-list slower still, which is why
+// the bound is set for the order of magnitude rather than trimmed to the
+// measurement.
+const gitCallTimeout = 30 * time.Second
+
+// gitSpawnSlots bounds how many git processes this package starts at
+// once, and it lives HERE — at the spawn — rather than in the worker
+// pool that happens to be the busiest caller.
+//
+// A bound a caller keeps is a bound the next caller does not know about.
+// walkTrees caps itself at eight workers today; a second concurrent
+// caller would have made that cap a description of one loop rather than
+// a property of the package.
+var gitSpawnSlots = make(chan struct{}, 8)
+
 func (r repo) run(args ...string) (string, error) {
 	return r.runInput("", args...)
 }
 
+// runInput runs one git command under gitCallTimeout.
+//
+// # Why the work happens in a goroutine rather than under a context
+//
+// The obvious spelling is exec.CommandContext, and it does not work for
+// the failure this exists to survive. os/exec starts its cancellation
+// watchdog AFTER os.StartProcess returns, because cancelling means
+// killing c.Process and there is no process to kill before then. A call
+// that never returns from the fork therefore has no watchdog at all: the
+// context expires and nothing reads it.
+//
+// That is precisely the observed failure. A goroutine sat inside
+// syscall.forkExec for twenty-four minutes while the pool's WaitGroup
+// waited behind it, and the whole test binary died at its own cap with
+// no indication of which object was being read.
+//
+// So the DEADLINE BELONGS TO THE CALLER, not to the process: the work
+// runs in a goroutine and this function stops waiting on it. The stuck
+// goroutine is not rescued — a thread blocked in a syscall cannot be
+// interrupted from user space — and it keeps its spawn slot for the
+// lifetime of the process. What changes is that the caller learns, in
+// seconds, WHICH command stopped, and every later call fails the same
+// way instead of the whole run going silent until the cap.
+//
+// The channel is buffered so that a goroutine which eventually finishes
+// can deliver its result and exit rather than blocking on a send nobody
+// is left to receive.
 func (r repo) runInput(input string, args ...string) (string, error) {
+	type outcome struct {
+		out string
+		err error
+	}
+	done := make(chan outcome, 1)
+
+	go func() {
+		// The slot is taken INSIDE the timed region, deliberately. A
+		// goroutine stuck in the fork never gives its slot back, so
+		// waiting for one can block for ever — and a bound that can
+		// block for ever without a deadline is the same defect in a
+		// different place.
+		gitSpawnSlots <- struct{}{}
+		defer func() { <-gitSpawnSlots }()
+
+		out, err := r.runInputNow(input, args...)
+		done <- outcome{out: out, err: err}
+	}()
+
+	select {
+	case o := <-done:
+		return o.out, o.err
+	case <-time.After(gitCallTimeout):
+		return "", fmt.Errorf("git %s: no result after %s — the command never returned, "+
+			"which on this path has meant a fork that did not complete rather than a slow "+
+			"repository; the scan stops here rather than waiting for the test or build "+
+			"timeout, and the arguments above name what was being read",
+			strings.Join(args, " "), gitCallTimeout)
+	}
+}
+
+// runInputNow is the actual invocation, with no deadline of its own. It
+// is called only from runInput, which supplies one — see the invariant
+// asserted by the row about the walk's WaitGroup.
+func (r repo) runInputNow(input string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.dir
 	cmd.Stdin = strings.NewReader(input)
