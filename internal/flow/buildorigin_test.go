@@ -65,6 +65,14 @@ func TestTheCopyBranchesOnWhoseFaultItWas(t *testing.T) {
 			wantNext:      ui.NextWait,
 		},
 		{
+			name:          "a platform limit was reached, which is neither side's fault",
+			origin:        wire.OriginLimit,
+			wantID:        ui.IDBuildLimitReached,
+			blamesProject: false,
+			blamesService: false,
+			wantNext:      ui.NextFreshDeploy,
+		},
+		{
 			name:     "the server said nothing, so neither side may be named",
 			origin:   wire.OriginUnstated,
 			wantID:   ui.IDBuildFailedUnexplained,
@@ -203,6 +211,11 @@ func TestTheOriginSurvivesTheStream(t *testing.T) {
 			wantID: ui.IDBuildFailed,
 		},
 		{
+			name:   "a platform limit arrives as one",
+			frame:  doneFrameWithOrigin(wire.StatusFailed, string(wire.OriginLimit)),
+			wantID: ui.IDBuildLimitReached,
+		},
+		{
 			// A SERVER OLDER THAN THE FIELD, which is every server
 			// until the server half of this change lands. It sends no
 			// origin key at all — not an empty one — and this is the
@@ -243,5 +256,58 @@ func TestTheOriginSurvivesTheStream(t *testing.T) {
 					"can quote afterwards, and a service fault is exactly when they need to")
 			}
 		})
+	}
+}
+
+// TestTheLimitCopyCarriesBothHalvesOfWhatIsTrue is separate from the table
+// because the table asserts what the copy must NOT say, and this origin is
+// the one whose content is the point.
+//
+// Two statements are true of a platform limit at once — THE PERSON CAN ACT,
+// AND RETRYING UNCHANGED WILL NOT HELP — and dropping either produces the
+// advice that made this a third origin instead of a case of one of the
+// other two. Without the first it reads as an outage and they wait for it
+// to pass. Without the second they run the same build again, and reach the
+// same limit, every time.
+//
+// It also must not send anyone to the log. Nothing failed in there: the
+// build was still going when the clock ran out, so an instruction to fix
+// what the log reports describes an error the log does not contain.
+func TestTheLimitCopyCarriesBothHalvesOfWhatIsTrue(t *testing.T) {
+	var failure *ui.Failure
+	if !errors.As(buildFailedFailure(wire.OriginLimit), &failure) {
+		t.Fatal("the limit ending is not a *ui.Failure")
+	}
+	said := failure.What + "\n" + failure.Why + "\n" + failure.NextText
+
+	// THE PERSON CAN ACT: the copy has to name something they can change.
+	if !strings.Contains(said, "faster") {
+		t.Errorf("the limit copy never tells the person what they can change.\n"+
+			"Without that it reads as an outage and they wait for it to pass.\n"+
+			"The copy was:\n%s", said)
+	}
+
+	// AND RETRYING UNCHANGED WILL NOT HELP: it has to say so, because the
+	// reflex after any failed build is to run it again.
+	if !strings.Contains(said, "The same build will reach the same limit again") {
+		t.Errorf("the limit copy never says the same build will hit the same limit.\n"+
+			"Without that, the next thing they do is run it again unchanged.\n"+
+			"The copy was:\n%s", said)
+	}
+
+	// AND IT MUST NOT PROMISE A WAIT. This is the service branch's advice,
+	// and it is the one thing that cannot work here.
+	for _, waiting := range []string{"Wait a few minutes", "Try again a little later"} {
+		if strings.Contains(said, waiting) {
+			t.Errorf("the limit copy contains %q — waiting changes nothing about a build "+
+				"that is too slow.\nThe copy was:\n%s", waiting, said)
+		}
+	}
+
+	// AND IT MUST NOT SEND ANYONE TO THE LOG.
+	if strings.Contains(said, "Fix what the log reports") {
+		t.Errorf("the limit copy sends the person to fix what the log reports, and the "+
+			"log reports nothing — the build had not failed when it was stopped.\n"+
+			"The copy was:\n%s", said)
 	}
 }

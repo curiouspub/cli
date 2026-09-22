@@ -333,6 +333,12 @@ to send it.
 
 > The build did not finish.
 
+### build-limit-reached
+
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> The build reached the platform's time limit.
+
 ### build-log-lost
 
 **build log.** A person is watching the build log stream in while the build runs.

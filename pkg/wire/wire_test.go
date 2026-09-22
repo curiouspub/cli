@@ -620,6 +620,7 @@ func TestFailureOriginConstants(t *testing.T) {
 		{OriginUnstated, ""},
 		{OriginProject, "project"},
 		{OriginService, "service"},
+		{OriginLimit, "limit"},
 	}
 	for _, c := range cases {
 		if string(c.origin) != c.want {
@@ -636,9 +637,10 @@ func TestFailureOriginConstants(t *testing.T) {
 // the zero value and the case a consumer meets before any server sends
 // anything else, then the two attributions.
 func TestAllFailureOriginsOrder(t *testing.T) {
-	want := []FailureOrigin{"", "project", "service"}
+	want := []FailureOrigin{"", "project", "service", "limit"}
 	if !reflect.DeepEqual(AllFailureOrigins, want) {
-		t.Fatalf("AllFailureOrigins = %v, want %v — unstated first, it is the zero value",
-			AllFailureOrigins, want)
+		t.Fatalf("AllFailureOrigins = %v, want %v — unstated first (it is the zero value), "+
+			"then the attributions in joining order, which is the only rule that never "+
+			"moves an existing entry", AllFailureOrigins, want)
 	}
 }

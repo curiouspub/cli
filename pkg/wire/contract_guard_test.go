@@ -1080,6 +1080,7 @@ func TestEveryFailureOriginConstantIsPinned(t *testing.T) {
 		"OriginUnstated": "",
 		"OriginProject":  "project",
 		"OriginService":  "service",
+		"OriginLimit":    "limit",
 	}
 
 	declared := declaredFailureOriginValues(t)

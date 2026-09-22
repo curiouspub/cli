@@ -764,6 +764,28 @@ func buildFailedFailure(origin wire.FailureOrigin) error {
 			"Wait a few minutes and run `curious deploy` again. If it keeps\n"+
 				"happening, report it and quote the deploy id above.")
 
+	case wire.OriginLimit:
+		// NEITHER OF THE OTHER TWO, and its copy has to carry the pair
+		// that makes it its own ending: the person CAN act, and running
+		// the same thing again will not help.
+		//
+		// Both halves are load-bearing. Without the first it reads as an
+		// outage and they wait; without the second they retry unchanged,
+		// which reaches the same limit every time. And it may not send
+		// anyone to the log either — nothing failed in there, the build
+		// was still going when the clock ran out, so "fix what the log
+		// reports" would describe an error that is not in it.
+		return ui.NewFailure(
+			ui.IDBuildLimitReached,
+			ui.StageBuilding,
+			"The build reached the platform's time limit.",
+			"Your build ran and was stopped when it hit the limit curious allows\n"+
+				"for a single build. Nothing failed — there may be nothing in the log\n"+
+				"above that looks like an error at all.\n\n"+
+				"The same build will reach the same limit again. A faster one may not.", ui.NextFreshDeploy,
+			"Make the build faster — fewer dependencies, or a smaller site — then\n"+
+				"run `curious deploy` again.")
+
 	default:
 		// UNSTATED, OR A VALUE THIS BUILD PREDATES — and the two are one
 		// branch because a client cannot tell them apart in any way that

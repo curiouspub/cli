@@ -671,6 +671,11 @@ type DoneEvent struct {
 // original defect against every origin added after it shipped, and one
 // that treats it as the service's blames an outage for a broken build.
 //
+// OriginLimit is what that obligation looks like when it is paid: it was
+// added after the first client shipped, and every such client renders it
+// through the unknown branch — accusing nobody, which is worse copy than
+// the limit branch and is not a false statement.
+//
 // OriginUnstated and an unrecognised value are deliberately the SAME
 // branch rather than two. Both mean the client does not know whose fault
 // it was, and a client cannot tell "an old server said nothing" from "a
@@ -694,15 +699,39 @@ const (
 	// may be NO LOG AT ALL, so copy for this origin may not send anyone
 	// to read one.
 	OriginService FailureOrigin = "service"
+
+	// OriginLimit means a PLATFORM LIMIT was reached — today, the wall
+	// clock a single build is allowed.
+	//
+	// IT IS A THIRD ORIGIN BECAUSE IT IS NEITHER OF THE OTHER TWO, and
+	// filing it under either would produce advice that does not work.
+	// As the service's, the copy says to wait and try again unchanged —
+	// and the same build will reach the same limit every time. As the
+	// project's, it says to fix what the log reports — and the log may
+	// contain no error at all, because nothing failed; the build was
+	// still going when the clock ran out.
+	//
+	// What is true of it is the pair: the person CAN act, and retrying
+	// unchanged will not help. That pair is the whole reason this value
+	// exists, and copy for it has to carry both halves.
+	OriginLimit FailureOrigin = "limit"
 )
 
 // AllFailureOrigins lists every origin this contract defines, in the order
 // above: unstated first, because it is the zero value and the case every
-// consumer meets before any server sends anything else.
+// consumer meets before any server sends anything else, then the
+// attributions in the order they joined the contract.
+//
+// JOINING ORDER rather than a semantic grouping, deliberately. Any
+// grouping worth having ("who acts", "how bad") is a judgement that would
+// move an existing entry the next time somebody disagreed with it, and
+// the order is pinned by a test — so the rule that never argues with
+// itself is the one where a new value only ever appends.
 var AllFailureOrigins = []FailureOrigin{
 	OriginUnstated,
 	OriginProject,
 	OriginService,
+	OriginLimit,
 }
 
 // The limit constants below are contract, not local policy: the MCP tool
