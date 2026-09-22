@@ -103,9 +103,17 @@ run against the real registry and the real tap before this section was
 written. What they get you is the tool; what the tool cannot do yet is
 deploy, for the reason under "Status" above.
 
-The npm wrapper lives under [`npm/`](./npm) — a package whose
-postinstall fetches the release build for your platform. Its own
-[README](./npm/README.md) has the detail.
+The npm wrapper lives under [`npm/`](./npm) — a package that fetches the
+release build for your platform. Its own [README](./npm/README.md) has
+the detail.
+
+**The fetch happens at install time where it can, and on first run where
+it cannot.** Package managers are moving towards refusing install scripts
+they have not been shown; npm already warns about this one and says a
+future release will block it. Where scripts run, the binary is in place
+before you type the command. Where they do not, the first `curious` you
+run fetches it — printing one line while it does, and checking the same
+digest either way. Nothing to approve, and nothing to remember.
 
 ```
 npx curiouspub deploy       # run it without installing
@@ -140,10 +148,12 @@ is itself signed, keylessly, by the workflow that built it — a detail
 for an auditor with the verifying tool, and not something this command
 checks for you.
 
-**How the download is checked, and what that is worth.** A postinstall
-script that downloads and runs a binary is, mechanically, what a
-malicious package does, so it is worth being precise about what vouches
-for the bytes. The SHA-256 digest lives inside the npm package, written
+**How the download is checked, and what that is worth.** A package that
+downloads and runs a binary is, mechanically, what a malicious package
+does, so it is worth being precise about what vouches for the bytes.
+**The check does not move with the download**: it is the same code
+whether the fetch happens in the postinstall or on first run, which is
+why there is one implementation of it rather than two. The SHA-256 digest lives inside the npm package, written
 at publish time from the same run that built the binaries — so a release
 asset **replaced after publication** fails the check, because the digest
 is vouched for by the registry rather than by the host serving the

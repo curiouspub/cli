@@ -85,6 +85,14 @@ async function gitMode(repoPath) {
 const manifest = JSON.parse(
   fs.readFileSync(path.join(h.PACKAGE_ROOT, 'package.json'), 'utf8'));
 
+// Every asset name the release publishes, so this file can hand a package
+// a complete checksums table without detecting its own platform.
+const ALL_ASSET_NAMES = [
+  ['darwin', 'amd64'], ['darwin', 'arm64'],
+  ['linux', 'amd64'], ['linux', 'arm64'],
+  ['windows', 'amd64'], ['windows', 'arm64'],
+].map(([osName, arch]) => `curious_${h.VERSION}_${osName}_${arch}.gz`);
+
 test('the manifest carries what a provenance publish needs', () => {
   // Provenance is keyed to the repository field. Without it the publish
   // fails rather than quietly producing an unattested package, which is
@@ -171,7 +179,18 @@ test('the tarball carries the intended files and nothing else', async () => {
   }
 });
 
-test('installing with the scripts turned off explains itself', async (t) => {
+// THIS ROW USED TO ASSERT THE COMMAND FAILED, and the change it now
+// records is the point of the whole card: a package manager that refuses
+// install scripts leaves an installed command that WORKS, because the
+// binary is fetched the first time somebody runs it.
+//
+// MEASURED BEFORE AND AFTER, on both matrix legs, against the real
+// published release: before, `npm install -g curiouspub --ignore-scripts`
+// exited 0 and the command then failed; after, the same install produces
+// a command that answers on first run. The transcripts are what closed
+// this out — this row is what keeps it true.
+test('installing with the scripts turned off still yields a working command', async (t) => {
+  const server = await h.serveAssets(t);
   const work = h.tempDir(t, 'prefix');
   const packed = await npm(['pack', '--pack-destination', work], { cwd: h.PACKAGE_ROOT });
   assert.strictEqual(packed.code, 0, packed.output);
@@ -183,13 +202,24 @@ test('installing with the scripts turned off explains itself', async (t) => {
     '--no-audit', '--no-fund', tarball], { cwd: work });
   assert.strictEqual(installed.code, 0, installed.output);
 
+  // The package as published carries an empty checksums table — it is
+  // filled at release time — so the fetch is pointed at the fixture
+  // server AND given the digests that server's bytes match.
+  const root = path.join(prefix, 'node_modules', 'curiouspub');
+  fs.writeFileSync(path.join(root, 'checksums.json'),
+    JSON.stringify(h.checksumsFor(ALL_ASSET_NAMES), null, 2) + '\n');
+
   const command = path.join(prefix, 'node_modules', '.bin',
     process.platform === 'win32' ? 'curious.cmd' : 'curious');
   assert.ok(fs.existsSync(command), `the package installed no command at ${command}`);
 
-  const ran = await run(command, ['version'], { shell: process.platform === 'win32' });
-  assert.notStrictEqual(ran.code, 0, ran.output);
-  assert.match(ran.output, /--ignore-scripts/);
-  assert.match(ran.output, /postinstall/);
+  const ran = await run(command, ['--version'], {
+    shell: process.platform === 'win32',
+    env: { ...process.env, CURIOUS_RELEASE_BASE_URL: server.origin },
+  });
+  assert.strictEqual(ran.code, 0,
+    `the command did not work after an install with scripts refused:\n${ran.output}`);
+  assert.ok(server.requests.length > 0,
+    'the command ran without fetching, so this row proved nothing about the fetch');
   assert.ok(!/ {4}at /.test(ran.output), `a stack trace reached the user:\n${ran.output}`);
 });
