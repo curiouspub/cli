@@ -163,6 +163,21 @@ windows github.com/curiouspub/cli/internal/pack TestTheArchiveModeIgnoresWhatIsO
 # it at all — which looks exactly like a row that passed.
 * github.com/curiouspub/cli/internal/guard TestReleaseConfigIsAcceptedByTheReleaseTool
 
+# The trigger that watches for the release tool gaining a declarative
+# post-install steps key, so the cask's deprecated stanza can be migrated
+# the moment the capability exists rather than whenever somebody
+# remembers. It reads the tool's own schema, so it needs the tool.
+#
+# WHAT THIS SKIP COSTS, which is less than it looks: the row is green
+# whenever it runs today, because the capability is absent, so a skip
+# loses a green. What it must not lose is the FIRING, and that arrives
+# with a pin bump — which is made in this repository, in a file the
+# snapshot workflow reads, on a machine where the tool is installed.
+# The row's detection is separately exercised against a synthetic schema
+# by TestTheCaskStepsTriggerWouldFire, which needs nothing and runs
+# everywhere.
+* github.com/curiouspub/cli/internal/guard TestTheReleaseToolStillCannotEmitDeclarativeCaskSteps
+
 # The row that needs a config file it cannot read. Taking the permission
 # bits away is a request rather than a result: a process running as the
 # superuser ignores them, which a container commonly is, and some
