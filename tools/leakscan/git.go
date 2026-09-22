@@ -44,7 +44,31 @@ var universeRefs = []string{"refs/remotes/origin/", "refs/tags/"}
 
 // repo is one checkout, addressed by directory so that a fixture and a
 // real run take the same path.
-type repo struct{ dir string }
+type repo struct {
+	dir string
+
+	// timeout overrides gitCallTimeout for this repo, and exists for one
+	// caller: the row that proves a git call which never returns is cut
+	// off. That row needs a command that blocks and a deadline that
+	// expires, and with the production value it would cost thirty
+	// seconds on every leg of every run to prove a mechanism that a
+	// second proves equally well.
+	//
+	// THE ZERO VALUE IS THE PRODUCTION DEADLINE, so every construction
+	// site that does not mention it — which is all of them but that row
+	// — is bounded exactly as before. An override that could be zero and
+	// MEAN zero would be a way to remove the deadline by forgetting a
+	// field, which is the failure this whole file exists to prevent.
+	timeout time.Duration
+}
+
+// deadline is the bound one git call gets.
+func (r repo) deadline() time.Duration {
+	if r.timeout > 0 {
+		return r.timeout
+	}
+	return gitCallTimeout
+}
 
 // gitCallTimeout bounds ONE git invocation end to end — including the
 // time spent waiting for a spawn slot, and including the fork itself.
@@ -129,12 +153,12 @@ func (r repo) runInput(input string, args ...string) (string, error) {
 	select {
 	case o := <-done:
 		return o.out, o.err
-	case <-time.After(gitCallTimeout):
+	case <-time.After(r.deadline()):
 		return "", fmt.Errorf("git %s: no result after %s — the command never returned, "+
 			"which on this path has meant a fork that did not complete rather than a slow "+
 			"repository; the scan stops here rather than waiting for the test or build "+
 			"timeout, and the arguments above name what was being read",
-			strings.Join(args, " "), gitCallTimeout)
+			strings.Join(args, " "), r.deadline())
 	}
 }
 

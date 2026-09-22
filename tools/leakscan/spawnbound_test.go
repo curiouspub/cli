@@ -113,7 +113,15 @@ func TestAGitCallThatNeverReturnsFailsInSeconds(t *testing.T) {
 
 	// The stub runs with this as its working directory and never exits,
 	// so it holds it open — see unlockableTempDir.
-	r := repo{dir: unlockableTempDir(t, "leakscan-blocked-repo")}
+	//
+	// THE DEADLINE IS INJECTED, and short. This row proves that a call
+	// which never returns is cut off and named; it does not prove the
+	// production number, which has its own row below. Running the real
+	// thirty seconds here would cost thirty seconds on every leg of
+	// every run to demonstrate a mechanism two seconds demonstrates
+	// exactly as well.
+	const injected = 2 * time.Second
+	r := repo{dir: unlockableTempDir(t, "leakscan-blocked-repo"), timeout: injected}
 
 	type outcome struct {
 		err     error
@@ -126,9 +134,10 @@ func TestAGitCallThatNeverReturnsFailsInSeconds(t *testing.T) {
 		done <- outcome{err: err, elapsed: time.Since(start)}
 	}()
 
-	// Generous against gitCallTimeout and still far below any suite cap:
-	// this bound exists so the row REPORTS rather than joins the hang.
-	const rowBound = 2 * time.Minute
+	// Generous against the injected deadline and still far below any
+	// suite cap: this bound exists so the row REPORTS rather than joins
+	// the hang.
+	const rowBound = 60 * time.Second
 
 	select {
 	case got := <-done:
@@ -147,7 +156,7 @@ func TestAGitCallThatNeverReturnsFailsInSeconds(t *testing.T) {
 		if got.elapsed > rowBound {
 			t.Errorf("the call took %s to give up", got.elapsed)
 		}
-		t.Logf("gave up after %s, bound %s", got.elapsed.Round(time.Second), gitCallTimeout)
+		t.Logf("gave up after %s, injected bound %s", got.elapsed.Round(time.Second), injected)
 
 	case <-time.After(rowBound):
 		t.Fatalf("a git call that never returns did not fail within %s — the deadline is "+
@@ -241,5 +250,42 @@ func TestTheSpawnBoundIsAtTheSpawn(t *testing.T) {
 		t.Errorf("the spawn bound is %d, which is high enough that it is not really a "+
 			"bound; the failure it exists for gets likelier with every concurrent fork",
 			cap(gitSpawnSlots))
+	}
+}
+
+// TestTheProductionDeadlineIsStillThirtySeconds pins the number the row
+// above stopped exercising.
+//
+// IT EXISTS BECAUSE THAT ROW STOPPED EXERCISING IT. Injecting a short
+// deadline made the suite thirty seconds faster and, on its own, would
+// have removed the only thing in this repository that touched the
+// production value — a trade nobody would have written down, arriving as
+// a side effect of a speed-up.
+//
+// So this asserts both halves: the constant is what it is, and a repo
+// that does NOT ask for an override gets it. The second is the one that
+// matters, because the override's whole safety argument is that its zero
+// value means "the production deadline" rather than "no deadline".
+func TestTheProductionDeadlineIsStillThirtySeconds(t *testing.T) {
+	const want = 30 * time.Second
+
+	if gitCallTimeout != want {
+		t.Errorf("gitCallTimeout = %s, want %s.\n"+
+			"The number is measured rather than chosen — a full scan makes 454 git "+
+			"invocations whose slowest is 32.5ms, against a failure that ran for 25 "+
+			"minutes — so changing it means re-measuring, not re-deciding.",
+			gitCallTimeout, want)
+	}
+
+	// The zero value, which is every construction site in the program.
+	if got := (repo{dir: "."}).deadline(); got != want {
+		t.Errorf("a repo with no timeout set gets a deadline of %s, want %s — the override's "+
+			"zero value must mean the production deadline, because a zero that meant NO "+
+			"deadline would let a forgotten field reintroduce the hang", got, want)
+	}
+
+	// And an override is honoured, or the row above proves nothing.
+	if got := (repo{dir: ".", timeout: time.Second}).deadline(); got != time.Second {
+		t.Errorf("an injected deadline of 1s was reported as %s", got)
 	}
 }
