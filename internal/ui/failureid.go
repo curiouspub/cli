@@ -79,7 +79,22 @@ const (
 	IDUploadAnswerUnrecognised FailureID = "upload-answer-unrecognised"
 
 	// Building and publishing.
+	//
+	// THE FIRST THREE ARE ONE EVENT SEEN THREE WAYS, and they are three
+	// ids rather than one because they are three different endings: a
+	// different thing went wrong, a different person can fix it, and a
+	// different action follows. An id is what somebody quotes when they
+	// report this, so collapsing them would throw away the one fact the
+	// report needs to carry.
+	//
+	// IDBuildFailed keeps its released meaning — the PROJECT's build
+	// failed — rather than being widened to cover the other two. That is
+	// deliberate: it is already in people's hands and already printed in
+	// transcripts, and redefining a shipped id is the same defect as
+	// redefining a shipped wire value.
 	IDBuildFailed                FailureID = "build-failed"
+	IDBuildServiceFault          FailureID = "build-service-fault"
+	IDBuildFailedUnexplained     FailureID = "build-failed-unexplained"
 	IDBuildLogLost               FailureID = "build-log-lost"
 	IDBuildOutputRefused         FailureID = "build-output-refused"
 	IDPublishNotConfirmed        FailureID = "publish-not-confirmed"
@@ -145,7 +160,8 @@ var ActiveFailureIDs = []FailureID{
 	IDUploadRedirected, IDUploadRefusedUnexplained, IDUploadSignatureMismatch,
 	IDUploadAnswerUnrecognised,
 
-	IDBuildFailed, IDBuildLogLost, IDBuildOutputRefused, IDPublishNotConfirmed,
+	IDBuildFailed, IDBuildServiceFault, IDBuildFailedUnexplained,
+	IDBuildLogLost, IDBuildOutputRefused, IDPublishNotConfirmed,
 	IDPublishedAddressInvalid, IDDeployUnknownToServer,
 	IDDeployNotCompletedByServer,
 

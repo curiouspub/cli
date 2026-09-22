@@ -239,7 +239,7 @@ type streamDeps struct {
 // A stream that ends without its terminating event ended ABNORMALLY — a
 // dropped connection, a relay that went away, a subscriber the server
 // gave up on — and is reconnected rather than reported as a result.
-func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error) {
+func streamBuild(ctx context.Context, deps streamDeps) (wire.DoneEvent, error) {
 	deps.Render.Step("%s", streamOpening)
 
 	// THE SINK IS DEFAULTED ONCE, HERE, rather than checked at each of
@@ -265,13 +265,13 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error
 			select {
 			case <-time.After(streamReconnectDelay(attempt, deps.ReconnectStep)):
 			case <-ctx.Done():
-				return "", streamLostFailure(deps.DeployID)
+				return wire.DoneEvent{}, streamLostFailure(deps.DeployID)
 			}
 		}
 
-		status, finished, err := readStream(ctx, deps, &run)
+		done, finished, err := readStream(ctx, deps, &run)
 		if finished {
-			return status, nil
+			return done, nil
 		}
 		lastErr = err
 
@@ -281,13 +281,13 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DeployStatus, error
 		// broken connection needs.
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) {
-			return "", streamRefusedFailure(apiErr)
+			return wire.DoneEvent{}, streamRefusedFailure(apiErr)
 		}
 		if ctx.Err() != nil {
-			return "", streamLostFailure(deps.DeployID)
+			return wire.DoneEvent{}, streamLostFailure(deps.DeployID)
 		}
 		if attempt >= streamReconnectAttempts {
-			return "", streamLostFailure(deps.DeployID)
+			return wire.DoneEvent{}, streamLostFailure(deps.DeployID)
 		}
 	}
 }
@@ -324,7 +324,7 @@ func streamReconnectDelay(attempt int, step time.Duration) time.Duration {
 // end of input, a connection that stopped talking — is a connection to be
 // picked up again, and err says which so the caller can tell a refusal
 // apart from a broken pipe.
-func readStream(ctx context.Context, deps streamDeps, run *streamRun) (status wire.DeployStatus, finished bool, err error) {
+func readStream(ctx context.Context, deps streamDeps, run *streamRun) (done wire.DoneEvent, finished bool, err error) {
 	reqCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -343,7 +343,7 @@ func readStream(ctx context.Context, deps streamDeps, run *streamRun) (status wi
 
 	body, err := deps.Events(reqCtx)
 	if err != nil {
-		return "", false, err
+		return wire.DoneEvent{}, false, err
 	}
 	defer func() { _ = body.Close() }()
 
@@ -380,23 +380,23 @@ func readStream(ctx context.Context, deps streamDeps, run *streamRun) (status wi
 
 	seen := 0
 	readErr := scanEvents(reader, func(name, data string) bool {
-		st, terminal := renderEvent(deps, name, data, &seen, run)
+		ev, terminal := renderEvent(deps, name, data, &seen, run)
 		if terminal {
-			status, finished = st, true
+			done, finished = ev, true
 		}
 		return terminal
 	})
 	if finished {
-		return status, true, nil
+		return done, true, nil
 	}
 	// A PARTIAL FINAL LINE CANNOT COMPLETE AN EVENT — dispatch needs the
 	// blank line that follows it — so there is nothing to salvage, and
 	// the ending is reported with its cause so the caller can tell a
 	// stall from an ordinary end of input.
 	if cause := context.Cause(reqCtx); cause != nil && !errors.Is(cause, context.Canceled) {
-		return "", false, cause
+		return wire.DoneEvent{}, false, cause
 	}
-	return "", false, readErr
+	return wire.DoneEvent{}, false, readErr
 }
 
 // scanEvents reads event-stream frames off r and hands each dispatched
@@ -501,7 +501,7 @@ func scanEvents(r *bufio.Reader, deliver func(name, data string) (stop bool)) er
 // answer with one half missing is one the caller has to remember the
 // other half of — which is the caller keeping this function's state for
 // it.
-func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) (wire.DeployStatus, bool) {
+func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) (wire.DoneEvent, bool) {
 	render := deps.Render
 	switch wire.EventType(name) {
 	case wire.EventLog:
@@ -519,11 +519,11 @@ func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) 
 		// event that does render absorbs it.
 		*seen++
 		if *seen <= run.shown {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		var ev wire.LogEvent
 		if json.Unmarshal([]byte(data), &ev) != nil {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		run.shown = *seen
 		run.lastLine = ev.Line
@@ -535,7 +535,7 @@ func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) 
 		// sign.
 		render.Result("%s", ev.Line)
 		deps.Progress(run.lastPhase, ev.Line)
-		return "", false
+		return wire.DoneEvent{}, false
 
 	case wire.EventError:
 		// Counted before it is decoded, for the reason above: it is
@@ -543,11 +543,11 @@ func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) 
 		// contain rather than about what this client managed to read.
 		*seen++
 		if *seen <= run.shown {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		var ev wire.Error
 		if json.Unmarshal([]byte(data), &ev) != nil {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		run.shown = *seen
 		// IT GOES TO STDOUT WITH THE REST OF THE LOG, because that is
@@ -558,19 +558,19 @@ func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) 
 		run.lastLine = line
 		render.Result("%s", line)
 		deps.Progress(run.lastPhase, line)
-		return "", false
+		return wire.DoneEvent{}, false
 
 	case wire.EventPhase:
 		var ev wire.PhaseEvent
 		if json.Unmarshal([]byte(data), &ev) != nil {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		// NOT COUNTED, because it is not persisted — see streamBuild. It
 		// is suppressed while a replay is still catching up so a
 		// reconnection does not narrate the build's history a second
 		// time.
 		if *seen < run.shown {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		// AND THE TALLY ALONE IS NOT ENOUGH AT THE BOUNDARY. A cut
 		// falling immediately after a phase leaves the replay arriving
@@ -587,17 +587,17 @@ func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) 
 		// replay shape: the evicted path carries no phase events at all,
 		// so a phase tally would still be zero when a new phase arrived.
 		if ev.Phase == run.lastPhase {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		run.lastPhase = ev.Phase
 		render.Step("%s%s.", phaseNarration, string(ev.Phase))
 		deps.Progress(ev.Phase, run.lastLine)
-		return "", false
+		return wire.DoneEvent{}, false
 
 	case wire.EventDone:
 		var ev wire.DoneEvent
 		if json.Unmarshal([]byte(data), &ev) != nil {
-			return "", false
+			return wire.DoneEvent{}, false
 		}
 		// NO REPORT FOR THE TERMINAL EVENT, deliberately. Progress
 		// narrates a run that is still going; this one says it is over,
@@ -605,14 +605,14 @@ func renderEvent(deps streamDeps, name, data string, seen *int, run *streamRun) 
 		// arrives before any notification could, and carries the status
 		// rather than a phase that does not exist.
 		render.Step("%s%s.", finishedNarration, string(ev.Status))
-		return ev.Status, true
+		return ev, true
 	}
 
 	// AN EVENT TYPE THIS BUILD PREDATES IS SKIPPED, and the stream keeps
 	// reading. That is what makes the vocabulary additive: a client built
 	// before a type existed must ignore it rather than treat the stream
 	// as corrupt.
-	return "", false
+	return wire.DoneEvent{}, false
 }
 
 // errorLine is how a diagnostic reads on the log. The code goes beside
@@ -714,17 +714,73 @@ func streamLostFailure(deployID string) error {
 }
 
 // buildFailedFailure is what a build the server says failed ends the run
-// as. The log the user has just watched IS the explanation, so this says
-// where to look rather than inventing a reason of its own.
-func buildFailedFailure() error {
-	return ui.NewFailure(
-		ui.IDBuildFailed,
-		ui.StageBuilding,
-		"The build failed.",
-		"The server ran the build and it did not finish. What went wrong is in\n"+
-			"the log above rather than here, and it is a problem in the project\n"+
-			"rather than in curious or the service.", ui.NextFreshDeploy,
-		"Fix what the log reports, then run `curious deploy` again.")
+// as, and WHICH ending depends on whose fault the server says it was.
+//
+// IT USED TO BE ONE ENDING AND IT WAS WRONG. The single copy told the
+// reader that what went wrong "is a problem in the project rather than in
+// curious or the service", and then said so on a deploy where the service
+// had refused to create the build session: the server never ran a build,
+// there was no log, and the fault was entirely ours. The person was sent
+// to fix a project that was fine.
+//
+// That was not a wording problem, so it did not get a wording fix. The
+// client had no way to know which had happened, and a sentence hedged
+// enough to be true in both cases would have told nobody anything. The
+// server now says, and this branches on what it says.
+//
+// THE DEFAULT BRANCH IS THE POINT OF THE OTHER TWO. An origin this
+// client does not recognise — including the empty one a server older
+// than the field sends — must accuse NEITHER side. An unrecognised value
+// treated as the project's fault would reproduce the original defect
+// against every origin added after this client shipped, which is the
+// failure mode an additive contract makes certain rather than likely.
+func buildFailedFailure(origin wire.FailureOrigin) error {
+	switch origin {
+	case wire.OriginProject:
+		// UNCHANGED, because for this origin it was always true. The log
+		// the person just watched IS the explanation, so this says where
+		// to look rather than inventing a reason of its own.
+		return ui.NewFailure(
+			ui.IDBuildFailed,
+			ui.StageBuilding,
+			"The build failed.",
+			"The server ran the build and it did not finish. What went wrong is in\n"+
+				"the log above rather than here, and it is a problem in the project\n"+
+				"rather than in curious or the service.", ui.NextFreshDeploy,
+			"Fix what the log reports, then run `curious deploy` again.")
+
+	case wire.OriginService:
+		// IT MAY NOT SEND ANYONE TO THE LOG. The case that minted this
+		// branch produced no log at all, because the build never ran —
+		// so "what went wrong is in the log above" would be a second
+		// false sentence replacing the first.
+		return ui.NewFailure(
+			ui.IDBuildServiceFault,
+			ui.StageBuilding,
+			"curious could not run the build.",
+			"This one is ours. The service failed before or during your build, so\n"+
+				"there may be nothing above that explains it — and there is nothing\n"+
+				"to fix in your project. Your files were fine when they got here.", ui.NextWait,
+			"Wait a few minutes and run `curious deploy` again. If it keeps\n"+
+				"happening, report it and quote the deploy id above.")
+
+	default:
+		// UNSTATED, OR A VALUE THIS BUILD PREDATES — and the two are one
+		// branch because a client cannot tell them apart in any way that
+		// changes what it should say. What it knows is that the build
+		// ended failed; what it does not know is whose fault that was,
+		// and the copy says exactly that much.
+		return ui.NewFailure(
+			ui.IDBuildFailedUnexplained,
+			ui.StageBuilding,
+			"The build did not finish.",
+			"The server reported the build as failed without saying what caused\n"+
+				"it, so curious cannot tell you whether the problem is in your\n"+
+				"project or in the service. This copy of curious may be older than\n"+
+				"the server.", ui.NextFreshDeploy,
+			"Read the log above if there is anything in it, then run\n"+
+				"`curious deploy` again. Updating curious may give a clearer answer.")
+	}
 }
 
 // streamProgress reports every read that moved bytes, so the stall

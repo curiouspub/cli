@@ -145,6 +145,20 @@
     },
     {
       "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
+        "building": "The build did not finish."
+      },
+      "headline_reason": {},
+      "id": "build-failed-unexplained",
+      "stages": [
+        "building"
+      ]
+    },
+    {
+      "action": [
         "Wait"
       ],
       "family": null,
@@ -167,6 +181,20 @@
       },
       "headline_reason": {},
       "id": "build-output-refused",
+      "stages": [
+        "building"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
+        "building": "curious could not run the build."
+      },
+      "headline_reason": {},
+      "id": "build-service-fault",
       "stages": [
         "building"
       ]

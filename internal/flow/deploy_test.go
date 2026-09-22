@@ -980,8 +980,21 @@ func errorFrame(code wire.ErrorCode, message string) string {
 	return rawFrame(string(wire.EventError), string(data))
 }
 
+// doneFrame sends the done event WITHOUT an origin key, which is not an
+// omission: it is what every server older than that field sends, so every
+// row using this helper is also a test that such a server still works.
+// doneFrameWithOrigin is the one that states an attribution.
 func doneFrame(status wire.DeployStatus) string {
 	return rawFrame(string(wire.EventDone), `{"status":"`+string(status)+`"}`)
+}
+
+// doneFrameWithOrigin sends a done event that attributes a failure. The
+// origin is interpolated as given rather than typed, so a row can send a
+// value this build does not declare — which is the case a released client
+// actually meets once the server adds one.
+func doneFrameWithOrigin(status wire.DeployStatus, origin string) string {
+	return rawFrame(string(wire.EventDone),
+		`{"status":"`+string(status)+`","origin":"`+origin+`"}`)
 }
 
 // eventConnections is how many times the stream was opened.

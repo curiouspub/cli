@@ -595,7 +595,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	// A FAILURE HERE IS NOT A FAILED BUILD, and the copy each ending
 	// carries keeps them apart: the build is running on the server and
 	// this is only the window onto it.
-	status, err := streamBuild(ctx, streamDeps{
+	done, err := streamBuild(ctx, streamDeps{
 		Events: func(ctx context.Context) (io.ReadCloser, error) {
 			return authed.DeployEvents(ctx, resp.DeployID)
 		},
@@ -608,13 +608,13 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	if err != nil {
 		return nil, carryingDeployID(err, resp.DeployID)
 	}
-	if status == wire.StatusFailed {
+	if done.Status == wire.StatusFailed {
 		// THE ONLY VALUE THIS CLIENT ACTS ON, and it acts on it by
 		// stopping. Everything else continues, including a value this
 		// build predates — the stream is a narrator rather than an
 		// authority, and what the output validator makes of the build is
 		// a question for the next call rather than for this one.
-		return nil, carryingDeployID(buildFailedFailure(), resp.DeployID)
+		return nil, carryingDeployID(buildFailedFailure(done.Origin), resp.DeployID)
 	}
 
 	// 12. THE PUBLISH, AND THE LAST LINE OF THE COMMAND.

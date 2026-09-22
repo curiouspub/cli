@@ -219,6 +219,8 @@ func TestEveryExportedStructIsGoldenTested(t *testing.T) {
 		"DeployStatus": "TestEveryDeployStatusConstantIsPinned + TestAllDeployStatusesEnumeratesEveryConstant",
 		"Phase":        "TestEveryPhaseConstantIsPinned + TestAllPhasesEnumeratesEveryConstant",
 		"EventType":    "TestEveryEventTypeConstantIsPinned + TestAllEventTypesEnumeratesEveryConstant",
+		"FailureOrigin": "TestEveryFailureOriginConstantIsPinned + " +
+			"TestAllFailureOriginsEnumeratesEveryConstant",
 	}
 	nonStruct := declaredNonStructTypes(t)
 	for name := range nonStruct {
@@ -659,6 +661,7 @@ func TestEveryExportedVarIsGuarded(t *testing.T) {
 		"AllDeployStatuses": "TestAllDeployStatusesEnumeratesEveryConstant pins it against the declared DeployStatus constants, and TestAllDeployStatusesOrder pins its order",
 		"AllPhases":         "TestAllPhasesEnumeratesEveryConstant pins it against the declared Phase constants, and TestAllPhasesOrder pins its order",
 		"AllEventTypes":     "TestAllEventTypesEnumeratesEveryConstant pins it against the declared EventType constants, and TestAllEventTypesOrder pins its order",
+		"AllFailureOrigins": "TestAllFailureOriginsEnumeratesEveryConstant pins it against the declared FailureOrigin constants, and TestAllFailureOriginsOrder pins its order",
 	}
 
 	declared := declaredExportedVars(t)
@@ -766,6 +769,7 @@ type classifiedConstants struct {
 	deployStatuses map[string]string
 	phases         map[string]string
 	eventTypes     map[string]string
+	failureOrigins map[string]string
 	limits         map[string]int64
 }
 
@@ -806,6 +810,7 @@ func classifyExportedConstants(t *testing.T) classifiedConstants {
 		deployStatuses: map[string]string{},
 		phases:         map[string]string{},
 		eventTypes:     map[string]string{},
+		failureOrigins: map[string]string{},
 		limits:         map[string]int64{},
 	}
 	for _, f := range parseSources(t) {
@@ -902,6 +907,10 @@ func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast
 		if s, ok := stringLitValue(t, name, lit); ok {
 			out.eventTypes[name] = s
 		}
+	case "FailureOrigin":
+		if s, ok := stringLitValue(t, name, lit); ok {
+			out.failureOrigins[name] = s
+		}
 	case "":
 		// No declared type and no conversion. The only classifiable shape
 		// left is an untyped INTEGER literal — the shape every limit
@@ -923,10 +932,11 @@ func classifyOneConstant(t *testing.T, name string, declType ast.Expr, value ast
 		}
 		t.Errorf("exported constant %s has no declared type and is not a plain limit "+
 			"integer — it belongs to no known vocabulary (ErrorCode, DeployStatus, Phase, "+
-			"EventType, or a limit constant) and must not sit in the contract unowned", name)
+			"EventType, FailureOrigin, or a limit constant) and must not sit in the "+
+			"contract unowned", name)
 	default:
 		t.Errorf("exported constant %s is declared as %s, which is none of ErrorCode, "+
-			"DeployStatus, Phase or EventType — add a partition for it in "+
+			"DeployStatus, Phase, EventType or FailureOrigin — add a partition for it in "+
 			"classifyOneConstant before it enters the frozen contract", name, typeName)
 	}
 }
@@ -959,6 +969,13 @@ func declaredErrorCodeValues(t *testing.T) map[string]string {
 func declaredDeployStatusValues(t *testing.T) map[string]string {
 	t.Helper()
 	return classifyExportedConstants(t).deployStatuses
+}
+
+// declaredFailureOriginValues returns the FailureOrigin partition of
+// classifyExportedConstants.
+func declaredFailureOriginValues(t *testing.T) map[string]string {
+	t.Helper()
+	return classifyExportedConstants(t).failureOrigins
 }
 
 // declaredPhaseValues returns the Phase partition of
@@ -1044,4 +1061,81 @@ func declaredNonStructTypes(t *testing.T) map[string]bool {
 		}
 	}
 	return out
+}
+
+// TestEveryFailureOriginConstantIsPinned mirrors
+// TestEveryDeployStatusConstantIsPinned for FailureOrigin: it parses
+// wire.go and asserts the set of declared FailureOrigin constants is
+// exactly the set pinned below.
+//
+// THE EMPTY VALUE IS PINNED LIKE ANY OTHER, and that is the entry worth
+// looking at twice. OriginUnstated is the zero value, so it is also what
+// every server older than this field produces and what every consumer
+// meets first. If someone later gave it a spelling — "unknown", say —
+// every such server would start decoding to a value no longer equal to
+// OriginUnstated, and the branch meant to catch them would stop catching
+// them. The blank string is load-bearing, so it is pinned.
+func TestEveryFailureOriginConstantIsPinned(t *testing.T) {
+	pinned := map[string]string{
+		"OriginUnstated": "",
+		"OriginProject":  "project",
+		"OriginService":  "service",
+	}
+
+	declared := declaredFailureOriginValues(t)
+
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("FailureOrigin constant %s (= %q) is declared in wire.go but not pinned "+
+				"by a test — the exported IDENTIFIER is public API of this module just as "+
+				"the string value is", name, value)
+			continue
+		}
+		if value != want {
+			t.Errorf("FailureOrigin constant %s = %q, want %q — changing a shipped value "+
+				"breaks every client already branching on it, and these values decide "+
+				"who gets blamed for a failed build", name, value, want)
+		}
+	}
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("FailureOrigin constant %s is pinned by tests but no longer declared "+
+				"in wire.go — removing or renaming it is a breaking change within v1", name)
+		}
+	}
+}
+
+// TestAllFailureOriginsEnumeratesEveryConstant mirrors
+// TestAllDeployStatusesEnumeratesEveryConstant: AllFailureOrigins must
+// list exactly the declared FailureOrigin constants, once each. Set check
+// only — TestAllFailureOriginsOrder in wire_test.go pins the order.
+func TestAllFailureOriginsEnumeratesEveryConstant(t *testing.T) {
+	declared := declaredFailureOriginValues(t)
+
+	listed := map[string]bool{}
+	for _, origin := range AllFailureOrigins {
+		if listed[string(origin)] {
+			t.Errorf("AllFailureOrigins lists %q more than once — a consumer ranging the "+
+				"set would handle it twice, and a duplicate can hide a missing entry "+
+				"from a length check", origin)
+		}
+		listed[string(origin)] = true
+	}
+
+	declaredValues := valueSet(declared)
+	for value := range declaredValues {
+		if !listed[value] {
+			t.Errorf("FailureOrigin %q is declared in wire.go but missing from "+
+				"AllFailureOrigins — add it in the same commit as the constant, or every "+
+				"consumer that ranges the set is blind to it", value)
+		}
+	}
+	for value := range listed {
+		if !declaredValues[value] {
+			t.Errorf("AllFailureOrigins contains %q, which is not declared as an exported "+
+				"constant in wire.go — the enumeration may only name origins the contract "+
+				"actually defines", value)
+		}
+	}
 }

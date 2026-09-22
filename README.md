@@ -327,6 +327,12 @@ to send it.
 
 > The build failed.
 
+### build-failed-unexplained
+
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> The build did not finish.
+
 ### build-log-lost
 
 **build log.** A person is watching the build log stream in while the build runs.
@@ -338,6 +344,12 @@ to send it.
 **building.** A person is waiting while the server builds the project and decides whether to take the result.
 
 > The build finished, and the server would not take the result.
+
+### build-service-fault
+
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> curious could not run the build.
 
 ### capacity-check-failed
 
