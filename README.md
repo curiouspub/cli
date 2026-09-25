@@ -13,11 +13,20 @@ want to know exactly what the client sends and receives, read
 [`pkg/wire`](./pkg/wire). That's the point of this repo existing in
 public.
 
-## Status: released, and the platform is running
+## Status: testing, open, limited
 
-Two facts, and they used to point in different directions. They no longer
-do, and this section moved on the day that changed rather than some time
-afterwards.
+curious.pub is **testing, open, limited**. Those three words are the whole
+of its state, and every page that describes the product uses them:
+
+- **Testing.** The whole loop works for anyone who runs it, and it is
+  young: it can change, and it can break. There is no uptime figure and
+  no service-level promise.
+- **Open.** Nobody needs an invitation. Anyone can log in and deploy.
+- **Limited.** New accounts are capped each day, and a trial site is kept
+  for a limited time after its last deploy.
+
+Under the phrase, two facts. They used to point in different directions;
+they no longer do.
 
 **The command line tool is released — `v0.1.0` — and installs today.**
 `npx curiouspub version`, `npm install -g curiouspub` and the Homebrew
@@ -100,8 +109,8 @@ and it tells you what is wrong before it reaches anything.
 
 **These work today.** `v0.1.0` is published, and each command below was
 run against the real registry and the real tap before this section was
-written. What they get you is the tool; what the tool cannot do yet is
-deploy, for the reason under "Status" above.
+written. What they get you is the tool, and the tool deploys: "Status"
+above says what that means today.
 
 The npm wrapper lives under [`npm/`](./npm) — a package that fetches the
 release build for your platform. Its own [README](./npm/README.md) has
