@@ -49,6 +49,24 @@ const (
 	platformCapacityLine = "**Capacity opens daily to a limited number of accounts**"
 )
 
+// productStatePhrase is the product's state, as one phrase. The project
+// defines it once and every public page that describes the product
+// carries it word for word; this page is one of them. It is required
+// whenever the platform is open, beside the two sentences above, and the
+// sentences the pages used before it are required ABSENT.
+const productStatePhrase = "testing, open, limited"
+
+// contradictingStatePhrases are sentences that said the opposite of the
+// phrase, from this page and from the product's other public pages, before
+// the state was made one phrase. Any one of them back on this page is a
+// page telling a reader two different things.
+var contradictingStatePhrases = []string{
+	"private beta",
+	"not open for signup",
+	"closed testing",
+	"what the tool cannot do yet is deploy",
+}
+
 // conditionalPlatformPhrases are the forms the page used while the platform
 // was not running. Their ABSENCE is required once it is — a page that says
 // both is worse than one that says the wrong one, because a reader believes
@@ -110,10 +128,15 @@ func TestTheReadmesPlatformHalfMatchesTheRecordedCapacity(t *testing.T) {
 		return
 	}
 
-	for _, want := range []string{platformRunningClaim, platformCapacityLine} {
+	for _, want := range []string{productStatePhrase, platformRunningClaim, platformCapacityLine} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("the recorded capacity is open (%d accounts left, resetting %s) and README.md "+
 				"does not carry %q", capacity.AccountsLeft, capacity.ResetsAt.Format("2006-01-02T15:04:05Z"), want)
+		}
+	}
+	for _, phrase := range contradictingStatePhrases {
+		if strings.Contains(readme, phrase) {
+			t.Errorf("README.md says %q, which contradicts the product's state, %q", phrase, productStatePhrase)
 		}
 	}
 	for _, phrase := range conditionalPlatformPhrases {
@@ -139,7 +162,7 @@ func TestTheReadmesPlatformHalfMatchesTheRecordedCapacity(t *testing.T) {
 // The readmecontract rows learned this: a check with only one live branch
 // is a check that has never been observed to refuse anything.
 func TestThePlatformRuleIsOneDirectional(t *testing.T) {
-	running := "…" + platformRunningClaim + " … " + platformCapacityLine + " …"
+	running := "… " + productStatePhrase + " … " + platformRunningClaim + " … " + platformCapacityLine + " …"
 	notRunning := "… the platform it deploys to is not running yet …"
 
 	cases := map[string]struct {
@@ -151,6 +174,8 @@ func TestThePlatformRuleIsOneDirectional(t *testing.T) {
 		"conditional page, open platform":   {true, notRunning, true},
 		"open page, closed platform":        {false, running, true},
 		"conditional page, closed platform": {false, notRunning, false},
+		"open page without the phrase":      {true, strings.Replace(running, productStatePhrase, "", 1), true},
+		"open page, contradicted":           {true, running + " private beta …", true},
 	}
 
 	for name, c := range cases {
@@ -179,7 +204,14 @@ func platformCopyDisagrees(open bool, readme string) bool {
 	if !open {
 		return !carriesConditional
 	}
-	return carriesConditional ||
+	contradicted := false
+	for _, phrase := range contradictingStatePhrases {
+		if strings.Contains(readme, phrase) {
+			contradicted = true
+		}
+	}
+	return carriesConditional || contradicted ||
+		!strings.Contains(readme, productStatePhrase) ||
 		!strings.Contains(readme, platformRunningClaim) ||
 		!strings.Contains(readme, platformCapacityLine)
 }
