@@ -635,7 +635,15 @@ func errorLine(ev wire.Error) string {
 // the user is waiting for arrives on the build log. A client that answers
 // silence by starting again is asking the one surface with nothing left
 // to tell it.
-func startFailure(err error) error {
+//
+// A RATE LIMIT IS THE ONE REFUSAL WITH A TIME IN IT, and the time is used
+// rather than dropped. The server answers `rate_limited` here for two
+// limits, a day's builds and one build at a time, and names in
+// Retry-After when the same run would be let through: the next reset for
+// the first, the end of the running build's lease for the second. Its
+// message says which. The copy differs from the create's in one fact: by
+// now the archive HAS been uploaded, so this run cannot claim otherwise.
+func startFailure(err error, now time.Time) error {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return ui.NewFailure(
@@ -658,6 +666,16 @@ func startFailure(err error) error {
 			"curious.pub is not building right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
+	}
+
+	if apiErr.Code == wire.CodeRateLimited {
+		return ui.Quoted(
+			ui.IDRateLimited,
+			ui.StageBuilding,
+			"The server won't start this build yet.",
+			apiErr.Message, ui.NextWait,
+			"Run `curious deploy` again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+". "+
+				"The archive was uploaded,\nand nothing has been built or deployed.")
 	}
 
 	// EVERY OTHER CODE ENDS THE RUN THE SAME WAY, so there is no routing

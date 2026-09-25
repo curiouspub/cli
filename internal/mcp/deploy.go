@@ -108,7 +108,10 @@ func deploySiteDescription() string {
 			"and tell the user about the ones that matter.\n\n"+
 			"The server reports the site's expiry on publish, so it is in the answer rather "+
 			"than worked out here. Rate limits are reported by the server with a time to "+
-			"retry after. A login is needed first; see %s.\n\n"+
+			"retry after. An account has a daily build limit and runs one build at a time; "+
+			"a deploy refused by either comes back as a rate limit naming when it lifts, "+
+			"and nothing is built. Waiting until then is the only fix. "+
+			"A login is needed first; see %s.\n\n"+
 			"The address starts answering a little after the deploy is published, so opening "+
 			"it immediately may show a placeholder page.",
 		wire.MaxSourceFiles, wire.MaxSourceFileBytes, wire.MaxSourceTotalBytes,

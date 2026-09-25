@@ -596,6 +596,10 @@ inside it.
 
 > The server is asking for a pause.
 
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> The server won't start this build yet.
+
 **deploys.** A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.
 
 > Too many requests from here.

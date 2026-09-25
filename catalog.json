@@ -646,6 +646,7 @@
       "family": null,
       "headline": {
         "addresses": "The server is asking for a pause.",
+        "building": "The server won't start this build yet.",
         "deploys": "Too many requests from here.",
         "logins": "Too many requests from here."
       },
@@ -653,6 +654,7 @@
       "id": "rate-limited",
       "stages": [
         "addresses",
+        "building",
         "deploys",
         "logins"
       ]
