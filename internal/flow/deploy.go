@@ -586,7 +586,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	// renders like any other.
 	startResp, err := authed.DeployStart(ctx, resp.DeployID)
 	if err != nil {
-		return nil, carryingDeployID(startFailure(err), resp.DeployID)
+		return nil, carryingDeployID(startFailure(err, now()), resp.DeployID)
 	}
 	deps.Prompt.Step("%s%s.", startNarration, string(startResp.Status))
 

@@ -212,8 +212,9 @@ func TestTheOtherTwoRefusalBranchesKeepTheirOwnFamilies(t *testing.T) {
 // which means something outside this run must change first, contradicted
 // a sentence naming the minute the run may be repeated.
 //
-// THE ROW IS BOTH CALLERS, because the defect was that two of the three
-// disagreed with the third: publish already waited.
+// THE ROW IS EVERY CALLER, because the defect was that two of the three
+// disagreed with the third: publish already waited. The start joined it
+// when the server began answering it with a rate limit.
 func TestRateLimitingWaitsEverywhere(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	apiErr := &api.APIError{Code: wire.CodeRateLimited,
@@ -224,13 +225,21 @@ func TestRateLimitingWaitsEverywhere(t *testing.T) {
 			"which is the whole reason this action is Wait")
 	}
 
+	// The start's copy differs from the other two in one fact: by then the
+	// archive has been uploaded, so it cannot say nothing was.
+	const beforeAnyUpload = "Try again after 12:01 UTC (+00:00) — in about 2 minutes. " +
+		"Nothing has been uploaded and nothing has been deployed."
 	for _, tc := range []struct {
-		name string
-		err  error
+		name     string
+		err      error
+		wantNext string
 	}{
-		{"at the create", createStopFailure(apiErr, now)},
+		{"at the create", createStopFailure(apiErr, now), beforeAnyUpload},
 		{"at the login", stopFailure(t.Context(), apiErr,
-			LoginDeps{Endpoint: "https://api.example"}, "someone@example.com", now)},
+			LoginDeps{Endpoint: "https://api.example"}, "someone@example.com", now), beforeAnyUpload},
+		{"at the start", startFailure(apiErr, now),
+			"Run `curious deploy` again after 12:01 UTC (+00:00) — in about 2 minutes. " +
+				"The archive was uploaded,\nand nothing has been built or deployed."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var f *ui.Failure
@@ -245,9 +254,8 @@ func TestRateLimitingWaitsEverywhere(t *testing.T) {
 					"may be tried again, and GiveUp means it never can be",
 					f.Next, ui.NextWait)
 			}
-			if want := "Try again after 12:01 UTC (+00:00) — in about 2 minutes. " +
-				"Nothing has been uploaded and nothing has been deployed."; f.NextText != want {
-				t.Errorf("next-step copy = %q, want %q", f.NextText, want)
+			if f.NextText != tc.wantNext {
+				t.Errorf("next-step copy = %q, want %q", f.NextText, tc.wantNext)
 			}
 		})
 	}
@@ -280,7 +288,7 @@ func TestAnAnswerThisBuildCannotReadWaits(t *testing.T) {
 		{"at the publish", publishStopFailure(unknown, "dpl-abc", now),
 			"Try again in a moment. If it keeps happening, updating curious may\n" +
 				"help — this build may be older than the server."},
-		{"at the start", startFailure(unknown),
+		{"at the start", startFailure(unknown, now),
 			"Try again in a moment. If it keeps happening, updating curious may\n" +
 				"help — this build may be older than the server."},
 		{"at the stream", streamRefusedFailure(unknown),
