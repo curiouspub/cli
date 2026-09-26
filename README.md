@@ -69,7 +69,7 @@ What exists here today:
   deploy was published and tells you what to do if you get there first.
 
 Capacity opens in small daily batches. If today's is full, the tool says
-so and offers the waitlist; you can also write to [hello -a- curious.pub].
+so and offers the waitlist; you can also write to support at curious.pub.
 
 ## What this is
 
@@ -825,7 +825,7 @@ Anything else names what stopped it.
 Early days and a small team, so issues are welcome, PRs may wait, and
 the protocol itself changes only through the platform's design process.
 If you've found a security issue, mail
-[abuse -a- curious.pub] instead of opening an
+abuse at curious.pub instead of opening an
 issue.
 
 ## License

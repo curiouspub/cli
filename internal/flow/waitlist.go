@@ -56,7 +56,10 @@ const (
 // for the reason every other piece of copy here does: an address typed
 // into a string is an address that exists in two places the next time
 // anybody needs it, and the two spellings are then one typo apart.
-const supportAddress = "hello@curious.pub"
+//
+// It is written out in words, as it is everywhere this project names an
+// address, and a guard holds every published file to that one form.
+const supportAddress = "support at curious.pub"
 
 // NewWaitlistOffer builds the hand-off the login flow calls when the
 // account cap closes at the moment an account would be spent.
