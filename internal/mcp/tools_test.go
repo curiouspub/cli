@@ -1396,8 +1396,8 @@ func TestTheIdReachesTheAgentSurface(t *testing.T) {
 	// reader who learns the phrase in one place should find it in the
 	// other, and two copies of a label are two strings that agree on the
 	// day they are written.
-	if !strings.Contains(said, ui.FailureIDLine(ui.IDDeployNotCompletedByServer)) {
+	if !strings.Contains(said, ui.FailureIDLine(ui.IDServerFault)) {
 		t.Errorf("the refusal does not name the family this publish refusal "+
-			"belongs to (%s):\n%s", ui.IDDeployNotCompletedByServer, said)
+			"belongs to (%s):\n%s", ui.IDServerFault, said)
 	}
 }

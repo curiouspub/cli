@@ -622,7 +622,25 @@ func errorLine(ev wire.Error) string {
 	if ev.Code == "" {
 		return errorNarration + ev.Message
 	}
-	return errorNarration + ev.Message + " (" + string(ev.Code) + ")"
+	return errorNarration + ev.Message + " (" + errorSide(ev.Code) + ")"
+}
+
+// errorSide is the bracket on a diagnostic line. For the three codes that
+// say how a build stopped it names the side the stop belongs to, in words,
+// because the bare code for a project's own failure used to read as the
+// service's. Every other code is shown as it was sent: it is the half a
+// bug report can be searched for, and a code this build predates is shown
+// rather than guessed at.
+func errorSide(code wire.ErrorCode) string {
+	switch code {
+	case wire.CodeBuildFailed:
+		return "in the project's build"
+	case wire.CodeLimitReached:
+		return "a platform limit on builds"
+	case wire.CodeInternal:
+		return "on curious.pub's side"
+	}
+	return string(code)
 }
 
 // startFailure is what a start that did not succeed ends the run as.
@@ -676,6 +694,18 @@ func startFailure(err error, now time.Time) error {
 			apiErr.Message, ui.NextWait,
 			"Run `curious deploy` again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+". "+
 				"The archive was uploaded,\nand nothing has been built or deployed.")
+	}
+
+	if apiErr.Code == wire.CodeInternal {
+		// The server failed while starting the build, and its own message
+		// says to try again. The archive is still where it was uploaded.
+		return ui.Quoted(
+			ui.IDServerFault,
+			ui.StageBuilding,
+			"The server hit a problem starting the build.",
+			apiErr.Message, ui.NextWait,
+			"Try again in a moment. The archive was uploaded, and nothing has\n"+
+				"been built or deployed.")
 	}
 
 	// EVERY OTHER CODE ENDS THE RUN THE SAME WAY, so there is no routing

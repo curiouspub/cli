@@ -37,6 +37,7 @@ import (
 func TestEveryExportedFuncIsGuarded(t *testing.T) {
 	covered := map[string]string{
 		"CarriesRetryAfter": "TestCarriesRetryAfterIsPinned pins its answer for every code in AllErrorCodes",
+		"StreamOnly":        "TestStreamOnlyIsPinned pins its answer for every code in AllErrorCodes",
 	}
 
 	declared := map[string]bool{}

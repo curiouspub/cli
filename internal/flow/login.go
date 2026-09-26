@@ -248,6 +248,15 @@ var errorRouting = map[wire.ErrorCode]verifyRoute{
 	// The account cap closed between whatever checked it and here.
 	wire.CodeCapacityClosed: routeStop,
 
+	// NOT REACHABLE FROM A LOGIN. Two say how a build stopped and travel
+	// only on the build's event stream; the third is the publish step's
+	// full store. Stated because this table is keyed to the contract's
+	// list, and a code with no entry would be answered by a fallback
+	// nobody chose.
+	wire.CodeBuildFailed:  routeStop,
+	wire.CodeLimitReached: routeStop,
+	wire.CodeStoreFull:    routeStop,
+
 	// The kill switch. Worth retrying later, and carrying no reset the
 	// server can honestly name — which is exactly why the contract's own
 	// predicate is about a header rather than about retryability.

@@ -687,6 +687,24 @@
       ],
       "family": null,
       "headline": {
+        "addresses": "The server hit a problem finishing the deploy.",
+        "building": "The server hit a problem starting the build.",
+        "deploys": "The server hit a problem starting the deploy."
+      },
+      "headline_reason": {},
+      "id": "server-fault",
+      "stages": [
+        "addresses",
+        "building",
+        "deploys"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
         "addresses": "curious didn't hear back after asking for the deploy's address.",
         "building": "curious didn't hear back after asking the server to build.",
         "deploys": "curious didn't hear back after asking for somewhere to upload."
