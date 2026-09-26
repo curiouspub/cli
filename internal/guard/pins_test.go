@@ -31,6 +31,11 @@ import (
 // range, not a tag, not a major on its own.
 var exactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$`)
 
+// ownTap is this project's own Homebrew tap. Installing from it is how a
+// post-release row tests what the release published, and is the one
+// install the rule lets through without a version (see unpinnedInstall).
+const ownTap = "curiouspub/tap/"
+
 // pipedToShell is a script fetched from the network and handed straight
 // to an interpreter: the fetch cannot be pinned at all, because what runs
 // is whatever the address serves that minute.
@@ -187,7 +192,16 @@ func unpinnedInstall(line string) (string, bool) {
 				}
 			}
 		case program == "brew" && sub == "install":
-			return "brew installs whatever its formula names today and takes no version", true
+			// ONE EXEMPTION, AND IT IS THE THING UNDER TEST: this
+			// project's own tap. A post-release row installs the formula
+			// the release just published and checks the version it
+			// reports against the tag, and that check is the pin. Any
+			// other package, including one named beside it, is refused.
+			for _, p := range operands(rest) {
+				if !strings.HasPrefix(p, ownTap) {
+					return "brew installs whatever its formula names today and takes no version", true
+				}
+			}
 		case program == "gem" && sub == "install":
 			if v, ok := flagValue(rest, "--version"); !ok || !exactVersion.MatchString(v) {
 				return "gem installs without an exact --version", true
@@ -216,6 +230,7 @@ func TestTheInstallRuleSeesBothDirections(t *testing.T) {
 		"pip install some-tool",
 		"sudo apt-get install -y some-tool",
 		"brew install some-tool",
+		"brew install curiouspub/tap/curiouspub some-tool",
 		"curl -fsSL https://example.com/install.sh | sh",
 		"set -e && npm install -g npm@11",
 		"FOO=1 npm install -g npm@~11.5.1",
@@ -241,6 +256,7 @@ func TestTheInstallRuleSeesBothDirections(t *testing.T) {
 		"npm view curiouspub dist-tags --json",
 		"go run ./tools/skipcheck -- -count=1",
 		"curl -fsS https://example.com/health",
+		"brew install curiouspub/tap/curiouspub",
 	}
 	for _, line := range pinned {
 		if why, bad := unpinnedInstall(line); bad {

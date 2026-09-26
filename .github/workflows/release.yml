@@ -169,6 +169,69 @@ jobs:
           # The next job reads it within minutes. Nothing else ever should.
           retention-days: 1
 
+  # THE HOMEBREW FORMULA, WRITTEN HERE AND NOT BY THE RELEASE TOOL. The
+  # tool's formula block is deprecated and its own validator refuses it,
+  # and that validator is a gate this repository keeps green. So a small
+  # program in this repository writes the formula from the checksum file
+  # this run produced, and this job pushes it to the tap.
+  #
+  # THE CHECKSUMS COME FROM THIS RUN, as they do for the npm wrapper: the
+  # publish job hands them over as an artefact, and nothing here reads the
+  # release. Each platform's archive is pinned by the sha256 the release
+  # itself computed.
+  #
+  # Reviewed like the other jobs that change something outside this
+  # repository: it writes to the tap, and that is public the moment it
+  # lands.
+  formula:
+    name: write the Homebrew formula
+    needs: publish
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: checksums
+          path: dist
+
+      - name: write the formula from this run's checksums
+        run: >
+          go run ./tools/formula
+          -version "${GITHUB_REF_NAME#v}"
+          -checksums dist/checksums.txt
+          -download-base "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          -homepage "https://curious.pub/"
+          -desc "Pack an Astro project, upload it, and stream the build"
+          -out curiouspub.rb
+
+      # The tap, checked out with the one credential that can write to it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: curiouspub/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: publish the formula to the tap
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          cp curiouspub.rb tap/Formula/curiouspub.rb
+          cd tap
+          git config user.name "curious release"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/curiouspub.rb
+          git commit -m "curiouspub ${GITHUB_REF_NAME}"
+          git push
+
   # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under
   # trusted publishing the identity token IS the registry credential, so
   # putting this step in the job above would place the ability to publish
