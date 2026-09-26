@@ -30,7 +30,7 @@ they no longer do.
 
 **The command line tool is released — `v0.1.0` — and installs today.**
 `npx curiouspub version`, `npm install -g curiouspub` and the Homebrew
-cask all work; the binaries and their checksums are on the release, and
+formula all work; the binaries and their checksums are on the release, and
 the checksum file is signed.
 
 **The platform it deploys to is running.** `curious deploy` runs the
@@ -132,16 +132,16 @@ npm install -g curiouspub   # install the `curious` command
 The package is `curiouspub` and the command is `curious`. They are
 different names on purpose.
 
-On macOS:
+With Homebrew, on macOS or Linux:
 
 ```
-brew install curiouspub/tap/curious
+brew install curiouspub/tap/curiouspub
 ```
 
-The tap ships a cask rather than a formula — this project ships
-prebuilt binaries, and a cask is the supported shape for that — which
-means it installs on macOS only. Everywhere else, take the npm wrapper
-or a binary from Releases.
+The formula installs the prebuilt binary for your platform, each archive
+pinned to the sha256 in the release's own checksum file. No `brew tap`
+is needed first. The older cask, `curious`, is deprecated: it still
+installs for one release, says so when it does, and is then removed.
 
 **A binary from Releases, verified before you run it.** Download the
 archive for your platform and `checksums.txt` from the same release,

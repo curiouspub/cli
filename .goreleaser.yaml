@@ -170,18 +170,19 @@ signs:
 # repository or fails outright. Failing outright is the right direction —
 # a release that half-happened is worse than one that did not.
 #
-# A CASK RATHER THAN A FORMULA, and it is a measurement rather than a
-# preference. The formula block this was first written as is deprecated:
-# the release tool's own validator refuses the configuration outright
-# (v2.18.1, measured 2026-09-07), so the gate cannot be green while it is
-# spelled that way. The cask is the supported spelling for a project that
-# ships prebuilt binaries rather than source.
+# THE CASK IS ON ITS LAST RELEASE. The tap's channel is now a FORMULA,
+# `curiouspub`, written by the release workflow's formula job from this
+# run's checksum file (tools/formula), and installable on macOS and Linux.
 #
-# WHAT THAT COSTS, said plainly rather than discovered: a cask installs
-# on macOS only. Somebody running the package manager on Linux can no
-# longer install from this tap and takes the archive or the wrapper
-# instead. That is a narrowing of who the tap serves, and it is a
-# consequence of the tool's deprecation rather than a choice made here.
+# A cask was chosen first because the release tool's formula block is
+# deprecated and its own validator refuses a configuration that uses one.
+# That is still true, and it is why the formula is not written here: the
+# validator stays a gate. What a cask cost was Linux, where it does not
+# install, and a post-install hook the package manager has since
+# deprecated; a formula carries neither cost.
+#
+# This block ships once more, carrying a caveat that points at the
+# formula, and is removed in the release after.
 homebrew_casks:
   - name: curious
     binaries: [curious]
@@ -201,6 +202,11 @@ homebrew_casks:
     homepage: https://curious.pub/
     description: Pack an Astro project, upload it, and stream the build
     license: MIT
+    caveats: |
+      This cask is deprecated and is removed in the next release.
+      Install the formula instead, which also works on Linux:
+        brew uninstall --cask curious
+        brew install curiouspub/tap/curiouspub
     hooks:
       post:
         # An unsigned binary downloaded by the package manager is
