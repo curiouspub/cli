@@ -371,14 +371,17 @@ func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 }
 
 // wrapperPublishActions is the list this job's design claims, written
-// out because the claim is the exact two and not the namespace.
+// out because the claim is the exact three and not the namespace.
 //
 // checkout, because the package files are in the tree; setup-node,
 // because publishing needs a newer package manager than the wrapper's
-// own floor. Widening this list is an edit to this file, in the diff
-// that wants it, which is the only way a reader ever sees the question
-// asked.
-var wrapperPublishActions = []string{"actions/checkout", "actions/setup-node"}
+// own floor; download-artifact, because the checksum table is built
+// from a file the job before this one hands over inside the run, and
+// never from the release, whose assets can be replaced between the two
+// jobs by anyone with write access. Widening this list is an edit to
+// this file, in the diff that wants it, which is the only way a reader
+// ever sees the question asked. The third entry arrived that way.
+var wrapperPublishActions = []string{"actions/checkout", "actions/download-artifact", "actions/setup-node"}
 
 // TestThePublishJobRunsNobodyElsesCode states the property the split
 // between the two publishing jobs exists to buy, and checks it.
@@ -386,7 +389,7 @@ var wrapperPublishActions = []string{"actions/checkout", "actions/setup-node"}
 // Under credential-free publishing the identity token IS the registry
 // credential. The job that builds the release runs a full Go build and
 // three actions from outside the actions organisation; this one runs
-// two, both from inside it. That is the whole reason there are two
+// three, all from inside it. That is the whole reason there are two
 // jobs, and it is a property nothing else in the tree records.
 //
 // THE NAMESPACE WAS A SILHOUETTE. Asking only whether each action came

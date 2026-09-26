@@ -114,9 +114,13 @@ checksum:
 # running rather than by reading. The tool's own summary of a snapshot
 # says it skips announcing, publishing and validation — signing is not on
 # that list, and a snapshot with no signing tool installed fails at the
-# last step (v2.18.1, measured 2026-09-07). The pull-request check
-# therefore asks for the signing stage to be skipped explicitly, in the
-# Makefile target it runs, where the reason is written down.
+# last step (v2.18.1, measured 2026-09-07). The pull-request check does
+# not skip it either: it signs, with a key pair generated in the job, as
+# the paragraphs below describe. The only build that skips the stage is a
+# local one on a machine without the signer, and the Makefile target says
+# so when it does. This paragraph used to say the pull-request check
+# skipped signing, which stopped being true when the key pair arrived and
+# contradicted the paragraphs below it until it was corrected.
 #
 # THE RESIDUE THIS PARAGRAPH USED TO NAME IS THE DEFECT THAT CAME DUE, so
 # it is recorded as history rather than deleted. It said: nothing

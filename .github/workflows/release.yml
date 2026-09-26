@@ -153,6 +153,22 @@ jobs:
           # more than a tap write.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+      # THE CHECKSUMS LEAVE THIS JOB AS A RUN ARTEFACT, and the wrapper job
+      # below takes them from here rather than from the release. A release
+      # asset can be replaced by anyone holding write access to the
+      # repository, between this job ending and the next one starting; an
+      # artefact of this run can only be written by this run. The table the
+      # package ships is what every installer verifies a download against,
+      # so its source is the one thing in the chain that must not be a
+      # network read of something mutable.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checksums
+          path: dist/checksums.txt
+          if-no-files-found: error
+          # The next job reads it within minutes. Nothing else ever should.
+          retention-days: 1
+
   # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under
   # trusted publishing the identity token IS the registry credential, so
   # putting this step in the job above would place the ability to publish
@@ -161,10 +177,21 @@ jobs:
   # least-privilege claim true rather than merely stated.
   #
   # ITS OWN ACTION LIST, written out rather than claimed to be empty:
-  # actions/checkout, because the package files are in the tree, and
+  # actions/checkout, because the package files are in the tree;
   # actions/setup-node, because publishing needs a newer package manager
-  # than the wrapper's own floor. Both pinned, both from the actions
-  # organisation, and no code fetched at run time.
+  # than the wrapper's own floor; and actions/download-artifact, because
+  # the checksums arrive from the job above inside this run. All three
+  # pinned, all three from the actions organisation.
+  #
+  # ONE FETCH IN A RUN STEP, PINNED AND VERIFIED, and this sentence used to
+  # say there were none. The package manager a credential-free publish
+  # needs is installed from the registry at an exact version, and the step
+  # after it refuses anything but that version. An exact version on that
+  # registry is immutable once published, so the bytes are fixed; the
+  # range this line once named was resolved afresh on every release, inside
+  # the job that holds the publish identity. Node is an exact version too,
+  # and for the same reason: A JOB THAT HOLDS A CREDENTIAL RESOLVES
+  # NOTHING FROM A RANGE.
   #
   # NO REGISTRY SECRET EXISTS. The job proves its identity with the token
   # the runner mints for it, so there is nothing here to leak, rotate or
@@ -212,51 +239,45 @@ jobs:
       # looks.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # The floor the package itself declares, so this is not a
-          # second place the version lives.
-          node-version-file: npm/package.json
+          # EXACT, NOT THE PACKAGE'S FLOOR. The floor is a range, and a
+          # range resolves to whatever is newest on the morning of the
+          # release, inside the job that holds the publish identity. This
+          # is the Node the publish runs on, not the one a user installs
+          # with; the package's own floor still says that, and the gate
+          # tests both ends of it.
+          node-version: 24.21.0
 
-      # ENSURED, NOT HOPED FOR. The version below is a floor this job
-      # needs and nothing here chooses: it arrives bundled with whatever
-      # Node the package's own declared floor resolves to, and that
-      # resolution follows Node's release train rather than any decision
-      # in this repository. Measured on one run of the gate: the resolved
-      # Node shipped a package manager comfortably past this floor, while
-      # the two ends of the same run's matrix sat on either side of it.
-      # Installing it explicitly is what turns the check below from the
-      # thing that DISCOVERS a too-old package manager — inside the job
-      # that runs after the tag is already public — into the row that
-      # proves a new enough one is present.
+      # EXACT, AND CHECKED. A credential-free publish needs a package
+      # manager of at least 11.5.1, which is newer than the one the Node
+      # above bundles. It is installed at one exact version, never a
+      # range: a range is resolved at run time, and this job holds the
+      # identity the registry accepts as this package's publisher.
       - name: install the package manager this publish needs
-        run: npm install -g npm@^11.5.1
+        run: npm install -g npm@11.20.0
 
       # TWO DIFFERENT NUMBERS WITH TWO DIFFERENT REASONS. The package
       # declares the package manager a person installing it needs; this
       # is the one a credential-free publish needs, which is newer and is
       # nobody's business but this job's.
-      - name: the package manager here can publish without a credential
+      - name: the package manager here is the one installed above
         run: |
           set -euo pipefail
-          need=11.5.1
+          want=11.20.0
           have="$(npm --version)"
-          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
-            echo "::error::publishing without a stored credential needs npm >= ${need}; this runner has ${have}"
+          if [ "$have" != "$want" ]; then
+            echo "::error::this publish runs on npm ${want}, the version installed above; this runner has ${have}"
             exit 1
           fi
           echo "npm ${have}"
 
-      # The digests come from the run that just built the binaries, over
-      # the release it just made. gh is on the runner image, so this
-      # fetches data and never code.
-      - name: take the checksums from the release this run produced
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh release download "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern checksums.txt \
-            --dir dist
+      # FROM THIS RUN, NEVER FROM THE RELEASE. The job above hands the file
+      # over as an artefact of this run; this job makes no network read of
+      # the release at all, so nothing that happens to a release asset
+      # between the two jobs can reach the table the package ships.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: checksums
+          path: dist
 
       # The only thing that holds the tag, the package version and every
       # key of the shipped table to the same number.

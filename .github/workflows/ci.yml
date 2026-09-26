@@ -113,10 +113,16 @@ jobs:
       # This is setup, like setup-go above it, so the rule that `make ci`
       # is the single entry point is unaffected: CI still runs that and
       # nothing else.
+      #
+      # AT AN EXACT VERSION, like everything a workflow here installs. An
+      # unversioned install takes whatever the package manager's feed
+      # offers that morning, so two runs of one commit could build with
+      # different tools and neither would say so. 4.4.1 is the version
+      # this line installed unpinned when it was first measured.
       - name: Install GNU Make (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install make -y --no-progress
+        run: choco install make --version=4.4.1 -y --no-progress
 
       - name: make ci
         shell: bash
