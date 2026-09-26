@@ -159,6 +159,44 @@ const (
 	// a build has left.
 	CodeDeployFailed   ErrorCode = "deploy_failed"
 	CodeDeployNotReady ErrorCode = "deploy_not_ready"
+
+	// CodeBuildFailed and CodeLimitReached are what the deploy event
+	// stream's `error` event says when a build stops, and each agrees with
+	// the FailureOrigin its terminal `done` event carries. There are three
+	// origins and three codes: CodeInternal for the service, and these two
+	// for the other two sides.
+	//
+	// They exist because one code for every stopped build said the wrong
+	// thing two times in three. An error line reading `internal` beside a
+	// done event reading `project` told a person the service had broken
+	// when their own build had stopped it, and the right action (read the
+	// log, fix the project) is the opposite of the one `internal` implies
+	// (wait, try again).
+	//
+	// CodeBuildFailed means THE PROJECT'S OWN BUILD STOPPED: installing its
+	// dependencies or building it failed, and the log is the explanation.
+	// It never means the service failed.
+	//
+	// CodeLimitReached means A PLATFORM LIMIT STOPPED THE BUILD: today, the
+	// time one build is allowed. The person can act, and trying again
+	// unchanged will reach the same limit. That pair is OriginLimit's, and
+	// this code carries it onto the error line.
+	//
+	// BOTH ARE STREAM-ONLY: see StreamOnly. No HTTP response carries them.
+	CodeBuildFailed  ErrorCode = "build_failed"
+	CodeLimitReached ErrorCode = "limit_reached"
+
+	// CodeStoreFull means the store the platform publishes sites through
+	// is full, so this deploy cannot be published now. It is the service's
+	// to fix, and trying again will not help until someone has, so a
+	// client should not advise it. It carries no Retry-After: a full store
+	// is not a window that reopens at a time anyone can name.
+	//
+	// It is a code of its own because the answer it replaces, CodeInternal,
+	// also carried "something went wrong, please try again", so the same
+	// code carried opposite advice. A client could only tell them apart by
+	// reading the message, which this contract refuses to make anyone do.
+	CodeStoreFull ErrorCode = "store_full"
 )
 
 // AllErrorCodes is every ErrorCode this contract defines, in declaration
@@ -185,6 +223,9 @@ var AllErrorCodes = []ErrorCode{
 	CodeInternal,
 	CodeDeployFailed,
 	CodeDeployNotReady,
+	CodeBuildFailed,
+	CodeLimitReached,
+	CodeStoreFull,
 }
 
 // retryAfterCodes is the set behind CarriesRetryAfter. It is unexported
@@ -193,6 +234,25 @@ var AllErrorCodes = []ErrorCode{
 var retryAfterCodes = map[ErrorCode]bool{
 	CodeRateLimited:    true, // token bucket: retry after the bucket refills
 	CodeCapacityClosed: true, // daily account cap: retry after resets_at
+}
+
+// streamOnlyCodes is the set behind StreamOnly, unexported for the reason
+// retryAfterCodes is: an exported map is mutable by any importer.
+var streamOnlyCodes = map[ErrorCode]bool{
+	CodeBuildFailed:  true,
+	CodeLimitReached: true,
+}
+
+// StreamOnly reports whether code is carried only by the deploy event
+// stream's `error` event and never by an HTTP /v1 response. A server
+// holds itself to this: such a code has no HTTP status, and no HTTP path
+// may write one. A client can rely on never meeting one in an HTTP error
+// body.
+//
+// An unknown code reports false: a code this contract does not define
+// carries no obligation.
+func StreamOnly(code ErrorCode) bool {
+	return streamOnlyCodes[code]
 }
 
 // CarriesRetryAfter reports whether an HTTP /v1 response using code

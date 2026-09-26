@@ -626,17 +626,43 @@ func TestEachRefusalHasItsOwnCopyAndItsOwnCost(t *testing.T) {
 				"Try again a little later."},
 		},
 		{
-			name: "the server could not complete it",
-			outcome: fails(http.StatusInternalServerError, wire.CodeInternal,
-				"curious.pub is at capacity and cannot do this right now. This is "+
-					"ours to fix, not something you need to retry."),
+			name: "the store sites are published through is full",
+			outcome: fails(http.StatusServiceUnavailable, wire.CodeStoreFull,
+				"curious.pub is at capacity and cannot publish this site right now. "+
+					"This is ours to fix, not something you need to retry."),
 			wantCode: 1,
 			says: []string{"The server couldn't finish the deploy.",
-				"ours to fix", "deploy-1", nothingDeployed},
+				"ours to fix", "deploy-1", nothingDeployed, "nothing here worth retrying"},
 			// The server has already said not to retry. Advice to the
 			// contrary, printed directly underneath it, is this client
 			// contradicting the sentence above it.
 			neverSay: []string{"Try again"},
+		},
+		{
+			// REQUIRED MUTATION: restore "nothing here worth retrying" on
+			// this code, and this row reds on its neverSay.
+			name: "the server failed, and says to try again",
+			outcome: fails(http.StatusInternalServerError, wire.CodeInternal,
+				"Something went wrong on our end. Please try again."),
+			wantCode: 1,
+			says: []string{"The server hit a problem finishing the deploy.",
+				"Please try again", "deploy-1", nothingDeployed, "Try again in a moment"},
+			// The server said to try again. Saying there is nothing worth
+			// retrying, directly under that, is the contradiction this
+			// code's split exists to end.
+			neverSay: []string{"worth retrying"},
+		},
+		{
+			name:     "a stream-only code, which no publish can carry",
+			outcome:  fails(http.StatusInternalServerError, wire.CodeBuildFailed, "not a publish answer"),
+			wantCode: 1,
+			says:     []string{"The server wouldn't give this deploy an address.", "deploy-1"},
+		},
+		{
+			name:     "the other stream-only code",
+			outcome:  fails(http.StatusInternalServerError, wire.CodeLimitReached, "not a publish answer"),
+			wantCode: 1,
+			says:     []string{"The server wouldn't give this deploy an address.", "deploy-1"},
 		},
 		{
 			name: "a code this build predates",

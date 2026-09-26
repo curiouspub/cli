@@ -50,6 +50,10 @@ const (
 	IDClientRequestRejected    FailureID = "client-request-rejected"
 	IDFreshLoginRefused        FailureID = "fresh-login-refused"
 	IDServerAnswerUnrecognised FailureID = "server-answer-unrecognised"
+	// The server failed while handling a request and says to try again.
+	// One family at every stage that meets it: the diagnosis (theirs, and
+	// transient) and the remedy (try again in a moment) are the same.
+	IDServerFault FailureID = "server-fault"
 
 	// This machine, before anything is sent.
 	IDProjectDirUnknown        FailureID = "project-dir-unknown"
@@ -149,6 +153,7 @@ var ActiveFailureIDs = []FailureID{
 	IDServerUnanswered, IDServiceUnavailable, IDCapacityCheckUnreachable,
 	IDCapacityCheckFailed, IDDailyCapacityClosed, IDRateLimited,
 	IDClientRequestRejected, IDFreshLoginRefused, IDServerAnswerUnrecognised,
+	IDServerFault,
 
 	IDProjectDirUnknown, IDProjectDirMissing, IDProjectDirUnreadable,
 	IDProjectPathNotADirectory, IDProjectUnreadable, IDConfigLocationUnusable,

@@ -97,6 +97,11 @@ var createRouting = map[wire.ErrorCode]createRoute{
 	// fallback nobody chose.
 	wire.CodeDeployFailed:   createStop,
 	wire.CodeDeployNotReady: createStop,
+	// Not reachable from this call either: two travel only on a build's
+	// event stream, and the third is the publish step's full store.
+	wire.CodeBuildFailed:  createStop,
+	wire.CodeLimitReached: createStop,
+	wire.CodeStoreFull:    createStop,
 }
 
 // deployCreator is the slice of the API client this step needs. It is
@@ -237,6 +242,18 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 			"Too many requests from here.",
 			apiErr.Message, ui.NextWait,
 			retryAdvice(apiErr.RetryAfter, now))
+
+	case wire.CodeInternal:
+		// The server failed while taking the deploy, and its own message
+		// says to try again. Every path that answers this here is a read
+		// or a write on the server's side failing, and none of them is a
+		// verdict on the project.
+		return ui.Quoted(
+			ui.IDServerFault,
+			ui.StageDeploys,
+			"The server hit a problem starting the deploy.",
+			apiErr.Message, ui.NextWait,
+			"Try again in a moment. "+uploadedNothing)
 
 	case wire.CodeBadRequest:
 		// The declared size disagrees with a limit this server keeps,

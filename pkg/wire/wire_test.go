@@ -88,6 +88,18 @@ func goldenCases() []goldenCase {
 			newEmpty: func() any { return &ErrorResponse{} },
 		},
 		{
+			// The deploy event stream's `error` event is a bare wire.Error
+			// (see DoneEvent's doc), so a stream-only code is pinned in the
+			// shape the stream actually carries it.
+			name:    "ErrorEventBuildFailed",
+			fixture: "error_event_build_failed.json",
+			value: &Error{
+				Code:    CodeBuildFailed,
+				Message: "building the site failed",
+			},
+			newEmpty: func() any { return &Error{} },
+		},
+		{
 			name:    "CapacityResponse",
 			fixture: "capacity_response.json",
 			value: &CapacityResponse{
@@ -384,6 +396,7 @@ func TestAllErrorCodesOrder(t *testing.T) {
 		"bad_request", "unauthorized", "forbidden", "not_found",
 		"rate_limited", "capacity_closed", "maintenance", "internal",
 		"deploy_failed", "deploy_not_ready",
+		"build_failed", "limit_reached", "store_full",
 	}
 	if !reflect.DeepEqual(AllErrorCodes, want) {
 		t.Fatalf("AllErrorCodes = %v, want %v — declaration order, as its doc states", AllErrorCodes, want)
@@ -407,10 +420,15 @@ func TestErrorCodeConstants(t *testing.T) {
 		{CodeCapacityClosed, "capacity_closed"},
 		{CodeMaintenance, "maintenance"},
 		{CodeInternal, "internal"},
+		{CodeDeployFailed, "deploy_failed"},
+		{CodeDeployNotReady, "deploy_not_ready"},
+		{CodeBuildFailed, "build_failed"},
+		{CodeLimitReached, "limit_reached"},
+		{CodeStoreFull, "store_full"},
 	}
 
-	if len(cases) != 8 {
-		t.Fatalf("expected 8 error code constants to be tested, got %d — update this test if the set changed", len(cases))
+	if len(cases) != len(AllErrorCodes) {
+		t.Fatalf("expected %d error code constants to be tested, got %d — update this test if the set changed", len(AllErrorCodes), len(cases))
 	}
 
 	for _, tc := range cases {

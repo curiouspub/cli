@@ -215,9 +215,17 @@ var publishRouting = map[wire.ErrorCode]publishRoute{
 	// The kill switch. The service declined; the build is fine.
 	wire.CodeMaintenance: publishStop,
 
-	// The server could not complete it — including the at-capacity case,
-	// whose own message says it is theirs to fix and not to retry.
+	// The server failed, and its message says to try again.
 	wire.CodeInternal: publishStop,
+
+	// The store sites are published through is full: the service's to
+	// fix, and trying again will not help until it has.
+	wire.CodeStoreFull: publishStop,
+
+	// Not reachable from this call: both travel only on a build's event
+	// stream.
+	wire.CodeBuildFailed:  publishStop,
+	wire.CodeLimitReached: publishStop,
 
 	// DECLARED, NOT REACHABLE from this endpoint by anything this client
 	// can produce. Every one of them is stated because the table is
@@ -540,19 +548,31 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 			nothingDeployed, ui.NextWait,
 			"Try again a little later.").Quoting(apiErr.Message))
 
-	case wire.CodeInternal:
-		// NO RETRY ADVICE. The server's own message for the case this
-		// code most often carries says in terms that it is theirs to fix
-		// and not something to retry, and copy telling somebody to try
-		// again anyway would be this client contradicting the sentence
-		// printed directly above it.
+	case wire.CodeStoreFull:
+		// NO RETRY ADVICE. The store sites are published through is full,
+		// which is the service's to fix, and trying again changes nothing
+		// until it has. This used to arrive as internal, beside a second
+		// internal that said the opposite; it has its own code so this
+		// copy never has to tell the two apart by their wording.
 		return ui.NewFailure(
 			ui.IDDeployNotCompletedByServer,
 			ui.StageAddresses,
 			"The server couldn't finish the deploy.",
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextGiveUp,
-			"There is nothing to fix at this end and nothing here worth retrying.\n"+
-				"If it keeps happening, please get in touch.").Quoting(apiErr.Message)
+			"curious.pub is at capacity and cannot publish sites right now. There is\n"+
+				"nothing to fix at this end and nothing here worth retrying. If it keeps\n"+
+				"happening, please get in touch.").Quoting(apiErr.Message)
+
+	case wire.CodeInternal:
+		// The server failed, and its own message says to try again, so
+		// this copy says the same. The full-store case that used to share
+		// this code has its own now.
+		return ui.NewFailure(
+			ui.IDServerFault,
+			ui.StageAddresses,
+			"The server hit a problem finishing the deploy.",
+			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
+			"Try again in a moment: run `curious deploy` again.").Quoting(apiErr.Message)
 	}
 
 	// Routed to a stop with no copy of its own, or a code this build

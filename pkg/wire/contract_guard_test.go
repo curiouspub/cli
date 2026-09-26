@@ -257,6 +257,9 @@ func TestEveryErrorCodeConstantIsPinned(t *testing.T) {
 		"CodeInternal":       "internal",
 		"CodeDeployFailed":   "deploy_failed",
 		"CodeDeployNotReady": "deploy_not_ready",
+		"CodeBuildFailed":    "build_failed",
+		"CodeLimitReached":   "limit_reached",
+		"CodeStoreFull":      "store_full",
 	}
 
 	declared := declaredErrorCodeValues(t)
@@ -611,6 +614,12 @@ func TestCarriesRetryAfterIsPinned(t *testing.T) {
 		// would sleep on it and report a failure at the wrong moment.
 		CodeDeployFailed:   false,
 		CodeDeployNotReady: false,
+		// Stream-only: an SSE event has no headers to carry one.
+		CodeBuildFailed:  false,
+		CodeLimitReached: false,
+		// A full store reopens when someone empties it, at no time the
+		// server can name.
+		CodeStoreFull: false,
 	}
 
 	listed := map[ErrorCode]bool{}
@@ -1138,5 +1147,47 @@ func TestAllFailureOriginsEnumeratesEveryConstant(t *testing.T) {
 				"constant in wire.go — the enumeration may only name origins the contract "+
 				"actually defines", value)
 		}
+	}
+}
+
+// TestStreamOnlyIsPinned states, for every code in the contract, whether it
+// is carried only by the event stream. A released server and client both
+// act on this answer: a server gives such a code no HTTP status, and a
+// client never expects one in an HTTP body. So it is a decision per code,
+// not a default, and a code missing from this table fails.
+func TestStreamOnlyIsPinned(t *testing.T) {
+	pinned := map[ErrorCode]bool{
+		CodeBadRequest:     false,
+		CodeUnauthorized:   false,
+		CodeForbidden:      false,
+		CodeNotFound:       false,
+		CodeRateLimited:    false,
+		CodeCapacityClosed: false,
+		CodeMaintenance:    false,
+		// Internal is both: an HTTP answer, and the stream's code for a
+		// service-side failure.
+		CodeInternal:       false,
+		CodeDeployFailed:   false,
+		CodeDeployNotReady: false,
+		CodeBuildFailed:    true,
+		CodeLimitReached:   true,
+		CodeStoreFull:      false,
+	}
+	for _, code := range AllErrorCodes {
+		want, stated := pinned[code]
+		if !stated {
+			t.Errorf("ErrorCode %q has no entry in this table — whether a code is stream-only is "+
+				"a decision a server and a client both act on", code)
+			continue
+		}
+		if got := StreamOnly(code); got != want {
+			t.Errorf("StreamOnly(%q) = %v, want %v", code, got, want)
+		}
+	}
+	if StreamOnly("a-code-this-contract-does-not-define") {
+		t.Error("StreamOnly reports true for an unknown code, which carries no obligation")
+	}
+	if CarriesRetryAfter(CodeBuildFailed) || CarriesRetryAfter(CodeLimitReached) {
+		t.Error("a stream-only code claims a Retry-After, which only an HTTP response can carry")
 	}
 }

@@ -630,6 +630,20 @@ inside it.
 
 > curious couldn't finish logging you in.
 
+### server-fault
+
+**addresses.** A person is waiting for a finished deploy to be given its public address.
+
+> The server hit a problem finishing the deploy.
+
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> The server hit a problem starting the build.
+
+**deploys.** A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.
+
+> The server hit a problem starting the deploy.
+
 ### server-unanswered
 
 **addresses.** A person is waiting for a finished deploy to be given its public address.
