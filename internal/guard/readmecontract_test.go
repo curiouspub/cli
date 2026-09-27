@@ -1389,3 +1389,61 @@ func TestSpellingRuleIsPresentInCLAUDEMd(t *testing.T) {
 		t.Errorf("cli/CLAUDE.md does not carry the spelling rule %q", spellingRuleSentence)
 	}
 }
+
+// readmeVersion is how the README names a released version: a
+// v-prefixed MAJOR.MINOR.PATCH in code quotes.
+var readmeVersion = regexp.MustCompile("`v([0-9]+\\.[0-9]+\\.[0-9]+)`")
+
+// TestTheReadmeNamesTheNewestRelease requires every version the README
+// names to be the newest final release reachable from this commit.
+//
+// IT LAGGED TWO RELEASES. The page said "`v0.1.0` is published" while
+// v0.1.1 and v0.1.2 were out, because nothing compared the sentence with
+// the tags; the rows above hold whether the page says ANYTHING is
+// published, and are satisfied by any release.
+//
+// THE COST, STATED: the row reds on the default branch from the moment a
+// new release is tagged until the README names it. That is the point —
+// a page that lags a release is wrong from the tag onward — and the
+// repair is one edit in the pull request that follows every release. A
+// tree with no release reachable must name no version at all, which is
+// the pre-release half's state.
+//
+// MUTATIONS RUN, performed and observed: the README naming the release
+// before the newest, and naming one not yet released, each red this row
+// and no other.
+func TestTheReadmeNamesTheNewestRelease(t *testing.T) {
+	root := moduleRoot(t)
+	pattern := releaseTagPattern(t, root)
+	newest := ""
+	for _, tag := range reachableReleaseTags(t, root) {
+		version, preRelease := releaseTagVersion(tag)
+		if !pattern.MatchString(tag) || preRelease {
+			continue
+		}
+		if newest == "" || !versionReached(version, newest) {
+			newest = version
+		}
+	}
+	var named []string
+	for _, m := range readmeVersion.FindAllStringSubmatch(readReadmeFile(t, root), -1) {
+		named = append(named, m[1])
+	}
+	if newest == "" {
+		if len(named) > 0 {
+			t.Errorf("no release is reachable from this commit, and README.md names %v", named)
+		}
+		return
+	}
+	if len(named) == 0 {
+		t.Errorf("v%s is the newest release reachable from this commit, and README.md names no "+
+			"version at all", newest)
+	}
+	for _, v := range named {
+		if v != newest {
+			t.Errorf("README.md names v%s, and the newest release reachable from this commit is "+
+				"v%s.\nA page that names an older release has lagged one; a page that names a "+
+				"newer one describes a release that has not happened.", v, newest)
+		}
+	}
+}

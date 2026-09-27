@@ -205,8 +205,10 @@ homebrew_casks:
     caveats: |
       This cask is deprecated and is removed in the next release.
       Install the formula instead, which also works on Linux:
-        brew uninstall --cask curious
-        brew install curiouspub/tap/curiouspub
+        brew uninstall --cask curious && brew install curiouspub/tap/curiouspub
+      If the formula is already installed, it was not linked while this
+      cask held the curious command. Remove the cask, then link it:
+        brew uninstall --cask curious && brew link curiouspub/tap/curiouspub
     hooks:
       post:
         # An unsigned binary downloaded by the package manager is

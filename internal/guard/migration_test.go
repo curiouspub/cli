@@ -1,0 +1,142 @@
+package guard
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The two ways off the older cask. Which one applies depends on whether
+// the formula is already installed, because while the cask is installed
+// it owns the command and the package manager installs the formula
+// without linking it.
+const (
+	migrateThenInstall = "brew uninstall --cask curious && brew install curiouspub/tap/curiouspub"
+	migrateThenLink    = "brew uninstall --cask curious && brew link curiouspub/tap/curiouspub"
+)
+
+// TestEveryCaskMigrationNamesBothCommands holds the three places a cask
+// user can meet the migration — the formula's caveats, the cask's own
+// caveat, and the README's install section — to naming both commands.
+//
+// IT WAS ONE COMMAND, AND ONE WAS WRONG FOR HALF THE READERS. The cask's
+// caveat said to uninstall it and install the formula. On a machine that
+// had already installed the formula over the cask, that leaves a formula
+// that was never linked — the cask owned the command at the time — and a
+// link to nothing once the cask is gone. The repair for that reader is to
+// link, not to install, and nothing told them so. It was found on a real
+// machine, by hand.
+//
+// THE FORMULA IS RENDERED, NOT READ. Its caveats are written by the tool
+// the release runs, so this row runs that tool against a fixture checksum
+// file and reads what it wrote. A row that searched the tool's source for
+// the two strings would pass for a string that is declared and never
+// printed.
+//
+// MUTATIONS RUN, performed and observed: dropping the link command from
+// each of the three places reds this row naming that place, and no other
+// row; so does removing the formula's caveats from the rendered output.
+func TestEveryCaskMigrationNamesBothCommands(t *testing.T) {
+	root := moduleRoot(t)
+	places := map[string]string{
+		"the formula's caveats":           renderedFormulaCaveats(t, root),
+		"the cask's caveat":               caskCaveat(t, root),
+		"the README's installing section": readmeSection(t, readReadmeFile(t, root), "## Installing it"),
+	}
+	for place, text := range places {
+		if strings.TrimSpace(text) == "" {
+			t.Errorf("%s could not be found, so this row read nothing there", place)
+			continue
+		}
+		for _, command := range []string{migrateThenInstall, migrateThenLink} {
+			if !strings.Contains(text, command) {
+				t.Errorf("%s does not name\n  %s\nA cask user meets the migration here, and "+
+					"which command they need depends on whether the formula is already "+
+					"installed — so both have to be written out.", place, command)
+			}
+		}
+	}
+}
+
+// renderedFormulaCaveats runs the release's formula tool against a
+// fixture and returns the caveats block of what it wrote.
+func renderedFormulaCaveats(t *testing.T, root string) string {
+	t.Helper()
+	gobin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("the go tool is not on PATH, and this row renders the formula with it: %v", err)
+	}
+	dir := t.TempDir()
+	const version = "9.9.9"
+	var sums strings.Builder
+	for i, p := range []string{"darwin_amd64", "darwin_arm64", "linux_amd64", "linux_arm64"} {
+		fmt.Fprintf(&sums, "%064x  curious_%s_%s.tar.gz\n", i+1, version, p)
+	}
+	checksums := filepath.Join(dir, "checksums.txt")
+	if err := os.WriteFile(checksums, []byte(sums.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "curiouspub.rb")
+	cmd := exec.Command(gobin, "run", "./tools/formula",
+		"-version", version, "-checksums", checksums,
+		"-download-base", "https://example.test/releases/download/v"+version,
+		"-homepage", "https://example.test", "-desc", "A fixture.", "-out", out)
+	cmd.Dir = root
+	if msg, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rendering the formula: %v\n%s", err, msg)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formula := string(data)
+	start := strings.Index(formula, "  def caveats\n")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(formula[start:], "\n  end\n")
+	if end < 0 {
+		return ""
+	}
+	return formula[start : start+end]
+}
+
+// caskCaveat returns the caveat the release configuration gives the cask:
+// the lines indented under its key.
+func caskCaveat(t *testing.T, root string) string {
+	t.Helper()
+	lines := strings.Split(readRepoFile(t, root, ".goreleaser.yaml"), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "caveats: |" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		var out []string
+		for _, next := range lines[i+1:] {
+			if strings.TrimSpace(next) != "" && len(next)-len(strings.TrimLeft(next, " ")) <= indent {
+				break
+			}
+			out = append(out, strings.TrimSpace(next))
+		}
+		return strings.Join(out, "\n")
+	}
+	return ""
+}
+
+// readmeSection returns the README from a heading to the next heading of
+// the same level.
+func readmeSection(t *testing.T, readme, heading string) string {
+	t.Helper()
+	start := strings.Index(readme, "\n"+heading+"\n")
+	if start < 0 {
+		return ""
+	}
+	rest := readme[start+1+len(heading):]
+	if next := strings.Index(rest, "\n## "); next >= 0 {
+		rest = rest[:next]
+	}
+	return rest
+}
