@@ -283,13 +283,19 @@ main() {
 	# exit carrying the string E404. Anything else non-zero is a question
 	# that was not answered, and keying on an error shape nobody has seen
 	# is how a tool learns to report absence for every kind of failure.
+	#
+	# THE READ IS LIVE. The client answers from a local cache unless told
+	# not to, and a cached answer printed here is a stale fact one screen
+	# above the decision to push a tag. It has happened: during one
+	# release the cache answered a missing package for one that existed,
+	# and an old newest version for one that had moved.
 	local tagsjson
 	rc=0
-	tagsjson="$(npm view "$PACKAGE" dist-tags --json 2>&1)" || rc=$?
+	tagsjson="$(npm view --prefer-online "$PACKAGE" dist-tags --json 2>&1)" || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		case "$tagsjson" in
 		*E404*) printf 'registry tags: the package is not published yet\n\n' ;;
-		*) undetermined "the registry tags" "npm view exited $rc: $tagsjson" ;;
+		*) undetermined "the registry tags" "the registry read exited $rc: $tagsjson" ;;
 		esac
 	else
 		printf 'registry tags:\n%s\n\n' "$tagsjson"

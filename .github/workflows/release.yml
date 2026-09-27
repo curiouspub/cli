@@ -232,6 +232,47 @@ jobs:
           git commit -m "curiouspub ${GITHUB_REF_NAME}"
           git push
 
+  # THE FORMULA INSTALLS ON LINUX, from a tap nobody added, and reports
+  # the version this tag released. It installs what strangers install,
+  # the way they install it, and publishes nothing and holds no
+  # credential, so it needs no reviewer.
+  #
+  # IT FOLLOWS THE FORMULA JOB, NOT THE WHOLE RUN. It used to be a separate
+  # workflow triggered by a successful Release run, and it was skipped on
+  # both releases that trigger saw: each run concluded as a failure because
+  # its package job went red, while the formula this check exists for had
+  # shipped. A red in an unrelated job said nothing about the formula, and
+  # the check never ran; both times it was dispatched by hand and passed.
+  # So it depends on the formula job alone. always() is what lets it run
+  # when another job in the run has failed, and the result test is what
+  # stops it running when the formula job itself did not succeed. A
+  # guard holds the condition to exactly that.
+  brew-linux:
+    name: the formula installs on Linux from a tap nobody added
+    needs: formula
+    if: always() && needs.formula.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The runner image carries the package manager but does not put it on
+      # PATH. No tap is added first: `brew install owner/tap/name` taps on
+      # its own, which is the path a stranger takes. The version the binary
+      # reports is checked against the tag, and that check is what pins an
+      # install that cannot name a version.
+      - name: install the formula and check the version it reports
+        run: |
+          set -euo pipefail
+          want="${GITHUB_REF_NAME#v}"
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew install curiouspub/tap/curiouspub
+          got="$(curious version)"
+          echo "$got"
+          case " $got " in
+            *" $want "*) echo "installed $want, as released" ;;
+            *) echo "::error::the formula installed '$got', and the release is $want"; exit 1 ;;
+          esac
+
   # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under
   # trusted publishing the identity token IS the registry credential, so
   # putting this step in the job above would place the ability to publish
@@ -362,23 +403,84 @@ jobs:
       # asked, on every release, and a disagreement fails the job rather
       # than shipping a package nobody can install by name.
       #
+      # IT POLLS, BECAUSE THE REGISTRY SAYS IT IS EVENTUAL. The publish
+      # itself prints that the package "may take a few minutes to become
+      # available", and a single read straight after it measures the
+      # registry before it has finished. Two releases went red that way
+      # over a correct publish: one read 2.3 seconds after, one 0.4
+      # seconds after, and the registry settled on its own in 54 and
+      # about 80 seconds. So it reads every 10 seconds for up to five
+      # minutes. The window is a number chosen past the two observations,
+      # not a measured bound, and the message at its end reports the
+      # window rather than asserting a fault.
+      #
+      # EVERY READ IS A LIVE READ. The client answers from a local cache
+      # unless told not to, and a cached answer looks exactly like a
+      # fresh one at the call site.
+      #
+      # IT ENDS ONE OF THREE WAYS, and says which, because "the pointer is
+      # wrong" and "the registry has not finished" need different people
+      # to do different things:
+      #   - the newest pointer names this version: pass, with the time it
+      #     took;
+      #   - the window ends and the registry still does not have this
+      #     version at all: the registry did not finish, and nothing here
+      #     is wrong yet;
+      #   - the window ends, the version is there, and the pointer names
+      #     another one: the original failure, and the only case where
+      #     moving the pointer by hand is the repair.
+      #
       # It cannot be two commands. The identity exchange happens inside
       # the publish and the credential it obtains lives in that process
       # only, so a second authenticated command in this job would have
-      # nothing to authenticate with.
+      # nothing to authenticate with. None of these reads authenticates.
       - name: the registry agrees about which version is newest
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          tags="$(npm view curiouspub dist-tags --json)"
-          echo "${tags}"
           node -e '
-            const [, wanted, raw] = process.argv;
-            const tags = JSON.parse(raw);
-            if (tags.latest !== wanted) {
-              console.error(`::error::the registry points at ${tags.latest}, not ${wanted}. ` +
-                `Move it by hand with one interactive login and npm dist-tag add.`);
+            const { execFileSync } = require("node:child_process");
+            const [, wanted, intervalSeconds, windowSeconds, ...client] = process.argv;
+            const interval = Number(intervalSeconds) * 1000;
+            const window = Number(windowSeconds) * 1000;
+            const read = (args) => execFileSync(client[0], [...client.slice(1), ...args],
+              { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+            const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+            (async () => {
+              const started = Date.now();
+              let last = "nothing yet";
+              for (;;) {
+                try {
+                  const tags = JSON.parse(read(["view", "--prefer-online", "curiouspub", "dist-tags", "--json"]));
+                  last = String(tags.latest);
+                  if (tags.latest === wanted) {
+                    const took = ((Date.now() - started) / 1000).toFixed(1);
+                    console.log(`the newest published version is ${wanted}, read ${took}s after the publish`);
+                    return;
+                  }
+                } catch (err) {
+                  last = `a failed read: ${String(err.message).split("\n")[0]}`;
+                }
+                if (Date.now() - started >= window) {
+                  break;
+                }
+                console.log(`the registry answers ${last}; reading again in ${intervalSeconds}s`);
+                await sleep(interval);
+              }
+              let present = false;
+              try {
+                present = read(["view", "--prefer-online", `curiouspub@${wanted}`, "version"]).trim() === wanted;
+              } catch (err) {
+                present = false;
+              }
+              if (present) {
+                console.error(`::error::the registry has ${wanted}, and its newest pointer names ${last}. ` +
+                  `Move it by hand with one interactive login and npm dist-tag add.`);
+              } else {
+                console.error(`::error::the registry did not finish publishing ${wanted} within ${windowSeconds}s; ` +
+                  `its newest pointer still answers ${last}. Nothing is known to be wrong yet: ` +
+                  `read it again before moving anything.`);
+              }
               process.exit(1);
-            }
-            console.log(`the newest published version is ${tags.latest}`);
-          ' "${version}" "${tags}"
+            })();
+          ' "${version}" 10 300 npm
