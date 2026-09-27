@@ -2554,3 +2554,114 @@ func TestTheCaskStepsTriggerWouldFire(t *testing.T) {
 			"never triggered at all.", got, want)
 	}
 }
+
+// linuxCheckJob is the release job that installs the formula on Linux.
+const linuxCheckJob = "brew-linux"
+
+// linuxCheckCondition is the whole of when that job runs, spelled as the
+// workflow must spell it.
+const linuxCheckCondition = "always() && needs.formula.result == 'success'"
+
+// TestTheLinuxCheckFollowsTheFormulaJobAlone holds the install check to
+// the one job whose output it checks.
+//
+// IT WAS SKIPPED ON BOTH RELEASES ITS FIRST TRIGGER SAW. It was a separate
+// workflow started by a SUCCESSFUL release run, and each of those runs
+// concluded as a failure because its package job went red — while the
+// formula it exists to check had shipped both times. The check never ran
+// on its own; it was dispatched by hand twice, and passed twice. A red in
+// an unrelated job is not a fact about the formula.
+//
+// So the job lives in the release, depends on the formula job and on
+// nothing else, and carries exactly one condition: always(), which lets it
+// run when some other job in the run has failed, and the formula job's
+// own result, which stops it when that job did not succeed. Each half
+// is the other's failure without it: without always() the first red
+// sibling skips it again, and without the result test it installs a
+// formula that was never written.
+//
+// It holds no deployment environment: it publishes nothing and holds no
+// credential, so there is nothing for a reviewer to approve, and an
+// approval it waited for would be one more way for it not to run.
+//
+// MUTATIONS RUN, performed and observed: dropping always(), widening the
+// dependency to the package job, and adding the reviewed environment
+// each red this row; a second workflow that installs the formula
+// reds it too, naming the file.
+func TestTheLinuxCheckFollowsTheFormulaJobAlone(t *testing.T) {
+	root := moduleRoot(t)
+	var check job
+	found := false
+	for _, j := range jobs(readYAMLLines(readRepoFile(t, root, releaseWorkflow))) {
+		if j.Name == linuxCheckJob {
+			check, found = j, true
+		}
+	}
+	if !found {
+		t.Fatalf("%s has no %q job, so nothing installs the formula a release writes and "+
+			"checks the version it reports", releaseWorkflow, linuxCheckJob)
+	}
+
+	// The job's own keys sit at the shallowest indent of its body; a key
+	// of the same name inside a step is not the job's.
+	depth := -1
+	for _, l := range check.Body {
+		if depth < 0 || l.Indent < depth {
+			depth = l.Indent
+		}
+	}
+	own := map[string]string{}
+	for _, l := range check.Body {
+		if l.Indent != depth {
+			continue
+		}
+		key, value, _ := strings.Cut(l.Text, ":")
+		own[key] = strings.TrimSpace(value)
+	}
+
+	if got := own["needs"]; got != "formula" {
+		t.Errorf("the %q job needs %q; it must need the formula job and nothing else.\n"+
+			"Any other dependency is another job whose red skips the check again.",
+			linuxCheckJob, got)
+	}
+	if got := own["if"]; got != linuxCheckCondition {
+		t.Errorf("the %q job runs if %q, want exactly %q.\n"+
+			"Without always() the first red job in the run skips it, which is how it never "+
+			"ran on the two releases before this; without the formula job's result it installs "+
+			"a formula that was never written.", linuxCheckJob, got, linuxCheckCondition)
+	}
+	if _, reviewed := own["environment"]; reviewed {
+		t.Errorf("the %q job runs in a deployment environment. It publishes nothing and "+
+			"holds no credential, so an approval it waits for is only another way for it not "+
+			"to run.", linuxCheckJob)
+	}
+
+	script, ok := runBlock(check.Body, "brew install")
+	if !ok {
+		t.Fatalf("the %q job runs no install this row can read", linuxCheckJob)
+	}
+	joined := strings.Join(textsOf(script), "\n")
+	for _, want := range []string{
+		`want="${GITHUB_REF_NAME#v}"`,
+		"brew install curiouspub/tap/curiouspub",
+		"curious version",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the %q job's script does not carry %q:\n%s", linuxCheckJob, want, joined)
+		}
+	}
+
+	// ONE HOME. A second workflow installing the formula is the old
+	// trigger coming back beside the new one, and two checks of one thing
+	// under two conditions disagree about when it was checked.
+	for _, path := range workflowFiles(t, root) {
+		rel := filepath.ToSlash(mustRel(t, root, path))
+		if rel == releaseWorkflow {
+			continue
+		}
+		if strings.Contains(readRepoFile(t, root, rel), "brew install curiouspub/tap/") {
+			t.Errorf("%s installs the formula too; the check has one home, the %q job in %s",
+				rel, linuxCheckJob, releaseWorkflow)
+		}
+	}
+}

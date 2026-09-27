@@ -232,6 +232,47 @@ jobs:
           git commit -m "curiouspub ${GITHUB_REF_NAME}"
           git push
 
+  # THE FORMULA INSTALLS ON LINUX, from a tap nobody added, and reports
+  # the version this tag released. It installs what strangers install,
+  # the way they install it, and publishes nothing and holds no
+  # credential, so it needs no reviewer.
+  #
+  # IT FOLLOWS THE FORMULA JOB, NOT THE WHOLE RUN. It used to be a separate
+  # workflow triggered by a successful Release run, and it was skipped on
+  # both releases that trigger saw: each run concluded as a failure because
+  # its package job went red, while the formula this check exists for had
+  # shipped. A red in an unrelated job said nothing about the formula, and
+  # the check never ran; both times it was dispatched by hand and passed.
+  # So it depends on the formula job alone. always() is what lets it run
+  # when another job in the run has failed, and the result test is what
+  # stops it running when the formula job itself did not succeed. A
+  # guard holds the condition to exactly that.
+  brew-linux:
+    name: the formula installs on Linux from a tap nobody added
+    needs: formula
+    if: always() && needs.formula.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The runner image carries the package manager but does not put it on
+      # PATH. No tap is added first: `brew install owner/tap/name` taps on
+      # its own, which is the path a stranger takes. The version the binary
+      # reports is checked against the tag, and that check is what pins an
+      # install that cannot name a version.
+      - name: install the formula and check the version it reports
+        run: |
+          set -euo pipefail
+          want="${GITHUB_REF_NAME#v}"
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew install curiouspub/tap/curiouspub
+          got="$(curious version)"
+          echo "$got"
+          case " $got " in
+            *" $want "*) echo "installed $want, as released" ;;
+            *) echo "::error::the formula installed '$got', and the release is $want"; exit 1 ;;
+          esac
+
   # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under
   # trusted publishing the identity token IS the registry credential, so
   # putting this step in the job above would place the ability to publish
