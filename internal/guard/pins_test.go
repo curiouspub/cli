@@ -413,18 +413,15 @@ func TestTheWrapperJobHasNoNetworkReadOfTheRelease(t *testing.T) {
 			publishJob = j
 		}
 	}
-	upload := stepUsing(publishJob.Body, "actions/upload-artifact@")
-	if upload == nil {
-		t.Fatalf("the publish job hands no artefact to the %q job", wrapperJobName)
-	}
 	download := stepUsing(wrapper.Body, "actions/download-artifact@")
 	if download == nil {
 		t.Fatalf("the %q job takes no artefact from the publish job", wrapperJobName)
 	}
-	up, _ := valueOf(upload, "name")
 	down, _ := valueOf(download, "name")
-	if up == "" || up != down {
-		t.Errorf("the publish job uploads the artefact %q and the %q job downloads %q", up, wrapperJobName, down)
+	upload := uploadNamed(publishJob.Body, down)
+	if down == "" || upload == nil {
+		t.Fatalf("the %q job downloads the artefact %q, and the publish job uploads no artefact by that name",
+			wrapperJobName, down)
 	}
 	if path, _ := valueOf(upload, "path"); path != "dist/checksums.txt" {
 		t.Errorf("the publish job uploads %q, not the checksum file the release tool writes", path)
@@ -439,6 +436,27 @@ func TestTheWrapperJobHasNoNetworkReadOfTheRelease(t *testing.T) {
 func stepUsing(body []yamlLine, prefix string) []yamlLine {
 	for _, step := range sequenceEntries(body) {
 		if v, ok := valueOf(step, "uses"); ok && strings.HasPrefix(v, prefix) {
+			return step
+		}
+	}
+	return nil
+}
+
+// uploadNamed returns the upload step whose artefact carries name.
+//
+// THE PUBLISH JOB UPLOADS MORE THAN ONE ARTEFACT, so "the first upload"
+// is not a way to find the checksum hand-over. The rows that pin that
+// hand-over used to take the first one, and were right only while it was
+// the only one: a second upload placed above it would have had them
+// comparing the wrong artefact's name and path. The downstream job's
+// download names the artefact it wants, and that name is what finds it.
+func uploadNamed(body []yamlLine, name string) []yamlLine {
+	for _, step := range sequenceEntries(body) {
+		v, ok := valueOf(step, "uses")
+		if !ok || !strings.HasPrefix(v, "actions/upload-artifact@") {
+			continue
+		}
+		if n, _ := valueOf(step, "name"); n == name {
 			return step
 		}
 	}

@@ -275,6 +275,12 @@ lint:
 # contributor who has never cut a release has no reason to hold it. CI is
 # the other way round: the workflow installs it at a pinned version, so
 # an absent signer there is a failure and never a quiet pass.
+#
+# THE macOS SIGNATURE FOLLOWS THE SAME ARGUMENT, and a throwaway
+# certificate chain is generated beside the key pair for the same reason.
+# Unlike the signer above, the tool that generates it is on every machine
+# that can run this target, so there is no skip for it.
+#
 # THE CHECK AFTER THE BUILD is the only thing that can see a
 # member-count error or a misspelled archive name: the release tool's
 # own validator reads the schema, and a format that cannot hold what it
@@ -283,8 +289,9 @@ lint:
 # template and the install script's table are tied together instead of
 # being two restatements of the same six names in different files.
 snapshot:
+	@rm -rf .snapshot-keys && mkdir -p .snapshot-keys
+	@scripts/snapshot-macos-cert.sh .snapshot-keys
 	@if command -v cosign >/dev/null 2>&1; then \
-		rm -rf .snapshot-keys && mkdir -p .snapshot-keys; \
 		COSIGN_PASSWORD=snapshot COSIGN_YES=true \
 			cosign generate-key-pair --output-key-prefix .snapshot-keys/cosign >/dev/null; \
 		COSIGN_PASSWORD=snapshot goreleaser release --snapshot --clean; \
@@ -295,6 +302,7 @@ snapshot:
 		goreleaser release --snapshot --clean --skip=sign; \
 	fi
 	node scripts/check-release-assets.js dist
+	node scripts/check-snapshot-signature.js dist
 
 # surface-check reads the surfaces the test suite cannot: the messages,
 # names and titles of a range being published. It is the same program the

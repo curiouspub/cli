@@ -136,6 +136,39 @@ jobs:
           # It is current as of the change that added it.
           cosign-release: v3.1.3
 
+      # THE macOS SIGNING MATERIAL IS ALL PRESENT, OR NOTHING IS BUILT. A
+      # secret that does not exist reaches a step as an empty string, not
+      # as an error, and the release tool treats an empty notary value as
+      # "sign but do not notarise" and says so only at info level. So a
+      # release that lost one of these five would otherwise ship binaries
+      # the operating system refuses, and report green. Checked here,
+      # before the tool runs, so a missing one publishes nothing.
+      #
+      # It also records the moment just before the build, which is how the
+      # log step below tells this run's notary submissions from earlier
+      # ones.
+      - name: the macOS signing material is all present
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in MACOS_SIGN_P12 MACOS_SIGN_PASSWORD MACOS_NOTARY_KEY MACOS_NOTARY_KEY_ID MACOS_NOTARY_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::the release environment is missing:$missing. Without them the macOS binaries ship unsigned or un-notarised, and the operating system refuses them. Nothing has been built or published."
+            exit 1
+          fi
+          echo "NOTARY_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           # An exact version, never the newest. A release built from
@@ -152,6 +185,14 @@ jobs:
           # that could reach every repository would hand this job far
           # more than a tap write.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # The developer certificate and the notary key. Read by the
+          # release tool's signing block in .goreleaser.yaml, and by
+          # nothing else in this run except the two steps beside this one.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
 
       # THE CHECKSUMS LEAVE THIS JOB AS A RUN ARTEFACT, and the wrapper job
       # below takes them from here rather than from the release. A release
@@ -168,6 +209,31 @@ jobs:
           if-no-files-found: error
           # The next job reads it within minutes. Nothing else ever should.
           retention-days: 1
+
+      # THE NOTARY SERVICE'S OWN LOG, attached to the run. The release tool
+      # fetches it only for a submission that failed; a passing one leaves
+      # no record of what was checked. This step fetches one per binary.
+      #
+      # IT CANNOT FAIL THE JOB, and that is a choice with a cost stated
+      # here. By this point the release is public; failing now would skip
+      # the formula and the npm wrapper, which is a half-published release,
+      # for the sake of a record. The gate on notarisation is the mac-check
+      # job below, which asks the operating system directly. A failure
+      # here shows as a failed step and an annotation, not as a red job.
+      - name: attach the notary service's log
+        continue-on-error: true
+        env:
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: node scripts/notary-log.js notary-log
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        continue-on-error: true
+        with:
+          name: notary-log
+          path: notary-log
+          if-no-files-found: error
 
   # THE HOMEBREW FORMULA, WRITTEN HERE AND NOT BY THE RELEASE TOOL. The
   # tool's formula block is deprecated and its own validator refuses it,
@@ -271,6 +337,62 @@ jobs:
           case " $got " in
             *" $want "*) echo "installed $want, as released" ;;
             *) echo "::error::the formula installed '$got', and the release is $want"; exit 1 ;;
+          esac
+
+  # THE OPERATING SYSTEM IS ASKED WHETHER IT WOULD RUN THE macOS BINARY,
+  # on a Mac, from the archive the release published. The failure this
+  # exists for was invisible from every Linux runner: an unsigned binary
+  # installs, links and reports its version, and is then killed on the
+  # first Mac that has not exempted its terminal.
+  #
+  # scripts/gatekeeper-check.sh asks for the assessment a download gets,
+  # and requires the source to be a notarised developer signature.
+  # Accepted alone is not enough: only notarisation separates a release
+  # from a binary somebody merely signed.
+  #
+  # Then the binary is marked as downloaded, as a browser or the package
+  # manager would mark it, and run. That run only proves the version, not
+  # the assessment: whether a hosted runner enforces the policy is the
+  # runner's business, and the status line is printed so the log says
+  # which it was.
+  #
+  # It follows the publish job only. It holds no credential and no
+  # environment: the archives are public, read over plain HTTPS from the
+  # release they belong to, and the checksum file beside them is checked
+  # first.
+  mac-check:
+    name: the macOS binary is accepted by the operating system and runs
+    needs: publish
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: assess the released darwin binaries and run one
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="${GITHUB_REF_NAME#v}"
+          base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          mkdir -p dl
+          curl -fsSL -o dl/checksums.txt "$base/checksums.txt"
+          for arch in amd64 arm64; do
+            curl -fsSL -o "dl/curious_${want}_darwin_${arch}.tar.gz" "$base/curious_${want}_darwin_${arch}.tar.gz"
+          done
+          (cd dl && grep -E "  curious_${want}_darwin_(amd64|arm64)\.tar\.gz$" checksums.txt | shasum -a 256 -c -)
+          for arch in amd64 arm64; do
+            mkdir -p "dl/$arch"
+            tar -xzf "dl/curious_${want}_darwin_${arch}.tar.gz" -C "dl/$arch"
+          done
+          spctl --status || true
+          scripts/gatekeeper-check.sh dl/amd64/curious dl/arm64/curious
+          xattr -w com.apple.quarantine "0081;$(printf '%x' "$(date +%s)");release-check;" dl/arm64/curious
+          got="$(dl/arm64/curious version)"
+          echo "$got"
+          case " $got " in
+            *" $want "*) echo "the notarised binary ran and reported $want, as released" ;;
+            *) echo "::error::the macOS binary reported '$got', and the release is $want"; exit 1 ;;
           esac
 
   # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under

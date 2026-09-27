@@ -158,20 +158,22 @@ func render(in input) (string, error) {
 // caveatLines is what the formula tells whoever installs it, for the
 // releases in which the older cask still exists.
 //
-// THE CASK BLOCKS THE LINK, and that is the whole reason it is here. On a
-// machine with the cask installed, the cask owns the curious command, so
-// the package manager installs this formula and skips linking it; and
-// removing the cask afterwards leaves a link to nothing. So there are two
-// migrations, not one, and which applies depends on whether the formula
-// is already installed. Both are spelled out in full: a caveat is read
-// once, at the moment the command it names is needed, and a reader who
-// has to work out the second from the first has been handed a puzzle
+// THE CASK AND THE FORMULA BOTH CLAIM THE curious COMMAND, and removing
+// the cask afterwards takes the command away. What happens at install
+// depends on the package manager's version: an earlier one skipped
+// linking this formula while the cask owned the command, and a current
+// one takes the command over from the cask. Either way, once the cask is
+// removed the command is gone until the formula is linked. So there are
+// two migrations, not one, and which applies depends on whether the
+// formula is already installed. Both are spelled out in full: a caveat is
+// read once, at the moment the command it names is needed, and a reader
+// who has to work out the second from the first has been handed a puzzle
 // instead of an answer. The cask's caveat and the README carry the same
 // two commands, and a guard holds all three to them.
 var caveatLines = []string{
-	"Replacing the older cask, curious? It owns the curious command, so",
-	"this formula is not linked while the cask is installed. Remove the",
-	"cask, then link the formula:",
+	"Replacing the older cask, curious? Installing this formula takes over",
+	"the curious command, and removing the cask afterwards takes the command",
+	"away again. Remove the cask, then link the formula:",
 	"  brew uninstall --cask curious && brew link curiouspub/tap/curiouspub",
 	"",
 	"To remove the cask before installing this formula instead:",

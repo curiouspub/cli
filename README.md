@@ -142,11 +142,11 @@ The formula installs the prebuilt binary for your platform, each archive
 pinned to the sha256 in the release's own checksum file. No `brew tap`
 is needed first.
 
-**Moving from the older cask, `curious`.** The cask is deprecated, and
-the next release removes it. While it is installed it owns the `curious`
-command, so the formula installs but is not linked, and removing the
-cask afterwards leaves a link to nothing. Remove the cask first, then
-install the formula:
+**Moving from the older cask, `curious`.** The cask is deprecated and
+will be removed in a later release. The cask and the formula both claim
+the `curious` command: installing the formula takes the command over,
+and removing the cask afterwards takes it away again. Remove the cask
+first, then install the formula:
 
 ```
 brew uninstall --cask curious && brew install curiouspub/tap/curiouspub

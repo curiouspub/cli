@@ -11,11 +11,19 @@
 #   1. THE BUILD IS ONE COMMAND, named explicitly. This module also
 #      carries a program the build invokes and ships to nobody. A target
 #      written as a wildcard would publish it as a release artefact.
-#   2. THE SAME TAG REBUILDS TO THE SAME BYTES. Trimmed paths, a fixed
-#      module timestamp and stamps derived from the commit rather than
-#      from the clock. Reproducibility is what lets anyone check that the
-#      published binary is the published source; without it that claim is
-#      unfalsifiable and therefore worth nothing.
+#   2. THE SAME TAG REBUILDS TO THE SAME BYTES, for the Linux and Windows
+#      archives. Trimmed paths, a fixed module timestamp and stamps
+#      derived from the commit rather than from the clock. Reproducibility
+#      is what lets anyone check that the published binary is the
+#      published source; without it that claim is unfalsifiable and
+#      therefore worth nothing.
+#
+#      THE macOS ARCHIVES DIFFER BY THEIR SIGNATURE, and only by it. The
+#      binary inside is the same build, then signed with a developer
+#      certificate and a secure timestamp, which nobody without the key
+#      can reproduce. checksums.txt records a digest per archive and says
+#      which is which by its name: a rebuild matches every linux and
+#      windows line and none of the darwin ones.
 #   3. THE CHECKSUMS ARE SIGNED, keylessly, by the workflow's own
 #      identity. A checksum says the file did not change in transit. It
 #      cannot say who built it, and that is the question somebody
@@ -99,6 +107,49 @@ archives:
     # fails to build.
     files: ["none*"]
 
+# THE macOS BINARIES ARE SIGNED AND NOTARISED, because an unsigned one is
+# killed by the operating system on any Mac that has not exempted the
+# terminal running it. The package manager marks what it downloads as
+# quarantined, and a quarantined binary with no developer signature is
+# refused outright, with a dialog calling it possible malware.
+#
+# BOTH MODES SIGN, and the difference is the certificate:
+#
+#   - A SNAPSHOT signs with a throwaway chain generated in the job
+#     (scripts/snapshot-macos-cert.sh) and does not notarise. So the
+#     signing path runs on every pull request. The alternative is a path
+#     first executed inside a release somebody has already approved, and
+#     the cosign block below records what that cost once.
+#   - A RELEASE signs with the developer certificate and notarises. Every
+#     value comes from the environment, and the release workflow checks
+#     all five are non-empty BEFORE this tool runs. That check is not
+#     belt and braces: the tool signs without notarising, logging it at
+#     info level, whenever any notary value renders empty, and a secret
+#     that does not exist reaches a workflow as an empty string rather
+#     than as an error.
+#
+# `enabled` is a constant, not "is the certificate variable set". A gate
+# that switches signing off when a secret is missing is a release that
+# ships unsigned and reports green.
+#
+# This runs after the build and before any archive exists, so a failure
+# here, a notarisation timeout included, publishes nothing.
+notarize:
+  macos:
+    - enabled: true
+      ids: [curious]
+      sign:
+        certificate: '{{ if .IsSnapshot }}.snapshot-keys/macos.p12{{ else }}{{ .Env.MACOS_SIGN_P12 }}{{ end }}'
+        password: '{{ if .IsSnapshot }}snapshot{{ else }}{{ .Env.MACOS_SIGN_PASSWORD }}{{ end }}'
+      notarize:
+        issuer_id: '{{ if not .IsSnapshot }}{{ .Env.MACOS_NOTARY_ISSUER_ID }}{{ end }}'
+        key_id: '{{ if not .IsSnapshot }}{{ .Env.MACOS_NOTARY_KEY_ID }}{{ end }}'
+        key: '{{ if not .IsSnapshot }}{{ .Env.MACOS_NOTARY_KEY }}{{ end }}'
+        wait: true
+        # The tool's ceiling: a longer wait needs a longer-lived token,
+        # which the notary service refuses.
+        timeout: 20m
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
@@ -181,8 +232,11 @@ signs:
 # install, and a post-install hook the package manager has since
 # deprecated; a formula carries neither cost.
 #
-# This block ships once more, carrying a caveat that points at the
-# formula, and is removed in the release after.
+# This block stays until the formula's macOS binary is accepted by the
+# operating system without any exemption, which is what the signing block
+# above is for. It is removed in the release after the first one that
+# passes that check, and not before: until then, this cask's post-install
+# hook is the only Homebrew install on a Mac that runs without one.
 homebrew_casks:
   - name: curious
     binaries: [curious]
@@ -203,20 +257,21 @@ homebrew_casks:
     description: Pack an Astro project, upload it, and stream the build
     license: MIT
     caveats: |
-      This cask is deprecated and is removed in the next release.
+      This cask is deprecated and will be removed in a later release.
       Install the formula instead, which also works on Linux:
         brew uninstall --cask curious && brew install curiouspub/tap/curiouspub
-      If the formula is already installed, it was not linked while this
-      cask held the curious command. Remove the cask, then link it:
+      If the formula is already installed, it took over the curious
+      command, and removing this cask takes the command away again.
+      Remove the cask, then link the formula:
         brew uninstall --cask curious && brew link curiouspub/tap/curiouspub
     hooks:
       post:
         # An unsigned binary downloaded by the package manager is
         # quarantined by the operating system, and the first run then
         # fails in a way that reads as a broken download rather than as a
-        # policy. The signature that answers this properly is a
-        # developer-account one; until there is such an account, the
-        # install clears the attribute it set itself.
+        # policy. The binaries are now signed and notarised, which is
+        # the proper answer; this hook stays for as long as the cask
+        # does, because it costs nothing and the cask is on its way out.
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr",
