@@ -1394,56 +1394,47 @@ func TestSpellingRuleIsPresentInCLAUDEMd(t *testing.T) {
 // v-prefixed MAJOR.MINOR.PATCH in code quotes.
 var readmeVersion = regexp.MustCompile("`v([0-9]+\\.[0-9]+\\.[0-9]+)`")
 
-// TestTheReadmeNamesTheNewestRelease requires every version the README
-// names to be the newest final release reachable from this commit.
+// TestTheReadmeNamesTheDeclaredVersion requires every version the README
+// names to be the version the package declares.
 //
 // IT LAGGED TWO RELEASES. The page said "`v0.1.0` is published" while
 // v0.1.1 and v0.1.2 were out, because nothing compared the sentence with
-// the tags; the rows above hold whether the page says ANYTHING is
+// anything; the rows above hold whether the page says ANYTHING is
 // published, and are satisfied by any release.
 //
-// THE COST, STATED: the row reds on the default branch from the moment a
-// new release is tagged until the README names it. That is the point —
-// a page that lags a release is wrong from the tag onward — and the
-// repair is one edit in the pull request that follows every release. A
-// tree with no release reachable must name no version at all, which is
-// the pre-release half's state.
+// THE PACKAGE VERSION, NOT THE NEWEST TAG, and the difference is when
+// the page has to move. The release procedure bumps the package's
+// version in a commit before the tag exists, and the release script
+// refuses a tag that commit does not declare. Holding the README to that
+// same number puts the page's edit in the same pull request as the bump,
+// before the release. Held to the newest tag instead, the page would go
+// stale the moment a release was tagged and red the default branch
+// until a follow-up caught it up — a pull request owed after every
+// release, which is the kind of step that gets skipped.
+//
+// It must name at least one version: a page that names none cannot be
+// wrong about which, and that is not the same as being right.
 //
 // MUTATIONS RUN, performed and observed: the README naming the release
-// before the newest, and naming one not yet released, each red this row
-// and no other.
-func TestTheReadmeNamesTheNewestRelease(t *testing.T) {
+// before the declared one, and naming one after it, each red this row;
+// and bumping the package version in both of its files without moving
+// the README reds this row and no other.
+func TestTheReadmeNamesTheDeclaredVersion(t *testing.T) {
 	root := moduleRoot(t)
-	pattern := releaseTagPattern(t, root)
-	newest := ""
-	for _, tag := range reachableReleaseTags(t, root) {
-		version, preRelease := releaseTagVersion(tag)
-		if !pattern.MatchString(tag) || preRelease {
-			continue
-		}
-		if newest == "" || !versionReached(version, newest) {
-			newest = version
-		}
-	}
+	declared := declaredWrapperVersion(t, root)
 	var named []string
 	for _, m := range readmeVersion.FindAllStringSubmatch(readReadmeFile(t, root), -1) {
 		named = append(named, m[1])
 	}
-	if newest == "" {
-		if len(named) > 0 {
-			t.Errorf("no release is reachable from this commit, and README.md names %v", named)
-		}
-		return
-	}
 	if len(named) == 0 {
-		t.Errorf("v%s is the newest release reachable from this commit, and README.md names no "+
-			"version at all", newest)
+		t.Errorf("README.md names no version, and the package declares %s", declared)
 	}
 	for _, v := range named {
-		if v != newest {
-			t.Errorf("README.md names v%s, and the newest release reachable from this commit is "+
-				"v%s.\nA page that names an older release has lagged one; a page that names a "+
-				"newer one describes a release that has not happened.", v, newest)
+		if v != declared {
+			t.Errorf("README.md names v%s, and the package declares %s.\n"+
+				"The release procedure bumps the package before the tag; the README moves in "+
+				"the same change, so the page and the release it describes arrive together.",
+				v, declared)
 		}
 	}
 }
