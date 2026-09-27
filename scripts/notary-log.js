@@ -11,8 +11,15 @@
 // holds no record of what the notary service checked.
 //
 // WHAT IT READS. The service lists recent submissions; the ones this run
-// made are the ones named after the binary and created after the moment
-// the workflow recorded just before the build. Each one's log is behind a
+// made are the ones whose names start with the binary's and that were
+// created after the moment the workflow recorded just before the build.
+//
+// A SUBMISSION IS NOT NAMED AFTER THE BINARY ALONE. The signer names it
+// `curious-<the payload's digest>-<eight random characters>`, which is
+// what the service's own history shows. The first version of this script
+// matched the bare name, found nothing on the first real release, and
+// would have attached no log to every release after it; the row that
+// runs it now feeds it names in the shape the service returns. Each one's log is behind a
 // presigned link, which is a credential for as long as it lives, so it
 // is followed and never printed.
 //
@@ -25,6 +32,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const api = 'https://appstoreconnect.apple.com/notary/v2';
+const binary = 'curious';
 const out = process.argv[2];
 
 function stop(message) {
@@ -77,9 +85,9 @@ async function main() {
   const auth = token();
   const listing = await (await read(`${api}/submissions`, auth)).json();
   const ours = (listing.data || []).filter((s) =>
-    s.attributes && s.attributes.name === 'curious' && Date.parse(s.attributes.createdDate) >= since);
+    s.attributes && String(s.attributes.name).startsWith(`${binary}-`) && Date.parse(s.attributes.createdDate) >= since);
   if (ours.length === 0) {
-    stop(`the notary service lists no submission named curious since ${process.env.NOTARY_SINCE}`);
+    stop(`the notary service lists no ${binary} submission since ${process.env.NOTARY_SINCE}`);
   }
 
   fs.mkdirSync(out, { recursive: true });

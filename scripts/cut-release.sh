@@ -354,6 +354,25 @@ main() {
 	printf 'A failure there means the artefacts cannot prove who built them, which is\n'
 	printf 'the whole reason they are signed. Treat it as a release to withdraw.\n\n'
 
+	# NOTARISATION CAN OUTLAST THE RELEASE TOOL'S WAIT, and the answer is a
+	# re-run rather than a new version. The tool waits at most twenty
+	# minutes, because its token lives as long as the wait and the notary
+	# service refuses a token that lives longer. A new team's first
+	# submission has been held for over an hour. A timeout fails the build
+	# before anything is archived, so nothing has been published, and the
+	# same run can simply be picked up again once the service has answered.
+	printf '=== if notarisation times out ===\n\n'
+	printf 'The build stops with "timeout waiting for notarize submission response"\n'
+	printf 'before anything is archived or published. Nothing is lost and nothing is\n'
+	printf 're-cut:\n\n'
+	printf '  1. wait until the submission shows Accepted:\n'
+	printf '       xcrun notarytool history --key <AuthKey_ID.p8> --key-id <key id> --issuer <issuer id>\n'
+	printf '  2. re-run the failed job of the same run:\n'
+	printf '       gh run list --repo %s --workflow Release --limit 1\n' "$REPO"
+	printf '       gh run rerun <run id> --failed --repo %s\n\n' "$REPO"
+	printf 'Each binary is submitted in turn, so a later one can time out as well.\n'
+	printf 'The answer is the same.\n\n'
+
 	if [ "$yes" -ne 1 ]; then
 		printf 'Nothing has been changed. Re-run with --yes to execute exactly the two\n'
 		printf 'commands above, or run them yourself.\n'

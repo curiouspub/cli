@@ -1,6 +1,12 @@
 package guard
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -354,5 +360,111 @@ func TestTheGatekeeperCheckRefusesABinaryThatIsNotNotarised(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "would be refused") {
 		t.Errorf("%s failed without saying why:\n%s", gatekeeperScript, out)
+	}
+}
+
+// notaryStandIn replaces the network for scripts/notary-log.js. It
+// answers the listing, the log-metadata request and the presigned log
+// link as the notary service does, checks the token on every
+// authenticated request against the public half of the key the row
+// generated, and refuses the run if the bearer token is ever sent to the
+// presigned link, which is a credential that belongs to nobody else.
+//
+// THE SUBMISSION NAMES ARE THE SERVICE'S OWN SHAPE: the binary's name,
+// the payload's digest and eight random characters. The script's first
+// version matched the bare binary name, and a stand-in written from the
+// same assumption agreed with it; the first real release is what showed
+// otherwise.
+const notaryStandIn = `
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const pub = crypto.createPublicKey(fs.readFileSync(process.env.STAND_IN_PUB));
+const link = 'https://logs.example/presigned-marker';
+const digest = 'a'.repeat(64);
+globalThis.fetch = async (url, opts = {}) => {
+  const answer = (body) => ({ ok: true, status: 200, json: async () => body,
+    text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) });
+  const auth = (opts.headers || {}).Authorization;
+  if (url.startsWith(link)) {
+    if (auth) { throw new Error('the bearer token was sent to the presigned link'); }
+    return answer(JSON.stringify({ status: 'Accepted', issues: null, archiveFilename: 'curious.zip' }));
+  }
+  const [h, c, sig] = String(auth).replace('Bearer ', '').split('.');
+  const valid = crypto.verify('sha256', Buffer.from(h + '.' + c),
+    { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(String(sig), 'base64url'));
+  if (!valid) { return { ok: false, status: 401 }; }
+  if (url.endsWith('/notary/v2/submissions')) {
+    return answer({ data: [
+      { id: 'before-this-run', attributes: { name: 'curious-' + digest + '-aaaaaaaa', status: 'Accepted', createdDate: '2026-09-27T19:00:00.000Z' } },
+      { id: 'arm64', attributes: { name: 'curious-' + digest + '-9835e95a', status: 'Accepted', createdDate: '2026-09-27T20:08:12.262Z' } },
+      { id: 'another-binary', attributes: { name: 'curiousity-' + digest + '-bbbbbbbb', status: 'Accepted', createdDate: '2026-09-27T20:09:00.000Z' } },
+      { id: 'amd64', attributes: { name: 'curious-' + digest + '-0c1d2e3f', status: 'Accepted', createdDate: '2026-09-28T00:10:00.000Z' } },
+    ] });
+  }
+  const m = url.match(/submissions\/([a-z0-9-]+)\/logs$/);
+  if (m) { return answer({ data: { attributes: { developerLogUrl: link + '?for=' + m[1] } } }); }
+  return { ok: false, status: 404 };
+};
+`
+
+// TestTheNotaryLogFindsThisRunsSubmissions runs scripts/notary-log.js
+// against notaryStandIn and requires exactly this run's submissions to
+// come back: the two made after the recorded moment, and not the one
+// made before it or one for a different name that shares a prefix.
+func TestTheNotaryLogFindsThisRunsSubmissions(t *testing.T) {
+	root := moduleRoot(t)
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatalf("node is not on PATH, and this row runs the release's log step: %v", err)
+	}
+	dir := t.TempDir()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubFile := filepath.Join(dir, "pub.pem")
+	if err := os.WriteFile(pubFile, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: public}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	standIn := filepath.Join(dir, "stand-in.js")
+	if err := os.WriteFile(standIn, []byte(notaryStandIn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "logs")
+	cmd := exec.Command(node, "-r", standIn, filepath.Join(root, "scripts", "notary-log.js"), out)
+	cmd.Env = append(os.Environ(),
+		"STAND_IN_PUB="+pubFile,
+		"MACOS_NOTARY_KEY="+base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})),
+		"MACOS_NOTARY_KEY_ID=stand-in",
+		"MACOS_NOTARY_ISSUER_ID=stand-in",
+		"NOTARY_SINCE=2026-09-27T20:07:07Z",
+	)
+	printed, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the log step failed against submissions named the way the service names them: %v\n%s", err, printed)
+	}
+	var got []string
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatalf("the log step wrote no directory: %v\n%s", err, printed)
+	}
+	for _, e := range entries {
+		got = append(got, e.Name())
+	}
+	sort.Strings(got)
+	if want := []string{"amd64.json", "arm64.json"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("the log step fetched %v, want %v: this run's two submissions, and not the "+
+			"earlier one or another binary's\n%s", got, want, printed)
+	}
+	if strings.Contains(string(printed), "presigned-marker") {
+		t.Errorf("the log step printed the presigned link, which is a credential while it lives:\n%s", printed)
 	}
 }
