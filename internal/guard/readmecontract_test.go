@@ -1389,3 +1389,52 @@ func TestSpellingRuleIsPresentInCLAUDEMd(t *testing.T) {
 		t.Errorf("cli/CLAUDE.md does not carry the spelling rule %q", spellingRuleSentence)
 	}
 }
+
+// readmeVersion is how the README names a released version: a
+// v-prefixed MAJOR.MINOR.PATCH in code quotes.
+var readmeVersion = regexp.MustCompile("`v([0-9]+\\.[0-9]+\\.[0-9]+)`")
+
+// TestTheReadmeNamesTheDeclaredVersion requires every version the README
+// names to be the version the package declares.
+//
+// IT LAGGED TWO RELEASES. The page said "`v0.1.0` is published" while
+// v0.1.1 and v0.1.2 were out, because nothing compared the sentence with
+// anything; the rows above hold whether the page says ANYTHING is
+// published, and are satisfied by any release.
+//
+// THE PACKAGE VERSION, NOT THE NEWEST TAG, and the difference is when
+// the page has to move. The release procedure bumps the package's
+// version in a commit before the tag exists, and the release script
+// refuses a tag that commit does not declare. Holding the README to that
+// same number puts the page's edit in the same pull request as the bump,
+// before the release. Held to the newest tag instead, the page would go
+// stale the moment a release was tagged and red the default branch
+// until a follow-up caught it up — a pull request owed after every
+// release, which is the kind of step that gets skipped.
+//
+// It must name at least one version: a page that names none cannot be
+// wrong about which, and that is not the same as being right.
+//
+// MUTATIONS RUN, performed and observed: the README naming the release
+// before the declared one, and naming one after it, each red this row;
+// and bumping the package version in both of its files without moving
+// the README reds this row and no other.
+func TestTheReadmeNamesTheDeclaredVersion(t *testing.T) {
+	root := moduleRoot(t)
+	declared := declaredWrapperVersion(t, root)
+	var named []string
+	for _, m := range readmeVersion.FindAllStringSubmatch(readReadmeFile(t, root), -1) {
+		named = append(named, m[1])
+	}
+	if len(named) == 0 {
+		t.Errorf("README.md names no version, and the package declares %s", declared)
+	}
+	for _, v := range named {
+		if v != declared {
+			t.Errorf("README.md names v%s, and the package declares %s.\n"+
+				"The release procedure bumps the package before the tag; the README moves in "+
+				"the same change, so the page and the release it describes arrive together.",
+				v, declared)
+		}
+	}
+}

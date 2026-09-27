@@ -28,7 +28,7 @@ of its state, and every page that describes the product uses them:
 Under the phrase, two facts. They used to point in different directions;
 they no longer do.
 
-**The command line tool is released — `v0.1.0` — and installs today.**
+**The command line tool is released — `v0.1.2` — and installs today.**
 `npx curiouspub version`, `npm install -g curiouspub` and the Homebrew
 formula all work; the binaries and their checksums are on the release, and
 the checksum file is signed.
@@ -107,7 +107,7 @@ and it tells you what is wrong before it reaches anything.
 
 ## Installing it
 
-**These work today.** `v0.1.0` is published, and each command below was
+**These work today.** `v0.1.2` is published, and each command below was
 run against the real registry and the real tap before this section was
 written. What they get you is the tool, and the tool deploys: "Status"
 above says what that means today.
@@ -140,8 +140,23 @@ brew install curiouspub/tap/curiouspub
 
 The formula installs the prebuilt binary for your platform, each archive
 pinned to the sha256 in the release's own checksum file. No `brew tap`
-is needed first. The older cask, `curious`, is deprecated: it still
-installs for one release, says so when it does, and is then removed.
+is needed first.
+
+**Moving from the older cask, `curious`.** The cask is deprecated, and
+the next release removes it. While it is installed it owns the `curious`
+command, so the formula installs but is not linked, and removing the
+cask afterwards leaves a link to nothing. Remove the cask first, then
+install the formula:
+
+```
+brew uninstall --cask curious && brew install curiouspub/tap/curiouspub
+```
+
+If you already installed the formula over the cask, link it instead:
+
+```
+brew uninstall --cask curious && brew link curiouspub/tap/curiouspub
+```
 
 **A binary from Releases, verified before you run it.** Download the
 archive for your platform and `checksums.txt` from the same release,

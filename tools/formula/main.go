@@ -137,11 +137,45 @@ func render(in input) (string, error) {
 	fmt.Fprintf(&b, "\n  def install\n")
 	fmt.Fprintf(&b, "    bin.install \"curious\"\n")
 	fmt.Fprintf(&b, "  end\n")
+	fmt.Fprintf(&b, "\n  def caveats\n")
+	fmt.Fprintf(&b, "    <<~EOS\n")
+	for _, line := range caveatLines {
+		if line == "" {
+			fmt.Fprintf(&b, "\n")
+			continue
+		}
+		fmt.Fprintf(&b, "      %s\n", line)
+	}
+	fmt.Fprintf(&b, "    EOS\n")
+	fmt.Fprintf(&b, "  end\n")
 	fmt.Fprintf(&b, "\n  test do\n")
 	fmt.Fprintf(&b, "    assert_match version.to_s, shell_output(\"#{bin}/curious version\")\n")
 	fmt.Fprintf(&b, "  end\n")
 	fmt.Fprintf(&b, "end\n")
 	return b.String(), nil
+}
+
+// caveatLines is what the formula tells whoever installs it, for the
+// releases in which the older cask still exists.
+//
+// THE CASK BLOCKS THE LINK, and that is the whole reason it is here. On a
+// machine with the cask installed, the cask owns the curious command, so
+// the package manager installs this formula and skips linking it; and
+// removing the cask afterwards leaves a link to nothing. So there are two
+// migrations, not one, and which applies depends on whether the formula
+// is already installed. Both are spelled out in full: a caveat is read
+// once, at the moment the command it names is needed, and a reader who
+// has to work out the second from the first has been handed a puzzle
+// instead of an answer. The cask's caveat and the README carry the same
+// two commands, and a guard holds all three to them.
+var caveatLines = []string{
+	"Replacing the older cask, curious? It owns the curious command, so",
+	"this formula is not linked while the cask is installed. Remove the",
+	"cask, then link the formula:",
+	"  brew uninstall --cask curious && brew link curiouspub/tap/curiouspub",
+	"",
+	"To remove the cask before installing this formula instead:",
+	"  brew uninstall --cask curious && brew install curiouspub/tap/curiouspub",
 }
 
 func main() {
