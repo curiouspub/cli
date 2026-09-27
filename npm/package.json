@@ -1,6 +1,6 @@
 {
   "name": "curiouspub",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Pack an Astro project, upload it, and stream the build. Installs the curious CLI for your platform.",
   "license": "MIT",
   "homepage": "https://curious.pub",
