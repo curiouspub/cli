@@ -1758,6 +1758,14 @@ func TestCutReleaseMakesNoOutwardChangeWithoutConsent(t *testing.T) {
 	if !strings.Contains(text, "--yes") {
 		t.Errorf("the script stopped without saying what would make it proceed\n%s", text)
 	}
+	// A notarisation timeout is recovered by a re-run of the same run, not
+	// by a new version, and the operator meets it in the middle of a
+	// release. So the recovery is printed here, with the commands.
+	for _, want := range []string{"if notarisation times out", "notarytool history", "gh run rerun <run id> --failed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the script does not print the recovery from a notarisation timeout (%q)\n%s", want, text)
+		}
+	}
 }
 
 // writeHarness writes a wrapper that drives the release script with
