@@ -231,3 +231,9 @@ linux,darwin github.com/curiouspub/cli/internal/config TestLoadUnreadableFileIsR
 # unreadable before trusting it, so the skip means the environment said
 # no rather than the row guessing.
 * github.com/curiouspub/cli/internal/pack TestWalkRefusesANestedDirectoryItCannotRead
+
+# The Gatekeeper check asks macOS for its own assessment of a binary, and
+# no other operating system has one to give. The release's macOS job runs
+# the same script on every release; this row is the refusing half, on the
+# macOS leg of every change.
+linux,windows github.com/curiouspub/cli/internal/guard TestTheGatekeeperCheckRefusesABinaryThatIsNotNotarised

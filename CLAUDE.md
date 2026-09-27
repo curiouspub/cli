@@ -660,6 +660,15 @@ GoReleaser: cross-platform binaries, checksums, GitHub Releases, a
 Homebrew tap, and an npm wrapper publish as a pipeline step. Versions are
 semver tags; a plain `go build` reports `dev` rather than guessing.
 
+**The macOS binaries are signed with a developer certificate and
+notarised**, because macOS kills an unsigned binary it has quarantined,
+on any Mac whose terminal is not exempt. The material is read by the
+publishing job alone, and a release missing any of it fails before
+anything is built. A snapshot signs with a throwaway chain generated in
+the job, so the signing path runs on every pull request. After each
+release, a macOS job asks the operating system whether it would run the
+published binary (`scripts/gatekeeper-check.sh`).
+
 **Error messages are part of the product — write them for a clumsy
 first-timer.** Every hard stop names an action the reader can take.
 

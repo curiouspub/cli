@@ -36,6 +36,13 @@ const (
 // the two strings would pass for a string that is declared and never
 // printed.
 //
+// AND NONE OF THEM SAYS THE FORMULA IS LEFT UNLINKED. That was the first
+// wording, from one machine whose package manager skipped the link. A
+// current package manager takes the command over from the cask instead,
+// measured on another, so the sentence was true of one version and false
+// of the next. The commands are right for both; the claim about linking
+// is held out of all three places.
+//
 // MUTATIONS RUN, performed and observed: dropping the link command from
 // each of the three places reds this row naming that place, and no other
 // row; so does removing the formula's caveats from the rendered output.
@@ -50,6 +57,11 @@ func TestEveryCaskMigrationNamesBothCommands(t *testing.T) {
 		if strings.TrimSpace(text) == "" {
 			t.Errorf("%s could not be found, so this row read nothing there", place)
 			continue
+		}
+		if strings.Contains(strings.Join(strings.Fields(text), " "), "not linked") {
+			t.Errorf("%s says the formula is not linked while the cask is installed. A "+
+				"current package manager links it and takes the command over, so the "+
+				"sentence is false for the version most readers have.", place)
 		}
 		for _, command := range []string{migrateThenInstall, migrateThenLink} {
 			if !strings.Contains(text, command) {

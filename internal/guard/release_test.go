@@ -392,6 +392,17 @@ func textsOf(lines []yamlLine) []string {
 var allowedSecrets = map[string]string{
 	"GITHUB_TOKEN":       "minted per job by the runner, scoped by the job's own permissions block, never a repository secret",
 	"HOMEBREW_TAP_TOKEN": "write access to the tap repository and nothing else; the job token cannot reach another repository",
+	// The macOS signing material. An unsigned binary is killed by the
+	// operating system on any Mac that has not exempted its terminal, so
+	// the release signs with a developer certificate and notarises with
+	// the notary service's API key. Allowed here by name; WHERE they may
+	// be read, which is the publishing job and nowhere else, is held by
+	// TestTheMacOSSigningSecretsAreReadByThePublishJobAlone.
+	"MACOS_SIGN_P12":         "the developer certificate and its key, base64; read only by the publishing job",
+	"MACOS_SIGN_PASSWORD":    "the certificate bundle's password; read only by the publishing job",
+	"MACOS_NOTARY_KEY":       "the notary service's API key, base64; read only by the publishing job",
+	"MACOS_NOTARY_KEY_ID":    "that key's id; read only by the publishing job",
+	"MACOS_NOTARY_ISSUER_ID": "the issuer the key belongs to; read only by the publishing job",
 	// ~~NPM_TOKEN~~ REMOVED 2026-09-08. The wrapper publishes through
 	// trusted publishing: the job proves its identity with the token the
 	// runner mints for it and holds no registry credential at all, so

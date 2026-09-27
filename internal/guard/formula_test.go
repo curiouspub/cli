@@ -35,14 +35,16 @@ func TestTheFormulaJobWritesFromThisRunsChecksums(t *testing.T) {
 		}
 	}
 	down := stepUsing(formula.Body, "actions/download-artifact@")
-	up := stepUsing(publish.Body, "actions/upload-artifact@")
-	if down == nil || up == nil {
+	if down == nil {
 		t.Fatal("the checksum file is not handed from the publish job to the formula job as an artefact")
 	}
-	if a, b := valueOf(up, "name"); !b {
-		t.Fatal("the publish job's artefact has no name")
-	} else if c, _ := valueOf(down, "name"); c != a {
-		t.Errorf("the publish job uploads %q and the formula job downloads %q", a, c)
+	name, _ := valueOf(down, "name")
+	up := uploadNamed(publish.Body, name)
+	if name == "" || up == nil {
+		t.Fatalf("the formula job downloads the artefact %q, and the publish job uploads no artefact by that name", name)
+	}
+	if path, _ := valueOf(up, "path"); path != "dist/checksums.txt" {
+		t.Errorf("the artefact the formula job downloads is %q, not the checksum file the release tool writes", path)
 	}
 	if _, ok := lineWith(formula.Body, "go run ./tools/formula"); !ok {
 		t.Error("the formula job does not run this repository's templater")
