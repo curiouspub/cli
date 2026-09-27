@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -296,9 +297,23 @@ func runNodeProgram(t *testing.T, program string, args ...string) (int, string) 
 // and the first readback anywhere after it, so deleting the comparison
 // that makes the readback mean anything left it green — and so would a
 // readback belonging to some other job. Both are now bound to the job
-// that holds the identity token, and the comparison itself is executed:
-// against a registry that agrees it must exit zero, and against one
-// pointing elsewhere it must exit non-zero and say where.
+// that holds the identity token, and the program itself is executed.
+//
+// AND IT IS EXECUTED AGAINST A REGISTRY THAT TAKES ITS TIME. The first
+// version of the readback was one read, and it went red on two releases
+// whose publishes were correct: the registry says its publish is
+// eventual, and it was read before it had finished. So the cases below
+// run the real program against a stand-in registry that answers from a
+// script — stale first, then settled; failing a read, then answering;
+// never settling at all — with the interval and the window shrunk to
+// fractions of a second. The shrinking is the program's own arguments,
+// not a copy of it, so the loop under test is the loop that ships.
+//
+// MUTATIONS RUN, performed and observed: replacing the loop with a single
+// read reds the stale-then-settled and failed-then-answered cases and
+// nothing else; making the two window endings share one message reds
+// the case whose registry never finished, which must not tell anybody to
+// move a pointer.
 func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 	root := moduleRoot(t)
 	lines := readYAMLLines(readRepoFile(t, root, releaseWorkflow))
@@ -313,7 +328,8 @@ func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 			"The attestation tying this package to the run that built it is half of what "+
 			"makes the embedded digest worth anything.", releaseWorkflow, publish.N)
 	}
-	readback, ok := lineWith(wrapper.Body, "npm view curiouspub dist-tags")
+	const tagsRead = `"dist-tags"`
+	readback, ok := lineWith(wrapper.Body, tagsRead)
 	if !ok {
 		t.Fatalf("the %q job publishes and never asks the registry what it did\n"+
 			"The one behaviour nobody could settle by reading is the one this release "+
@@ -326,24 +342,26 @@ func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 			releaseWorkflow, readback.N, publish.N)
 	}
 
-	script, ok := runBlock(wrapper.Body, "npm view curiouspub dist-tags")
+	script, ok := runBlock(wrapper.Body, tagsRead)
 	if !ok {
 		t.Fatalf("the readback is not a script this row can read, so nothing below it ran")
 	}
 	joined := strings.Join(textsOf(script), "\n")
 
 	// THE HALF THAT IS READ RATHER THAN RUN, and saying which is which is
-	// the point. The version being compared has to come from the tag that
-	// triggered the release, and the shell that derives it cannot be
-	// executed from here on every machine this suite runs on. So the
-	// derivation is read, and the comparison — the part the finding was
-	// about — is executed below.
+	// the point. The version has to come from the tag that triggered the
+	// release, and the arguments the job passes — the interval, the
+	// window and the client — are what make the loop below the one that
+	// runs there. The shell that supplies them cannot be executed from
+	// here on every machine this suite runs on, so they are read.
 	if !strings.Contains(joined, `version="${GITHUB_REF_NAME#v}"`) {
 		t.Errorf("the readback does not take its version from the tag that triggered it:\n%s",
 			joined)
 	}
-	if !strings.Contains(joined, `"${version}"`) {
-		t.Errorf("the readback compares against something other than that version:\n%s", joined)
+	const shipped = `' "${version}" 10 300 npm`
+	if !strings.Contains(joined, "\n"+shipped) {
+		t.Errorf("the readback is not run as %q: every 10 seconds, for up to 300, through the "+
+			"registry client.\n%s", shipped, joined)
 	}
 
 	program, ok := inlineNodeProgram(script)
@@ -351,22 +369,147 @@ func TestThePublishMeasuresTheRegistryRatherThanAssumingIt(t *testing.T) {
 		t.Fatalf("the readback carries no program this row can run:\n%s", joined)
 	}
 
-	// The arrangement nobody could find documented, which is this
-	// package's own: a placeholder already published at a higher version
-	// than the one being released.
-	if code, out := runNodeProgram(t, program, "0.1.0", `{"latest":"0.1.0"}`); code != 0 {
-		t.Errorf("the readback fails a release the registry agrees with (exit %d):\n%s", code, out)
+	for _, tc := range []struct {
+		name      string
+		tags      []string
+		published bool
+		pass      bool
+		mention   []string
+		unspoken  []string
+	}{
+		{name: "the registry agrees at once", tags: []string{`{"latest":"0.1.2"}`},
+			published: true, pass: true, mention: []string{"0.1.2", "after the publish"}},
+		{name: "stale, then settled", tags: []string{`{"latest":"0.1.0"}`, `{"latest":"0.1.0"}`, `{"latest":"0.1.2"}`},
+			published: true, pass: true, mention: []string{"answers 0.1.0", "0.1.2"}},
+		{name: "a failed read, then an answer", tags: []string{"fail", `{"latest":"0.1.2"}`},
+			published: true, pass: true, mention: []string{"a failed read"}},
+		{name: "the version is there and the pointer names another", tags: []string{`{"latest":"1.0.0"}`},
+			published: true, pass: false, mention: []string{"1.0.0", "npm dist-tag add"}},
+		{name: "the registry never finished", tags: []string{`{"latest":"0.1.0"}`},
+			published: false, pass: false, mention: []string{"did not finish", "0.1.0"},
+			unspoken: []string{"dist-tag add"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A WINDOW PER OUTCOME. Each read starts an interpreter, which
+			// takes a noticeable fraction of a second on some runners, so a
+			// case that must SETTLE gets a window it cannot outrun and
+			// returns as soon as it settles; only the two that must run out
+			// get a short one.
+			window := "30"
+			if !tc.pass {
+				window = "0.3"
+			}
+			client := standInRegistry(t, tc.tags, tc.published)
+			code, out := runNodeProgram(t, program, append([]string{"0.1.2", "0.02", window}, client...)...)
+			if (code == 0) != tc.pass {
+				t.Errorf("exit %d, want the readback to %s\n%s", code,
+					map[bool]string{true: "pass", false: "fail"}[tc.pass], out)
+			}
+			for _, want := range tc.mention {
+				if !strings.Contains(out, want) {
+					t.Errorf("the readback does not say %q\n%s", want, out)
+				}
+			}
+			for _, not := range tc.unspoken {
+				if strings.Contains(out, not) {
+					t.Errorf("the readback says %q to a registry that had not finished, which "+
+						"sends the operator to move a pointer that was about to move itself\n%s", not, out)
+				}
+			}
+		})
 	}
-	code, out := runNodeProgram(t, program, "0.1.0", `{"latest":"1.0.0"}`)
-	if code == 0 {
-		t.Errorf("the readback passes while the registry points at another version\n" +
-			"Without the comparison this step is a command whose output nobody reads, and " +
-			"the release ships a package nobody can install by name.")
+}
+
+// standInRegistry writes a stand-in for the registry client and returns
+// the command that runs it. It answers the newest-pointer read from
+// tags in order, repeating the last answer once they run out; "fail"
+// makes that read fail. The single-version read answers 0.1.2 when
+// published and fails as an unknown version otherwise.
+//
+// A SCRIPT RUN BY THE INTERPRETER, NOT A FILE ON THE PATH, for the reason
+// the release script's harness gives: whether a file on the path is
+// executable is a different answer on each of the three platforms this
+// suite runs on. The readback takes its client as arguments, so the
+// stand-in needs no path at all.
+func standInRegistry(t *testing.T, tags []string, published bool) []string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatalf("node is not on PATH, and this row RUNS the release's readback: %v", err)
 	}
-	if !strings.Contains(out, "1.0.0") {
-		t.Errorf("the readback refuses without saying where the registry points:\n%s\n"+
-			"The operator action on a red readback is to move the pointer by hand, which "+
-			"needs to know what it points at now.", out)
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state.json")
+	data, err := json.Marshal(map[string]any{"tags": tags, "published": published, "reads": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const stub = `const fs = require("node:fs");
+const [, , state, ...args] = process.argv;
+const s = JSON.parse(fs.readFileSync(state, "utf8"));
+if (args.includes("dist-tags")) {
+  const answer = s.tags[Math.min(s.reads, s.tags.length - 1)];
+  s.reads += 1;
+  fs.writeFileSync(state, JSON.stringify(s));
+  if (answer === "fail") { console.error("npm error code ETIMEDOUT"); process.exit(1); }
+  console.log(answer);
+} else if (s.published) {
+  console.log("0.1.2");
+} else {
+  console.error("npm error code E404"); process.exit(1);
+}
+`
+	script := filepath.Join(dir, "registry.js")
+	if err := os.WriteFile(script, []byte(stub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return []string{node, script, state}
+}
+
+// registryReaders are the files that ask the package registry anything:
+// the release, which reads back what it published, and the release
+// script, which prints the registry's state above the decision to tag.
+var registryReaders = []string{releaseWorkflow, cutReleaseScript}
+
+// TestEveryRegistryReadIsALiveRead requires the flag that makes the
+// registry client ask the registry rather than its own cache, on every
+// read in the files that read it.
+//
+// A CACHED ANSWER IS INDISTINGUISHABLE FROM A FRESH ONE AT THE CALL SITE,
+// which is why the flag belongs in the command rather than in anybody's
+// memory of when to add it. During one release the cache answered a
+// missing package for one that existed, and an old newest version for one
+// that had moved, and both were reported as the registry's state.
+//
+// A read is recognised in both spellings the files use: the shell's
+// command line, and the argument list a program hands the client.
+// Comment lines are prose and are not reads.
+//
+// MUTATION RUN, performed and observed: dropping the flag from one read
+// reds this row, naming the file and line, and no other row.
+func TestEveryRegistryReadIsALiveRead(t *testing.T) {
+	root := moduleRoot(t)
+	read := regexp.MustCompile(`npm view|\["view",`)
+	scanned := 0
+	for _, rel := range registryReaders {
+		for i, line := range strings.Split(readRepoFile(t, root, rel), "\n") {
+			text := strings.TrimSpace(line)
+			if strings.HasPrefix(text, "#") || !read.MatchString(text) {
+				continue
+			}
+			scanned++
+			if !strings.Contains(text, "--prefer-online") {
+				t.Errorf("%s:%d reads the registry without --prefer-online:\n  %s\n"+
+					"Without it the client may answer from its cache, and that answer is "+
+					"reported as the registry's state.", rel, i+1, text)
+			}
+		}
+	}
+	if scanned < 3 {
+		t.Fatalf("found %d registry reads across %v, and the release makes at least three; "+
+			"this row is not looking where the reads are", scanned, registryReaders)
 	}
 }
 
