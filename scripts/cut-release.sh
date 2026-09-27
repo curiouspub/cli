@@ -16,7 +16,8 @@
 #
 # So it does three things, in this order, and then it stops:
 #
-#   1. refuses an argument that is not a version;
+#   1. refuses an argument that is not a version, and one that is not the
+#      version this commit declares;
 #   2. enumerates what already exists — tags, published releases, the
 #      registry's tags, the tap's contents — and distinguishes "there is
 #      none" from "I could not find out", refusing on the second;
@@ -39,6 +40,14 @@ set -euo pipefail
 readonly REPO="curiouspub/cli"
 readonly TAP="curiouspub/homebrew-tap"
 readonly PACKAGE="curiouspub"
+
+# EVERY COMMITTED COPY OF THE VERSION, as file:how-many-copies-it-holds.
+# The package manifest holds one; the lockfile repeats it twice, once at
+# its top level and once in the entry for the package itself. A guard
+# reads this line and requires it to name every tracked file that
+# carries the declared version, with the same counts, so a copy added
+# somewhere else reds the suite rather than going unread here.
+readonly VERSION_COPIES=("npm/package.json:1" "npm/package-lock.json:2")
 
 # Distinct statuses, because a caller that cannot tell "the run could not
 # be made" from "the run found a problem" reads a broken environment as a
@@ -71,6 +80,91 @@ fail_usage() {
 fail_refused() {
 	printf 'cut-release: %s\n' "$1" >&2
 	exit "$EXIT_REFUSED"
+}
+
+# check_version_copies refuses a version this commit does not declare,
+# everywhere it declares one.
+#
+# A VERSION THAT LIVES IN MORE THAN ONE FILE IS CHECKED FOR AGREEMENT
+# BEFORE THE IRREVERSIBLE ACT, NOT AFTER. The package publish compares the
+# tag with the package's version and refuses a mismatch, correctly — but
+# it runs after the release is public, the binaries are downloadable and
+# the tap has been written, so what it can do by then is decline to
+# finish. A release was cut here that way once: every other channel
+# shipped, the package stayed on the version before, and the tag could
+# not be moved because people had already fetched what it named. The
+# same comparison run here costs nothing and happens while the tag is
+# still a line on a screen.
+#
+# It reads the files with the shell alone, for the reason usage does:
+# the hermetic rows give this script no programs but the three
+# stand-ins. It matches with case patterns rather than the shell's
+# expression operator, because the one expression in this file is the
+# definition of a release version and another reader takes it from here
+# by being the only one.
+#
+# FEWER COPIES THAN EXPECTED IS UNDETERMINED, NOT AGREEMENT. A reader
+# that found nothing to compare has not found agreement, and a check that
+# passes over a file it could not read is the confident absence step 2
+# exists to refuse.
+check_version_copies() {
+	local want="$1" entry file expected found line trimmed indent value in_self
+	local -a disagree=()
+	for entry in "${VERSION_COPIES[@]}"; do
+		file="${entry%:*}"
+		expected="${entry##*:}"
+		if [ ! -r "$file" ]; then
+			undetermined "the version $file declares" \
+				"$file could not be read from the directory this was run in."
+		fi
+		found=0
+		in_self=0
+		while IFS= read -r line || [ -n "$line" ]; do
+			line="${line%$'\r'}"
+			trimmed="${line#"${line%%[![:space:]]*}"}"
+			indent=$((${#line} - ${#trimmed}))
+			case "$trimmed" in
+			'"": {'*)
+				in_self=1
+				continue
+				;;
+			'}'*)
+				if [ "$indent" -le 4 ]; then
+					in_self=0
+				fi
+				continue
+				;;
+			'"version": "'*) ;;
+			*) continue ;;
+			esac
+			# Only the top level, and the lockfile's entry for the package
+			# itself: every dependency the lockfile lists has a version of
+			# its own, and none of them is this one.
+			if [ "$indent" -ne 2 ] && { [ "$in_self" -ne 1 ] || [ "$indent" -ne 6 ]; }; then
+				continue
+			fi
+			value="${trimmed#'"version": "'}"
+			value="${value%%\"*}"
+			found=$((found + 1))
+			printf '  %s: %s\n' "$file" "$value"
+			if [ "$value" != "$want" ]; then
+				disagree+=("$file says $value")
+			fi
+		done <"$file"
+		if [ "$found" -ne "$expected" ]; then
+			undetermined "the version $file declares" \
+				"found $found copies of the version in it where $expected were expected."
+		fi
+	done
+	if [ "${#disagree[@]}" -ne 0 ]; then
+		printf '\n'
+		fail_refused "$(printf 'the version being cut is %s, and this commit declares otherwise:\n' "$want"
+			printf '  %s\n' "${disagree[@]}"
+			printf 'The package publish builds every download address from that version and\n'
+			printf 'would refuse after everything else had shipped. Change every copy to %s\n' "$want"
+			printf 'in a commit, merge it, and cut the release from that commit.')"
+	fi
+	printf 'every committed copy agrees: %s\n\n' "$want"
 }
 
 # undetermined is the whole reason step 2 exists. Every caller of it has
@@ -132,7 +226,14 @@ main() {
 		printf 'working tree: NOT CLEAN\n%s\n\n' "$dirty"
 		fail_refused "the working tree has changes; a tag would name a commit that does not contain them"
 	fi
-	printf 'working tree: clean\n'
+	printf 'working tree: clean\n\n'
+
+	# --- the version this commit declares ---------------------------
+	#
+	# After the clean-tree check on purpose: with the tree clean, the
+	# files read here are the files the tag would name.
+	printf 'declared version:\n'
+	check_version_copies "${version#v}"
 
 	local branch
 	branch="$(git rev-parse --abbrev-ref HEAD)"

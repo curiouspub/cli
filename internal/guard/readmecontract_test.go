@@ -532,8 +532,23 @@ func releaseTagVersion(tag string) (version string, preRelease bool) {
 // disclaimer — a spike marker, an experiment, a name pushed to move work
 // between machines — and the page then described installing something
 // that is not published. What retires it is a tag that looks like a
-// release version, carries no pre-release suffix, and names the version
-// this repository is at.
+// release version, carries no pre-release suffix, and names a version
+// this repository has REACHED: the one it declares, or an earlier one.
+//
+// "OR AN EARLIER ONE" WAS ADDED BY THE SECOND RELEASE, and it was found by
+// running into it rather than by reading. The rule first accepted only
+// the declared version itself, which is right exactly once: before the
+// first release, the tag and the declaration arrive together. For every
+// release after it, the package's version has to move BEFORE its tag
+// exists — the tag must name a commit that already declares it — and on
+// that commit the only reachable releases are earlier ones. The rule then
+// demanded that a page with two releases behind it say nothing is
+// published, and no commit could satisfy it and still be taggable. A tag
+// AHEAD of the declared version still retires nothing: it names a release
+// this tree has not reached, which is the case the equality was guarding.
+// Mutation run, observed: restoring the equality reds the one-directional
+// row below and, on a tree declaring the next version, the pre-release
+// half itself.
 //
 // IT ANSWERS WITH WHAT IT REFUSED, because a caller cannot reconstruct
 // that from a bool. A tree carrying tags and still owing the disclaimer
@@ -550,12 +565,50 @@ func publicationDisclaimerRequired(releaseTag *regexp.Regexp, tags []string, dec
 	var rejected []string
 	for _, tag := range tags {
 		version, preRelease := releaseTagVersion(tag)
-		if releaseTag.MatchString(tag) && !preRelease && version == declared {
+		if releaseTag.MatchString(tag) && !preRelease && versionReached(version, declared) {
 			return false, nil
 		}
 		rejected = append(rejected, tag)
 	}
 	return true, rejected
+}
+
+// versionReached reports whether a final release version is the declared
+// one or earlier, comparing MAJOR, MINOR and PATCH as numbers. A
+// declaration carrying a pre-release suffix is compared by its three
+// numbers alone: a final release of those numbers is published whether
+// or not this tree is cutting a candidate of it. Anything that does not
+// parse has reached nothing, so it retires nothing.
+func versionReached(version, declared string) bool {
+	parse := func(s string) ([3]int, bool) {
+		var out [3]int
+		if dash := strings.IndexByte(s, '-'); dash >= 0 {
+			s = s[:dash]
+		}
+		parts := strings.Split(s, ".")
+		if len(parts) != 3 {
+			return out, false
+		}
+		for i, p := range parts {
+			n, err := strconv.Atoi(p)
+			if err != nil || n < 0 {
+				return out, false
+			}
+			out[i] = n
+		}
+		return out, true
+	}
+	v, okV := parse(version)
+	d, okD := parse(declared)
+	if !okV || !okD {
+		return false
+	}
+	for i := range v {
+		if v[i] != d[i] {
+			return v[i] < d[i]
+		}
+	}
+	return true
 }
 
 // TestReadmePublicationStateRow is the PRE-RELEASE HALF of the rule:
@@ -731,6 +784,15 @@ func TestThePublicationRuleIsOneDirectional(t *testing.T) {
 		// looks for a release among the reachable names; it does not
 		// insist that every name is one.
 		{"spike-pack-walk", "v4.5.6"},
+
+		// THE TREE BETWEEN TWO RELEASES, which is where every release
+		// after the first is cut from: the package already declares the
+		// next version, and only earlier releases are reachable. Something
+		// IS published, so the sentence would be false here.
+		{"v4.5.4", "v4.5.5"},
+		{"v4.4.9"},
+		{"v3.12.0"},
+		{"v4.5.5-rc.1", "v4.5.5"},
 	} {
 		if requiredNow, _ := publicationDisclaimerRequired(pattern, tags, declared); requiredNow {
 			t.Errorf("with %v reachable the decision still demanded the disclaimer.\n"+
@@ -742,7 +804,7 @@ func TestThePublicationRuleIsOneDirectional(t *testing.T) {
 	}
 }
 
-// TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer is the row the
+// TestOnlyAReleaseThisTreeHasReachedRetiresTheDisclaimer is the row the
 // version-aware decision exists for.
 //
 // The rule used to key on the PRESENCE of a reachable tag, so any name in
@@ -755,7 +817,7 @@ func TestThePublicationRuleIsOneDirectional(t *testing.T) {
 // EACH CASE NAMES THE TAG BACK. A demand for the disclaimer on a tree
 // that plainly carries tags reads as a stuck guard unless the answer says
 // which names it refused.
-func TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer(t *testing.T) {
+func TestOnlyAReleaseThisTreeHasReachedRetiresTheDisclaimer(t *testing.T) {
 	pattern := releaseTagPattern(t, moduleRoot(t))
 	const declared = "4.5.6"
 
@@ -764,8 +826,9 @@ func TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer(t *testing.T) {
 		"before-the-rewrite", // the same, and the shape work-in-progress tags take
 		"v4.5",               // short of a patch version
 		"4.5.6",              // the version, with no v — which the release path refuses
-		"v4.5.7",             // a release version, of a release this tree is not at
+		"v4.5.7",             // a release version, of a release ahead of this tree
 		"v10.5.6",            // the same, sharing its ending with the declared one
+		"v4.10.0",            // ahead by MINOR, which a comparison of text would call earlier
 		"release-v4.5.6",     // a name with a release version inside it
 
 		// A PRE-RELEASE OF THE DECLARED VERSION, which is the case this
@@ -776,10 +839,14 @@ func TestOnlyAReleaseOfThisVersionRetiresTheDisclaimer(t *testing.T) {
 		// refused right here, where somebody will look for it.
 		"v4.5.6-rc.1",
 		"v4.5.6-beta.2",
+		// And a pre-release of an EARLIER version, which retires nothing
+		// for the same reason: being earlier does not make it final.
+		"v4.5.5-rc.1",
 	} {
 		requiredNow, rejected := publicationDisclaimerRequired(pattern, []string{tag}, declared)
 		if !requiredNow {
-			t.Errorf("the tag %q retired the disclaimer, and it names no release of %s.\n"+
+			t.Errorf("the tag %q retired the disclaimer, and it names no final release of %s "+
+				"or earlier.\n"+
 				"Any reachable name used to be enough, which leaves a public page describing "+
 				"an install that cannot work.", tag, declared)
 		}

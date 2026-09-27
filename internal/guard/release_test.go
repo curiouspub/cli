@@ -1698,7 +1698,7 @@ func TestCutReleaseMakesNoOutwardChangeWithoutConsent(t *testing.T) {
 	harness := writeHarness(t, t.TempDir())
 
 	cmd := exec.Command(bash, harness)
-	cmd.Dir = root
+	cmd.Dir = versionFixture(t, root, "9.9.9")
 	cmd.Env = append(os.Environ(),
 		"CALL_LOG="+log,
 		"EMPTY_PATH="+t.TempDir(),
@@ -1870,7 +1870,7 @@ func TestCutReleaseRefusesAVersionThatIsNotOne(t *testing.T) {
 		log := filepath.Join(t.TempDir(), "calls.log")
 		harness := writeHarness(t, t.TempDir())
 		cmd := exec.Command(bash, harness)
-		cmd.Dir = root
+		cmd.Dir = versionFixture(t, root, "1.2.3")
 		cmd.Env = append(os.Environ(),
 			"CALL_LOG="+log,
 			"EMPTY_PATH="+t.TempDir(),
@@ -1882,6 +1882,319 @@ func TestCutReleaseRefusesAVersionThatIsNotOne(t *testing.T) {
 			t.Errorf("the script refused a well-formed version: %v\n%s", err, out)
 		}
 	})
+}
+
+// versionCopy is one entry of the release script's list of the files
+// that carry the version: the file, and how many copies it holds.
+type versionCopy struct {
+	file  string
+	count int
+}
+
+// versionCopies reads that list out of the script, which is its one home.
+// The rows below take the file names from here rather than restating
+// them, so the list they test is the list the script reads.
+func versionCopies(t *testing.T, root string) []versionCopy {
+	t.Helper()
+	const decl = "readonly VERSION_COPIES=("
+	entry := regexp.MustCompile(`"([^"]+):([0-9]+)"`)
+	var copies []versionCopy
+	lines := 0
+	for _, line := range strings.Split(readRepoFile(t, root, cutReleaseScript), "\n") {
+		if !strings.HasPrefix(line, decl) {
+			continue
+		}
+		lines++
+		for _, m := range entry.FindAllStringSubmatch(line, -1) {
+			n, _ := strconv.Atoi(m[2])
+			copies = append(copies, versionCopy{file: m[1], count: n})
+		}
+	}
+	if lines != 1 || len(copies) == 0 {
+		t.Fatalf("%s holds %d lines declaring the version's copies, with %d entries between "+
+			"them; this reader needs exactly one line that names at least one file", cutReleaseScript,
+			lines, len(copies))
+	}
+	return copies
+}
+
+// versionFixture writes a directory whose copies of the version all say
+// version, and returns it. The copies are the REAL files with the
+// declared version swapped out, so the script's reader meets the shapes
+// a release will meet rather than a hand-written imitation of them —
+// including the lockfile's dependency entries, whose versions are not
+// this one and must not be read as copies of it.
+func versionFixture(t *testing.T, root, version string) string {
+	t.Helper()
+	declared := declaredWrapperVersion(t, root)
+	dir := t.TempDir()
+	for _, c := range versionCopies(t, root) {
+		body := readRepoFile(t, root, c.file)
+		old := `"version": "` + declared + `"`
+		if n := strings.Count(body, old); n != c.count {
+			t.Fatalf("%s holds %d copies of the declared version %s where the release script "+
+				"expects %d, so a fixture made from it would not be the file a release reads",
+				c.file, n, declared, c.count)
+		}
+		path := filepath.Join(dir, filepath.FromSlash(c.file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("making the fixture's %s: %v", filepath.Dir(c.file), err)
+		}
+		fresh := strings.ReplaceAll(body, old, `"version": "`+version+`"`)
+		if err := os.WriteFile(path, []byte(fresh), 0o644); err != nil {
+			t.Fatalf("writing the fixture's %s: %v", c.file, err)
+		}
+	}
+	return dir
+}
+
+// refusedExit and undeterminedExit are the script's two non-usage
+// statuses, named for the same reason usageExit is: "it failed" is
+// satisfied by every failure, including the ones that never reached the
+// subject.
+const (
+	refusedExit      = 1
+	undeterminedExit = 3
+)
+
+// TestCutReleaseRefusesAVersionThisCommitDoesNotDeclare holds the check
+// that runs before a tag exists, where agreement between the copies of
+// the version can still be fixed by a commit.
+//
+// THE PACKAGE PUBLISH ALREADY REFUSES A MISMATCH, AND THAT IS WHY THIS ROW
+// EXISTS RATHER than a reason it need not. That refusal runs after the
+// release is public, the binaries downloadable and the tap written; a
+// release was cut here with the package a version behind, every other
+// channel shipped, and the one refusal in the pipeline arrived when the
+// tag could no longer be moved. The comparison is the same; the moment is
+// what changed.
+//
+// EVERY REFUSED CASE ALSO ASSERTS THE SCRIPT ASKED THE WORLD NOTHING. The
+// check reads two local files, so a registry lookup or a release listing
+// before it is a network call a refused release did not need to make.
+//
+// MUTATIONS RUN, performed and observed. Removing the call reds all six
+// cases that should stop. Replacing the comparison with an unconditional
+// pass reds the three disagreement cases and the pre-release case, and
+// nothing else. Letting the reader count every "version" line in the
+// lockfile rather than the package's own reds every run that reaches the
+// check — both older rows included — because the dependency entries
+// become copies and every release is undetermined. Deleting the
+// fewer-than-expected check turns the copy the reader cannot find into a
+// pass; the missing file is still caught, by the read check before it.
+func TestCutReleaseRefusesAVersionThisCommitDoesNotDeclare(t *testing.T) {
+	root := moduleRoot(t)
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no interpreter to drive the release script with")
+	}
+	script := filepath.Join(root, filepath.FromSlash(cutReleaseScript))
+	const manifest, lockfile = "npm/package.json", "npm/package-lock.json"
+	listed := map[string]bool{}
+	for _, c := range versionCopies(t, root) {
+		listed[c.file] = true
+	}
+	if !listed[manifest] || !listed[lockfile] {
+		t.Fatalf("the cases below edit %s and %s, and the script's list does not name both, so "+
+			"they would be testing a reader that never opens the file they changed", manifest, lockfile)
+	}
+
+	// nthCopy rewrites the n-th occurrence of old in file, and fails the
+	// row if there is none, so a case cannot pass by editing nothing.
+	nthCopy := func(t *testing.T, dir, file, old, replacement string, n int) {
+		t.Helper()
+		path := filepath.Join(dir, filepath.FromSlash(file))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(data)
+		at := -1
+		for i := 0; i < n; i++ {
+			next := strings.Index(body[at+1:], old)
+			if next < 0 {
+				t.Fatalf("%s has no copy %d of %s to change", file, n, old)
+			}
+			at += 1 + next
+		}
+		body = body[:at] + replacement + body[at+len(old):]
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		declared string
+		edit     func(t *testing.T, dir string)
+		cut      string
+		exit     int
+		mention  []string
+		unspoken []string
+	}{
+		{name: "every copy agrees", declared: "1.2.3", cut: "v1.2.3"},
+		{name: "a pre-release, declared as one", declared: "1.2.3-rc.1", cut: "v1.2.3-rc.1"},
+		{
+			name: "every copy is the release before", declared: "1.2.3", cut: "v1.2.4",
+			exit:    refusedExit,
+			mention: []string{manifest + " says 1.2.3", lockfile + " says 1.2.3", "1.2.4"},
+		},
+		{
+			name: "only the lockfile's top level is behind", declared: "1.2.4", cut: "v1.2.4",
+			edit: func(t *testing.T, dir string) {
+				nthCopy(t, dir, lockfile, `"version": "1.2.4"`, `"version": "1.2.3"`, 1)
+			},
+			exit:     refusedExit,
+			mention:  []string{lockfile + " says 1.2.3"},
+			unspoken: []string{manifest + " says"},
+		},
+		{
+			name: "only the lockfile's entry for the package is behind", declared: "1.2.4", cut: "v1.2.4",
+			edit: func(t *testing.T, dir string) {
+				nthCopy(t, dir, lockfile, `"version": "1.2.4"`, `"version": "1.2.3"`, 2)
+			},
+			exit:     refusedExit,
+			mention:  []string{lockfile + " says 1.2.3"},
+			unspoken: []string{manifest + " says"},
+		},
+		{
+			name: "a pre-release cut from a final declaration", declared: "1.2.3", cut: "v1.2.3-rc.1",
+			exit:    refusedExit,
+			mention: []string{manifest + " says 1.2.3"},
+		},
+		{
+			name: "a copy the reader cannot find", declared: "1.2.3", cut: "v1.2.3",
+			edit: func(t *testing.T, dir string) {
+				// The package's own entry loses its version field, which is
+				// what a lockfile rewritten into another shape looks like
+				// to a reader that knows only this one.
+				nthCopy(t, dir, lockfile, `"version": "1.2.3"`, `"versio": "1.2.3"`, 2)
+			},
+			exit:    undeterminedExit,
+			mention: []string{"found 1 copies", lockfile},
+		},
+		{
+			name: "a file that is not there", declared: "1.2.3", cut: "v1.2.3",
+			edit: func(t *testing.T, dir string) {
+				if err := os.Remove(filepath.Join(dir, filepath.FromSlash(lockfile))); err != nil {
+					t.Fatal(err)
+				}
+			},
+			exit:    undeterminedExit,
+			mention: []string{lockfile + " could not be read"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := versionFixture(t, root, tc.declared)
+			if tc.edit != nil {
+				tc.edit(t, dir)
+			}
+			log := filepath.Join(t.TempDir(), "calls.log")
+			cmd := exec.Command(bash, writeHarness(t, t.TempDir()))
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(),
+				"CALL_LOG="+log,
+				"EMPTY_PATH="+t.TempDir(),
+				"SCRIPT="+script,
+				"VERSION="+tc.cut,
+			)
+			out, runErr := cmd.CombinedOutput()
+			code := 0
+			var exit *exec.ExitError
+			if errors.As(runErr, &exit) {
+				code = exit.ExitCode()
+			} else if runErr != nil {
+				t.Fatalf("the script did not run at all: %v\n%s", runErr, out)
+			}
+			if code != tc.exit {
+				t.Fatalf("cutting %s from a tree declaring %s exited %d, want %d\n%s",
+					tc.cut, tc.declared, code, tc.exit, out)
+			}
+			for _, want := range tc.mention {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("the answer does not say %q, so the operator is left to find which "+
+						"copy disagreed\n%s", want, out)
+				}
+			}
+			for _, not := range tc.unspoken {
+				if strings.Contains(string(out), not) {
+					t.Errorf("the answer names %q, which agreed — a refusal that blames every "+
+						"file sends the operator to edit the wrong one\n%s", not, out)
+				}
+			}
+			if tc.exit == 0 {
+				return
+			}
+			calls, _ := os.ReadFile(log)
+			for _, call := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+				if strings.HasPrefix(call, "gh ") || strings.HasPrefix(call, "npm ") ||
+					strings.Contains(call, "tag ") || strings.Contains(call, "push") {
+					t.Errorf("a release this commit does not declare still ran %q; the check "+
+						"reads two local files and has no reason to ask the world anything first", call)
+				}
+			}
+		})
+	}
+}
+
+// TestEveryCommittedCopyOfTheVersionIsOneTheReleaseScriptReads holds the
+// script's list to the tree: every published file carrying the declared
+// version in a "version" field is on it, with the number of copies it
+// holds, and nothing on it has stopped carrying one.
+//
+// A LIST OF COPIES IS ONLY AS GOOD AS ITS COMPLETENESS, and the failure
+// it prevents is the one this check was written after: a version living
+// in a file nobody thought to compare. A copy added anywhere else makes
+// this row red on the day it is added, rather than on a release day.
+//
+// ITS LIMIT, STATED: it finds copies by the value the package declares,
+// so a new copy that ALREADY disagrees is invisible to it — and the
+// script, not having it on the list, does not read it either. What it
+// catches is the ordinary case, a copy written correctly and never
+// listed, which is the one that goes stale at the next bump.
+//
+// MUTATION RUN, performed and observed: dropping the lockfile from the
+// script's list reds this row, naming the lockfile and its two copies,
+// and stops the refusal row above, whose cases edit a file the list no
+// longer names.
+func TestEveryCommittedCopyOfTheVersionIsOneTheReleaseScriptReads(t *testing.T) {
+	root := moduleRoot(t)
+	declared := declaredWrapperVersion(t, root)
+	field := regexp.MustCompile(`"version"\s*:\s*"` + regexp.QuoteMeta(declared) + `"`)
+
+	found := map[string]int{}
+	for _, path := range publishedTextFiles(t, root) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		if n := len(field.FindAllIndex(data, -1)); n > 0 {
+			found[displayPath(root, path)] = n
+		}
+	}
+	listed := map[string]int{}
+	for _, c := range versionCopies(t, root) {
+		listed[c.file] = c.count
+	}
+	if len(found) == 0 {
+		t.Fatalf("no published file carries the declared version %s in a version field, not even "+
+			"the package manifest it was read from, so this row is not looking where it thinks", declared)
+	}
+	for file, n := range found {
+		if listed[file] != n {
+			t.Errorf("%s carries %d copies of the version %s and %s lists %d.\n"+
+				"The release script compares only the copies it lists, so an unlisted one is "+
+				"free to fall behind at the next bump and be found by the publish that fails "+
+				"after the release is public.", file, n, declared, cutReleaseScript, listed[file])
+		}
+	}
+	for file, n := range listed {
+		if found[file] == 0 {
+			t.Errorf("%s lists %s with %d copies of the version, and it carries none of %s.\n"+
+				"A listed file that no longer holds the version makes every release undetermined.",
+				cutReleaseScript, file, n, declared)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------
