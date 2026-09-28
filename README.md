@@ -28,7 +28,7 @@ of its state, and every page that describes the product uses them:
 Under the phrase, two facts. They used to point in different directions;
 they no longer do.
 
-**The command line tool is released — `v0.1.4` — and installs today.**
+**The command line tool is released — `v0.1.5` — and installs today.**
 `npx curiouspub version`, `npm install -g curiouspub` and the Homebrew
 formula all work; the binaries and their checksums are on the release, and
 the checksum file is signed.
@@ -107,7 +107,7 @@ and it tells you what is wrong before it reaches anything.
 
 ## Installing it
 
-**These work today.** `v0.1.4` is published, and each command below was
+**These work today.** `v0.1.5` is published, and each command below was
 run against the real registry and the real tap before this section was
 written. What they get you is the tool, and the tool deploys: "Status"
 above says what that means today.
