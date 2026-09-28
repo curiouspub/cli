@@ -18,9 +18,14 @@ const (
 	migrateThenLink    = "brew uninstall --cask curious && brew link curiouspub/tap/curiouspub"
 )
 
-// TestEveryCaskMigrationNamesBothCommands holds the three places a cask
-// user can meet the migration — the formula's caveats, the cask's own
-// caveat, and the README's install section — to naming both commands.
+// TestEveryCaskMigrationNamesBothCommands holds the places a cask user
+// can meet the migration — the formula's caveats and the README's install
+// section — to naming both commands.
+//
+// THERE WERE THREE PLACES, AND THE THIRD LEFT WITH THE CASK. The cask
+// carried the same caveat while it was still released. It is gone from
+// the tap now, but installed copies are not, so the two places that
+// remain are the ones a person with an old cask still reads.
 //
 // IT WAS ONE COMMAND, AND ONE WAS WRONG FOR HALF THE READERS. The cask's
 // caveat said to uninstall it and install the formula. On a machine that
@@ -41,16 +46,15 @@ const (
 // current package manager takes the command over from the cask instead,
 // measured on another, so the sentence was true of one version and false
 // of the next. The commands are right for both; the claim about linking
-// is held out of all three places.
+// is held out of both places.
 //
 // MUTATIONS RUN, performed and observed: dropping the link command from
-// each of the three places reds this row naming that place, and no other
+// each place reds this row naming that place, and no other
 // row; so does removing the formula's caveats from the rendered output.
 func TestEveryCaskMigrationNamesBothCommands(t *testing.T) {
 	root := moduleRoot(t)
 	places := map[string]string{
 		"the formula's caveats":           renderedFormulaCaveats(t, root),
-		"the cask's caveat":               caskCaveat(t, root),
 		"the README's installing section": readmeSection(t, readReadmeFile(t, root), "## Installing it"),
 	}
 	for place, text := range places {
@@ -114,28 +118,6 @@ func renderedFormulaCaveats(t *testing.T, root string) string {
 		return ""
 	}
 	return formula[start : start+end]
-}
-
-// caskCaveat returns the caveat the release configuration gives the cask:
-// the lines indented under its key.
-func caskCaveat(t *testing.T, root string) string {
-	t.Helper()
-	lines := strings.Split(readRepoFile(t, root, ".goreleaser.yaml"), "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) != "caveats: |" {
-			continue
-		}
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		var out []string
-		for _, next := range lines[i+1:] {
-			if strings.TrimSpace(next) != "" && len(next)-len(strings.TrimLeft(next, " ")) <= indent {
-				break
-			}
-			out = append(out, strings.TrimSpace(next))
-		}
-		return strings.Join(out, "\n")
-	}
-	return ""
 }
 
 // readmeSection returns the README from a heading to the next heading of

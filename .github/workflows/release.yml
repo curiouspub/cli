@@ -180,11 +180,9 @@ jobs:
           # Minted for this job by the runner and bounded by the
           # permissions block above. It is never a repository secret.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Write access to the tap repository and nothing else. The job
-          # token cannot reach another repository at all, and a token
-          # that could reach every repository would hand this job far
-          # more than a tap write.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # No tap credential. The release tool writes nothing to the tap
+          # any more; the formula job below does, and holds the one
+          # token that can.
           # The developer certificate and the notary key. Read by the
           # release tool's signing block in .goreleaser.yaml, and by
           # nothing else in this run except the two steps beside this one.
@@ -286,6 +284,12 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
+      # THE OLD CASK LEAVES THE TAP IN THE SAME COMMIT. Nothing writes it
+      # any more, so a copy left behind would go on offering the last
+      # version it was given, to anyone who asked for it by name. Removing
+      # it here rather than by hand keeps the tap's contents a product of
+      # the release, and --ignore-unmatch makes every later release a
+      # no-op for it.
       - name: publish the formula to the tap
         run: |
           set -euo pipefail
@@ -295,6 +299,7 @@ jobs:
           git config user.name "curious release"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/curiouspub.rb
+          git rm --quiet --ignore-unmatch Casks/curious.rb
           git commit -m "curiouspub ${GITHUB_REF_NAME}"
           git push
 

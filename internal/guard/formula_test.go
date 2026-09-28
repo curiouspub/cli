@@ -61,4 +61,46 @@ func TestTheFormulaJobWritesFromThisRunsChecksums(t *testing.T) {
 	if !hasEntry(formula.Body, "environment", "release") {
 		t.Error("the formula job writes to the tap outside the reviewed release environment")
 	}
+	if _, ok := lineWith(formula.Body, "git rm --quiet --ignore-unmatch Casks/curious.rb"); !ok {
+		t.Error("the formula job does not delete the tap's old cask. Nothing writes it any more, " +
+			"so a copy left in the tap goes on offering the last version it was given.")
+	}
+}
+
+// TestTheTapIsWrittenByTheFormulaJobAlone holds the release to one writer
+// of the tap, and the credential to that writer.
+//
+// THE CASK WAS THE SECOND WRITER, AND IT IS GONE. The release tool wrote
+// the cask into the tap from the publishing job, which is why that job
+// held the tap token. With the cask removed, nothing in the release
+// configuration may write to the tap again: neither a cask block nor the
+// tool's own formula block, whose deprecation is the reason the formula
+// is written outside it. And the token goes where the writing is, which
+// is the formula job and nowhere else.
+func TestTheTapIsWrittenByTheFormulaJobAlone(t *testing.T) {
+	root := moduleRoot(t)
+	config := readYAMLLines(readRepoFile(t, root, releaseConfig))
+	for _, key := range []string{"homebrew_casks", "brews"} {
+		if _, ok := topLevelBlock(config, key); ok {
+			t.Errorf("%s has a %s block, so the release tool writes to the tap as well as the "+
+				"formula job. The tap has one writer.", releaseConfig, key)
+		}
+	}
+	all := jobs(readYAMLLines(readRepoFile(t, root, releaseWorkflow)))
+	seen := 0
+	for _, j := range all {
+		for _, l := range j.Body {
+			if !strings.Contains(l.Text, "secrets.HOMEBREW_TAP_TOKEN") {
+				continue
+			}
+			seen++
+			if j.Name != "formula" {
+				t.Errorf("%s:%d: the %q job names the tap token. Only the formula job writes to "+
+					"the tap, so only it holds the credential.", releaseWorkflow, l.N, j.Name)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Error("nothing in the release workflow names the tap token, so the formula job cannot write the tap")
+	}
 }
