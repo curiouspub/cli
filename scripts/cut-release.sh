@@ -310,7 +310,7 @@ main() {
 	# line above a decision to write into it.
 	local tapfiles
 	rc=0
-	tapfiles="$(gh api "repos/$TAP/contents/Casks" 2>&1)" || rc=$?
+	tapfiles="$(gh api "repos/$TAP/contents/Formula" 2>&1)" || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		case "$tapfiles" in
 		*"HTTP 404"*) printf 'tap contents: nothing published to the tap yet\n\n' ;;

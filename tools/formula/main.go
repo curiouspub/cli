@@ -156,7 +156,9 @@ func render(in input) (string, error) {
 }
 
 // caveatLines is what the formula tells whoever installs it, for the
-// releases in which the older cask still exists.
+// machines that still have the older cask installed. The cask has left
+// the tap, but an installed copy stays until its owner removes it, and
+// this is the moment that owner is looking.
 //
 // THE CASK AND THE FORMULA BOTH CLAIM THE curious COMMAND, and removing
 // the cask afterwards takes the command away. What happens at install
@@ -168,8 +170,8 @@ func render(in input) (string, error) {
 // formula is already installed. Both are spelled out in full: a caveat is
 // read once, at the moment the command it names is needed, and a reader
 // who has to work out the second from the first has been handed a puzzle
-// instead of an answer. The cask's caveat and the README carry the same
-// two commands, and a guard holds all three to them.
+// instead of an answer. The README carries the same two commands, and a
+// guard holds both to them.
 var caveatLines = []string{
 	"Replacing the older cask, curious? Installing this formula takes over",
 	"the curious command, and removing the cask afterwards takes the command",

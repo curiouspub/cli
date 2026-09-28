@@ -216,67 +216,23 @@ signs:
       - '{{ if .IsSnapshot }}--tlog-upload=false{{ else }}--yes{{ end }}'
       - ${artifact}
 
-# The tap lives in its own repository, so the job's own token cannot
-# write to it: a release either names a credential scoped to that one
-# repository or fails outright. Failing outright is the right direction —
-# a release that half-happened is worse than one that did not.
+# THERE IS NO HOMEBREW BLOCK HERE, AND THAT IS DELIBERATE. The tap's
+# channel is a FORMULA, `curiouspub`, written by the release workflow's
+# formula job from this run's checksum file (tools/formula), and
+# installable on macOS and Linux. The release tool's own formula block is
+# deprecated and its validator refuses a configuration that uses one, so
+# the formula is written outside it and the validator stays a gate.
 #
-# THE CASK IS ON ITS LAST RELEASE. The tap's channel is now a FORMULA,
-# `curiouspub`, written by the release workflow's formula job from this
-# run's checksum file (tools/formula), and installable on macOS and Linux.
-#
-# A cask was chosen first because the release tool's formula block is
-# deprecated and its own validator refuses a configuration that uses one.
-# That is still true, and it is why the formula is not written here: the
-# validator stays a gate. What a cask cost was Linux, where it does not
-# install, and a post-install hook the package manager has since
-# deprecated; a formula carries neither cost.
-#
-# This block stays until the formula's macOS binary is accepted by the
-# operating system without any exemption, which is what the signing block
-# above is for. It is removed in the release after the first one that
-# passes that check, and not before: until then, this cask's post-install
-# hook is the only Homebrew install on a Mac that runs without one.
-homebrew_casks:
-  - name: curious
-    binaries: [curious]
-    repository:
-      owner: curiouspub
-      name: homebrew-tap
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Casks
-    # Both of these are spelled for HOMEBREW'S linter rather than to
-    # match the npm wrapper's copy, which keeps its own: a cask homepage
-    # wants a slash after the domain, and a cask description must not end
-    # in a full stop. `brew style` reports each as its own offence, and a
-    # cask that lints dirty is a thing somebody else eventually opens a
-    # pull request about — at the tap, where this file's output lands and
-    # where a fix would be overwritten by the next release.
-    homepage: https://curious.pub/
-    description: Pack an Astro project, upload it, and stream the build
-    license: MIT
-    caveats: |
-      This cask is deprecated and will be removed in a later release.
-      Install the formula instead, which also works on Linux:
-        brew uninstall --cask curious && brew install curiouspub/tap/curiouspub
-      If the formula is already installed, it took over the curious
-      command, and removing this cask takes the command away again.
-      Remove the cask, then link the formula:
-        brew uninstall --cask curious && brew link curiouspub/tap/curiouspub
-    hooks:
-      post:
-        # An unsigned binary downloaded by the package manager is
-        # quarantined by the operating system, and the first run then
-        # fails in a way that reads as a broken download rather than as a
-        # policy. The binaries are now signed and notarised, which is
-        # the proper answer; this hook stays for as long as the cask
-        # does, because it costs nothing and the cask is on its way out.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr",
-                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/curious"]
-          end
+# A CASK CAME FIRST, AND IT IS GONE. It was chosen because of that
+# deprecation, and it cost Linux, where a cask does not install, and a
+# post-install hook the package manager has since deprecated. It stayed
+# for as long as it was the only Homebrew install on a Mac that ran
+# without the terminal being exempt: its hook cleared the quarantine
+# attribute, which the formula's unsigned binary could not survive. Once
+# the macOS binaries were signed and notarised, and a quarantined formula
+# install was seen to run, the cask had nothing left to do. The release
+# workflow deletes the tap's cask file in the same commit that writes the
+# formula, so the tap does not go on serving a version nobody updates.
 
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
