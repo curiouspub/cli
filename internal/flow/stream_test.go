@@ -708,6 +708,8 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.StreamStallTimeout = stall
+	trace := &streamTrace{}
+	run.deps.StreamTrace = trace.record
 	run.script.eventScripts = []eventScript{
 		// Alive, then silent, and never closed: nothing about this
 		// connection is broken, which is why only a stall rule can see
@@ -750,6 +752,50 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 	}
 	if strings.Contains(narrated, streamDropped) {
 		t.Errorf("a connection that was still up was described as lost:\n%s", narrated)
+	}
+
+	// BOTH HALVES OF THE INSTRUMENT, proved on a cut this row makes on
+	// purpose. A stall row that reddens prints these two timelines, and
+	// the reading they support is only as good as what they record: so
+	// here, where the answer is known, the client must show the watchdog
+	// firing a full window after its last read, and the server must show
+	// the client hanging up after that, on the first connection.
+	client := trace.snapshot()
+	server := run.script.timelines()
+	timeline := streamTimeline(server, client)
+	var lastRead, stalled time.Time
+	stalls := 0
+	for _, ev := range client {
+		switch ev.Kind {
+		case StreamTraceRead:
+			if stalls == 0 {
+				lastRead = ev.At
+			}
+		case StreamTraceStalled:
+			stalls++
+			if stalls == 1 {
+				stalled = ev.At
+			}
+		}
+	}
+	if len(client) < 2 || client[0].Kind != StreamTraceOpen || client[1].Kind != StreamTraceOpened {
+		t.Errorf("the reader's trace does not begin with the ask and the response:\n%s", timeline)
+	}
+	if stalls != 1 || lastRead.IsZero() {
+		t.Fatalf("the reader's trace shows %d watchdog firing(s) and a last read at %v, "+
+			"want exactly one firing after at least one read:\n%s", stalls, lastRead, timeline)
+	}
+	if gap := stalled.Sub(lastRead); gap < stall {
+		t.Errorf("the reader's trace puts the watchdog %v after its last read, under the "+
+			"%v window, so the trace is not recording what the watchdog saw:\n%s", gap, stall, timeline)
+	}
+	if len(server) < 1 || len(server[0]) == 0 {
+		t.Fatalf("the harness recorded no timeline for the first connection:\n%s", timeline)
+	}
+	first := server[0]
+	if end := first[len(first)-1]; end.what != "client hung up" || end.at.Before(stalled) {
+		t.Errorf("the first connection's server timeline ends %q at %v, want the client "+
+			"hanging up after its watchdog fired at %v:\n%s", end.what, end.at, stalled, timeline)
 	}
 }
 
@@ -1464,6 +1510,8 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 	run := newDeployRun(t, fixtureProject(t, "valid")).scriptedLogin()
 	run.prompt.confirms = []answer{no()}
 	run.deps.StreamStallTimeout = stall
+	trace := &streamTrace{}
+	run.deps.StreamTrace = trace.record
 	run.script.eventScripts = []eventScript{{
 		frames: frames,
 		pace:   partialLinePace,
@@ -1480,8 +1528,14 @@ func TestBytesArrivingWithoutANewlineAreNotAStall(t *testing.T) {
 			"after %v: %v\n%s", elapsed, err, rendered(err))
 	}
 	if conns := run.script.eventConnections(); conns != 1 {
+		// THE TWO TIMELINES ARE THE DIAGNOSIS, and this red once arrived
+		// without them: two lines and a duration, which could not say
+		// whether the reader was starved, the watchdog fired while bytes
+		// arrived, or the connection itself was slow to answer. See
+		// streamTimeline for how to read what follows.
 		t.Errorf("the stream was opened %d times, want 1 — a healthy connection "+
-			"was cut and replayed", conns)
+			"was cut and replayed. Both timelines, on one clock:\n%s",
+			conns, streamTimeline(run.script.timelines(), trace.snapshot()))
 	}
 	if elapsed < 3*stall {
 		t.Fatalf("the run took %v, under %v, so it never spent long enough on one "+

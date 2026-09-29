@@ -204,6 +204,53 @@ type streamDeps struct {
 	// caller that is not a terminal. Never nil below: streamBuild
 	// defaults it, for the reason its own type gives.
 	Progress DeployProgress
+
+	// Trace, when set, is told what the reader did and when. See
+	// StreamTraceEvent. Nil in production, and a guard holds it there.
+	Trace func(StreamTraceEvent)
+}
+
+// StreamTraceEvent is one thing the build-log reader did, with the moment
+// it did it: asked for the stream, received the response, read bytes off
+// it, or gave up waiting for the next byte.
+//
+// IT EXISTS FOR A ROW, NOT FOR A USER. A stall row that reddens can see
+// its own server's timeline, but not this reader's, and only this
+// reader's can tell apart a reader that was never scheduled while bytes
+// waited from a watchdog that fired although bytes kept arriving. The
+// first is the machine; the second is a defect. So the reader can report
+// its own timeline to a row that asks, and to nobody else: production
+// wiring never sets the hook, and a guard fails if it ever does.
+//
+// The hook is called from two goroutines, the reader and the watchdog's
+// timer, so whatever receives it must be safe for concurrent use.
+type StreamTraceEvent struct {
+	Kind  StreamTraceKind
+	At    time.Time
+	Bytes int
+}
+
+// StreamTraceKind names what a StreamTraceEvent records.
+type StreamTraceKind string
+
+const (
+	// StreamTraceOpen is the moment before the stream is asked for,
+	// which is also the moment the watchdog is armed.
+	StreamTraceOpen StreamTraceKind = "open"
+	// StreamTraceOpened is the response arriving, headers and all.
+	StreamTraceOpened StreamTraceKind = "opened"
+	// StreamTraceRead is a read that moved bytes, which pushes the
+	// watchdog back.
+	StreamTraceRead StreamTraceKind = "read"
+	// StreamTraceStalled is the watchdog firing.
+	StreamTraceStalled StreamTraceKind = "stalled"
+)
+
+// trace reports one event to deps.Trace, if a row asked for them.
+func (deps streamDeps) trace(kind StreamTraceKind, bytes int) {
+	if deps.Trace != nil {
+		deps.Trace(StreamTraceEvent{Kind: kind, At: time.Now(), Bytes: bytes})
+	}
 }
 
 // streamBuild reads the build log to its end, rendering as it goes, and
@@ -338,13 +385,18 @@ func readStream(ctx context.Context, deps streamDeps, run *streamRun) (done wire
 	// arrives pushes it back; a Reset that races a firing timer is
 	// harmless, because by then the request is already cancelled and
 	// nothing reads the timer again.
-	watchdog := time.AfterFunc(stall, func() { cancel(errStreamStalled) })
+	deps.trace(StreamTraceOpen, 0)
+	watchdog := time.AfterFunc(stall, func() {
+		deps.trace(StreamTraceStalled, 0)
+		cancel(errStreamStalled)
+	})
 	defer watchdog.Stop()
 
 	body, err := deps.Events(reqCtx)
 	if err != nil {
 		return wire.DoneEvent{}, false, err
 	}
+	deps.trace(StreamTraceOpened, 0)
 	defer func() { _ = body.Close() }()
 
 	// A bufio.Reader RATHER THAN THE STANDARD LINE SCANNER, and no size
@@ -374,8 +426,9 @@ func readStream(ctx context.Context, deps streamDeps, run *streamRun) (done wire
 	// green while half the guard was gone (docs: one guard, one call
 	// site — the question is how many places ESTABLISH it, not how many
 	// call it).
-	reader := bufio.NewReader(&streamProgress{r: body, seen: func() {
+	reader := bufio.NewReader(&streamProgress{r: body, seen: func(n int) {
 		watchdog.Reset(stall)
+		deps.trace(StreamTraceRead, n)
 	}})
 
 	seen := 0
@@ -860,13 +913,13 @@ func buildFailedFailure(origin wire.FailureOrigin) error {
 // bytes for a message, this one only needs to say "something arrived".
 type streamProgress struct {
 	r    io.Reader
-	seen func()
+	seen func(n int)
 }
 
 func (p *streamProgress) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)
 	if n > 0 {
-		p.seen()
+		p.seen(n)
 	}
 	return n, err
 }

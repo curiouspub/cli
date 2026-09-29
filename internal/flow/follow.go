@@ -185,7 +185,7 @@ func ReadDeployStream(ctx context.Context, deps StreamReportDeps) (StreamReport,
 	// it: bytes are the unit that crosses a socket, and a server writing
 	// one long line slowly is delivering continuously while a
 	// line-counting reader sees nothing.
-	_ = scanEvents(bufio.NewReader(&streamProgress{r: body, seen: func() {
+	_ = scanEvents(bufio.NewReader(&streamProgress{r: body, seen: func(int) {
 		watchdog.Reset(stall)
 	}}), func(name, data string) bool {
 		switch wire.EventType(name) {

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -263,6 +264,14 @@ type deployScript struct {
 	// per connection served. See widestPerConnection.
 	eventWidests []time.Duration
 
+	// eventTimelines is what the handler did on each connection and
+	// when: the request arriving, the headers flushed, each frame
+	// written, and how it ended. It is the SERVER'S half of a stall
+	// row's timeline. The client's half comes from the reader's own
+	// trace, and only the two together can say whether a cut connection
+	// was the machine or the client. See streamTimeline.
+	eventTimelines [][]serverMark
+
 	// publishOutcome scripts the publish's answer, publishSubdomain and
 	// publishExpiresAt the success body, and publishBody replaces that
 	// body with raw JSON — which is the only way to send a field this
@@ -365,12 +374,22 @@ func (s *deployScript) eventScriptFor(n int) eventScript {
 // holding the mutex with it would deadlock every assertion made
 // afterwards — including the ones about the start that ran before it.
 func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, script eventScript, release <-chan struct{}) {
+	var marks []serverMark
+	mark := func(what string) { marks = append(marks, serverMark{what: what, at: time.Now()}) }
+	mark("arrived")
+	defer func() {
+		s.mu.Lock()
+		s.eventTimelines = append(s.eventTimelines, marks)
+		s.mu.Unlock()
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	flusher, canFlush := w.(http.Flusher)
 	if canFlush {
 		flusher.Flush()
 	}
+	mark("headers flushed")
 
 	last := time.Now()
 	var gaps []time.Duration
@@ -379,17 +398,21 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 			select {
 			case <-time.After(script.pace):
 			case <-release:
+				mark("released")
 				return
 			case <-r.Context().Done():
+				mark("client hung up")
 				return
 			}
 		}
 		if _, err := io.WriteString(w, frame); err != nil {
+			mark("write failed")
 			return
 		}
 		if canFlush {
 			flusher.Flush()
 		}
+		mark(fmt.Sprintf("wrote %d bytes", len(frame)))
 		now := time.Now()
 		gaps = append(gaps, now.Sub(last))
 		last = now
@@ -415,9 +438,87 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 	if script.hold {
 		select {
 		case <-release:
+			mark("released")
 		case <-r.Context().Done():
+			mark("client hung up")
 		}
 	}
+}
+
+// serverMark is one entry in a connection's server-side timeline.
+type serverMark struct {
+	what string
+	at   time.Time
+}
+
+// streamTrace collects the reader's own timeline for a row. The reader
+// calls it from two goroutines, so it locks.
+type streamTrace struct {
+	mu     sync.Mutex
+	events []StreamTraceEvent
+}
+
+func (c *streamTrace) record(ev StreamTraceEvent) {
+	c.mu.Lock()
+	c.events = append(c.events, ev)
+	c.mu.Unlock()
+}
+
+func (c *streamTrace) snapshot() []StreamTraceEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]StreamTraceEvent(nil), c.events...)
+}
+
+// timelines returns a copy of every connection's server-side timeline.
+func (s *deployScript) timelines() [][]serverMark {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]serverMark, len(s.eventTimelines))
+	for i, t := range s.eventTimelines {
+		out[i] = append([]serverMark(nil), t...)
+	}
+	return out
+}
+
+// streamTimeline lays the server's and the client's timelines on one
+// clock, offset from the earliest event in either, so a red stall row
+// shows what happened in the order it happened.
+//
+// THE READING IT IS FOR. A client "stalled" preceded by recent "read"
+// lines is a watchdog that fired while bytes arrived. The same "stalled"
+// after a long silence in the client's reads, while the server went on
+// writing, is a reader that was not scheduled. A "stalled" before the
+// first "opened" or "read" is the connection or the first byte being
+// slow, which is time the fixture's own gap between flushes never sees.
+func streamTimeline(server [][]serverMark, client []StreamTraceEvent) string {
+	type line struct {
+		at   time.Time
+		text string
+	}
+	var lines []line
+	for i, conn := range server {
+		for _, m := range conn {
+			lines = append(lines, line{m.at, fmt.Sprintf("server #%d  %s", i+1, m.what)})
+		}
+	}
+	for _, ev := range client {
+		text := "client     " + string(ev.Kind)
+		if ev.Kind == StreamTraceRead {
+			text += fmt.Sprintf(" %d bytes", ev.Bytes)
+		}
+		lines = append(lines, line{ev.At, text})
+	}
+	if len(lines) == 0 {
+		return "  (no timeline was recorded)\n"
+	}
+	sort.SliceStable(lines, func(i, j int) bool { return lines[i].at.Before(lines[j].at) })
+	var b strings.Builder
+	origin := lines[0].at
+	for _, l := range lines {
+		fmt.Fprintf(&b, "  +%10.3fms  %s\n", float64(l.at.Sub(origin).Microseconds())/1000, l.text)
+	}
+	return b.String()
 }
 
 // sentPrefix marks a journal entry that records ONE request leaving this

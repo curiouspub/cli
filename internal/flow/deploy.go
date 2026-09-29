@@ -162,6 +162,14 @@ type DeployDeps struct {
 	StreamStallTimeout  time.Duration
 	StreamReconnectStep time.Duration
 
+	// StreamTrace, when set, is told what the build-log reader did and
+	// when: each ask for the stream, each response, each read that moved
+	// bytes, and the watchdog firing. It is a ROW'S INSTRUMENT, for
+	// telling a starved reader from a watchdog that fired while bytes
+	// kept arriving, and nothing in production sets it; a guard fails if
+	// anything does. See StreamTraceEvent.
+	StreamTrace func(StreamTraceEvent)
+
 	// PublishRetryInterval is the pause between two asks when the server
 	// says the deploy is not ready yet. Optional; without one the
 	// publish's own constant applies.
@@ -604,6 +612,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		StallTimeout:  deps.StreamStallTimeout,
 		ReconnectStep: deps.StreamReconnectStep,
 		Progress:      deps.Progress,
+		Trace:         deps.StreamTrace,
 	})
 	if err != nil {
 		return nil, carryingDeployID(err, resp.DeployID)

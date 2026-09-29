@@ -1513,7 +1513,7 @@ func oneStreamRun(ctx context.Context, base string) (time.Duration, int, error) 
 
 	// The same shape the client reads with: a bufio.Reader over
 	// streamProgress, pulling whole lines.
-	reader := bufio.NewReader(&streamProgress{r: resp.Body, seen: seen})
+	reader := bufio.NewReader(&streamProgress{r: resp.Body, seen: func(int) { seen() }})
 	for {
 		_, err := reader.ReadString('\n')
 		if err != nil {
