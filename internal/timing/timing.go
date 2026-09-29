@@ -1296,6 +1296,14 @@ var UploadWedgedStops = Entry{
 var StreamGoesQuiet = Entry{
 	Name: "StreamGoesQuiet",
 	Row:  "TestAStreamThatStopsTalkingIsReconnected",
+	// 100 ms: five times darwin's 19.935917 ms is 99.68 ms, rounded up
+	// to the next 5 ms. RE-SIZED 2026-09-29 from the re-measurement under the
+	// current arming, the watchdog armed on the response (the records
+	// below). It was 235 ms. Everything after this paragraph is the
+	// history of windows sized under the earlier arming, kept as history;
+	// where it points to evidence "below", that is the records this change
+	// replaced, in this file's history.
+	//
 	// 235 ms: five times darwin's 46.124083 ms is 230.62 ms, and this is
 	// the next round number above it. RE-RULED 2026-09-14 from every hosted
 	// reading rather than from one retake; the evidence is on the darwin
@@ -1304,7 +1312,7 @@ var StreamGoesQuiet = Entry{
 	// DOWN and then, once the tail had been read, back up past where it
 	// started: a retake measures a leg's ordinary figure, and a window is
 	// sized against its worst.
-	Window: 235 * time.Millisecond,
+	Window: 100 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval from the watchdog being armed — on the response arriving — " +
 		"to the first byte of the first frame arriving: delivery plus whatever the " +
@@ -1335,128 +1343,29 @@ var StreamGoesQuiet = Entry{
 	// The tail is real, it lives on a leg this machine is not, and
 	// twenty runs could not see it.
 	Measurements: map[Leg]Measurement{
-		// 746.761µs under the detector, 468.614µs without it.
+		// RE-MEASURED 2026-09-29 UNDER THE CURRENT ARMING, and PASTED. Ten
+		// green runs of the gate on one tree, twenty passes per leg (each run
+		// runs the probe with and without the race detector). Each record
+		// below is the pass with the worst gap on its leg, copied from the
+		// probe's own RECORD line in that job's log; the only change is the
+		// package qualifier this file does not need. Every pass is kept in
+		// the maintainer's log of this measurement, with its job.
 		//
-		// BUDGET: 203.517µs, the widest this leg's fixture was seen to
-		// go between its two flushes across fifteen CI readings on
-		// 2026-09-11 (both conditions). The spread is 140µs to 204µs
-		// with nothing outside it — this leg has no tail.
-		Linux: {WorstGap: 807557 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
-			FlushBudget: 203517 * time.Nanosecond,
-			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, FlushBudget: 203517 * time.Nanosecond,
-				Flushes: 2, WorstFixtureGap: 53951}},
-		// 10.2835ms under the detector, 1.033458ms without it — a factor
-		// of ten between the two conditions, and the detector is the one
-		// this window was first sized against because it is the worse of
-		// two the gate actually runs.
+		// THE RECORDS THESE REPLACE were taken under the earlier arming,
+		// when the watchdog was armed before the connection opened, and
+		// their provenance notes are in this file's history before this
+		// change. They are not carried: they measured a different interval.
+		// Linux: the worst of 20 passes, 0.410607 ms,
+		// under the race detector; CI run 36624122549, attempt 3, job 109610902781.
+		Linux: {WorstGap: 410607 * time.Nanosecond, Runs: 1000, Date: "2026-09-29", FlushBudget: 203517 * time.Nanosecond, Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 0, FlushBudget: 203517, Flushes: 2, WorstFixtureGap: 122196, ValidGapMin: 17312, ValidGapMedian: 21981, ValidGapMax: 122196}},
 		//
-		// THE STORED NUMBER SAID 4.121458 ms OVER 7,000 RUNS AND BOTH
-		// HALVES OF THAT WERE WRONG. The window three fields up is
-		// derived from 10.2835 ms — "five times darwin's 10.2835 ms is
-		// 51.42 ms, and this is the next round number above it" — and the
-		// comment immediately above this line states the same figure as
-		// what was measured, twice. A 7,000-run pass reporting a maximum
-		// two and a half times SMALLER than the 1,000-run pass beside it
-		// is not a reading, it is a transcription: more runs cannot find
-		// a smaller maximum. Fifteen CI readings taken 2026-09-11 settle
-		// it — nine of them sit between 10.34 ms and 10.95 ms, which is
-		// the figure the comment always carried.
+		// Darwin: the worst of 20 passes, 19.935917 ms,
+		// under the race detector; CI run 36624122549, attempt 4, job 109618390547.
+		Darwin: {WorstGap: 19935917 * time.Nanosecond, Runs: 1000, Date: "2026-09-29", FlushBudget: 11010375 * time.Nanosecond, Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 0, FlushBudget: 11010375, Flushes: 2, WorstFixtureGap: 10072417, ValidGapMin: 9042, ValidGapMedian: 18708, ValidGapMax: 10072417}},
 		//
-		// It is corrected here to the number its own derivation uses, and
-		// the cost of the error was not theoretical: at 4.121458 ms the
-		// margin floor reported every ordinary run as 2.5× a stale
-		// record, and shouted "the RECORD is what is stale" on a row that
-		// was behaving exactly as measured. A RECORD IS PASTED OR IT IS
-		// RETYPED — this file's own rule, and the two numbers that
-		// diverged were four lines apart inside one entry.
-		//
-		// RETAKEN ON THE GATE'S OWN DARWIN RUNNER, 2026-09-11, after the
-		// transcription above was corrected: four passes, two runs by
-		// two conditions, a thousand runs each. 754.083 µs and
-		// 10.645375 ms under the detector, 614.541 µs and 2.195708 ms
-		// without it. The leg keeps the worse, which is 10.645375 ms —
-		// a shade past the 10.2835 ms the correction restored, and the
-		// third independent confirmation that this leg's raced figure
-		// lives at about ten and a half milliseconds rather than at four.
-		// Five times it was 53.23 ms against a 55 ms window, so the
-		// window cleared the rule and did not move — on one retake.
-		//
-		// RE-RULED 2026-09-14, FROM EVERY HOSTED READING. A retake is one
-		// run of the gate; a leg's worst shows up only across many. Every
-		// 1000-run reading this probe has printed on the gate's macOS
-		// runner since 2026-09-10, read back out of the CI logs: 91
-		// jobs, 176 passes, one excluded as starved (below). The
-		// valid passes, with p90 and p95 taken by rank:
-		//
-		//	condition  passes  median     p90        p95        max
-		//	-race      90      10.484 ms  13.319 ms  19.317 ms  22.455 ms
-		//	plain      85      0.869 ms   4.324 ms   5.828 ms   46.124 ms
-		//
-		// THE RECORD IS THE MAXIMUM OVER VALID PASSES; A VALID READING IS
-		// NEVER HELD BESIDE THE RECORD BECAUSE IT IS LARGE. It is
-		// 46.124083 ms, a plain pass on 2026-09-14 (CI run 34823572993)
-		// whose fixture was clean on every run, widest gap 2.978 ms. A
-		// single retake the same morning read 10.40 ms under the detector;
-		// taking a retake's maximum as the record, and holding a reading
-		// like this one beside it as an excursion, is what that sentence
-		// rules out. The tail reproduced within the hour: the merge queue's
-		// push run (CI run 34829220546) read 22.454834 ms under the
-		// detector, fixture 231.584 µs, and the margin floor failed the row
-		// against the 55 ms window.
-		//
-		// THE WORSE CONDITION IS NOT WHERE THIS RECORD CAME FROM. On an
-		// ordinary run the detector reads about ten times the plain pass,
-		// which is why a leg keeps the worse of the two; this record is a
-		// plain pass, at four times the raced figure beside it. What a leg
-		// keeps is the worse READING.
-		Darwin: {WorstGap: 46124083 * time.Nanosecond, Runs: 175000, Date: "2026-09-14",
-			// BUDGET: 11.010375 ms, A RULED CEILING THAT IS NOT RE-DERIVED.
-			// It was taken on 2026-09-11 as the widest this leg's fixture
-			// went between its two flushes across fifteen CI readings; nine
-			// clustered at 10.04–10.07 ms, a scheduling quantum, and one pass
-			// — excluded, and the reason this budget exists — paused
-			// 35.113375 ms (CI run 34627736788, merge queue, 54.251708 ms at
-			// the client). That pass stays starved, and its runs are not
-			// counted below: its log printed only its widest gap, so how many
-			// of its thousand were starved is not known.
-			//
-			// IT IS HELD rather than raised to the widest valid gap seen
-			// since, because that definition raises itself on its own
-			// outlier. A valid pass on 2026-09-12 (CI run 34683989128)
-			// paused 14.398625 ms, inside three times this ceiling. Raised to
-			// that, the threshold would be 43.2 ms and would admit the
-			// 35.113375 ms pause; admitted, that would become the widest
-			// valid gap, and the threshold would move to 105 ms, past
-			// anything this leg has produced, so nothing here could ever be
-			// starved again. The 14.398625 ms gap is recorded as the widest
-			// valid one and does not move the ceiling.
-			FlushBudget: 11010375 * time.Nanosecond,
-			Integrity: &PaceIntegrity{Attempts: 175000, Valid: 175000, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, FlushBudget: 11010375 * time.Nanosecond,
-				Flushes: 2, WorstFixtureGap: 14398625 * time.Nanosecond}},
-		// 2.2355ms under the detector, 2.0315ms without it.
-		//
-		// BUDGET: 2.1332ms, the widest this leg's fixture was seen to go
-		// between its two flushes across fifteen CI readings on
-		// 2026-09-11 and the four-pass retake that followed them. The
-		// spread is 2.02 ms to 2.13 ms — tighter than either other leg,
-		// and with no tail.
-		//
-		// THE RETAKE MOVED IT, BY TWO PER CENT. Fifteen readings put the
-		// widest at 2.0896 ms and the retake's raced pass went 2.1332 ms
-		// — inside three times either figure, so nothing starved, but a
-		// budget defined as the widest gap on valid passes is wrong the
-		// moment a valid pass goes wider. It is raised to what was
-		// observed rather than left at what was observed first.
-		Windows: {WorstGap: 4012500 * time.Nanosecond, Runs: 1000, Date: "2026-09-11",
-			FlushBudget: 2133200 * time.Nanosecond,
-			Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 0, FlushBudget: 2133200 * time.Nanosecond,
-				Flushes: 2, WorstFixtureGap: 1645200}},
+		// Windows: the worst of 20 passes, 2.045400 ms,
+		// under the race detector; CI run 36626474850, attempt 1, job 109604637010.
+		Windows: {WorstGap: 2045400 * time.Nanosecond, Runs: 1000, Date: "2026-09-29", FlushBudget: 2133200 * time.Nanosecond, Integrity: &PaceIntegrity{Attempts: 1000, Valid: 1000, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 0, FlushBudget: 2133200, Flushes: 2, WorstFixtureGap: 2094300, ValidGapMin: 0, ValidGapMedian: 0, ValidGapMax: 2094300}},
 	},
 	SetBy: Darwin,
 }
@@ -1467,6 +1376,14 @@ var StreamGoesQuiet = Entry{
 var StreamKeepAlivesAreProofOfLife = Entry{
 	Name: "StreamKeepAlivesAreProofOfLife",
 	Row:  "TestKeepAliveFramesAreProofOfLifeAndAreNeverRendered",
+	// 245 ms: five times darwin's 48.725708 ms is 243.63 ms, rounded up
+	// to the next 5 ms. RE-SIZED 2026-09-29 from the re-measurement under the
+	// current arming, the watchdog armed on the response (the records
+	// below). It was 230 ms. Everything after this paragraph is the
+	// history of windows sized under the earlier arming, kept as history;
+	// where it points to evidence "below", that is the records this change
+	// replaced, in this file's history.
+	//
 	// 230 ms: five times darwin's 44.825959 ms is 224.13 ms. It was 525,
 	// and 525 was five times a 104.351792 ms reading that the integrity
 	// test now names for what it was — the runner starving the server
@@ -1491,7 +1408,7 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// lengthen it deliberately, because a fixture that follows the
 	// window is what stopped the read side converging in the first
 	// place.
-	Window: 230 * time.Millisecond,
+	Window: 245 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two flushes ARRIVING at this client at the " +
 		"fixture's keep-alive pace — the pace plus delivery plus scheduling, not " +
@@ -1532,63 +1449,29 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	// is what WorstGap means and what the probe's own paste hint asks
 	// for.
 	Measurements: map[Leg]Measurement{
-		// 15.692101ms under the detector, 15.475903ms without it.
-		Linux: {WorstGap: 15785000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 15444588, ValidGapMin: 15332180,
-				ValidGapMedian: 15392740, ValidGapMax: 15444588}},
-		// 24.413541ms under the detector and 104.351792ms WITHOUT it, on
-		// the gate's macOS runner — and the fixture's own widest pause
-		// between two flushes in that pass was 104.142542ms, which says
-		// what the number is: the runner starved the server goroutine
-		// for a tenth of a second. This machine produced 92.959375ms in
-		// a pass of its own while a second suite ran beside it. A
-		// read-side window is a margin over how long the machine can
-		// stop the far end from writing, and this is the largest such
-		// pause anybody has measured here.
-		Darwin: {WorstGap: 38055000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 38010583, ValidGapMin: 16393708,
-				ValidGapMedian: 16641500, ValidGapMax: 38010583}},
-		// RETAKEN 2026-09-12, and this is the first windows record that
-		// keeps the WORSE OF TWO rather than the one that happened to be
-		// readable: 16.4248ms under the detector, 16.1268ms without it,
-		// twenty runs each. Runs is 40 because two passes stand behind
-		// it.
+		// RE-MEASURED 2026-09-29 UNDER THE CURRENT ARMING, and PASTED. Ten
+		// green runs of the gate on one tree, twenty passes per leg (each run
+		// runs the probe with and without the race detector). Each record
+		// below is the pass with the worst gap on its leg, copied from the
+		// probe's own RECORD line in that job's log; the only change is the
+		// package qualifier this file does not need. Every pass is kept in
+		// the maintainer's log of this measurement, with its job.
 		//
-		// WHAT PROMPTED THE RETAKE IS NOT WHAT THE RETAKE FOUND, and the
-		// excursion is kept here rather than discarded. A plain pass on
-		// 2026-09-12 reported 16.656ms exceeded with a worst gap of
-		// 31.708ms, and the probe said so itself: "the record is the one
-		// that is stale, not this run." Two fresh passes then came in at
-		// 16.4248ms and 16.1268ms, so the excursion did not reproduce —
-		// it was a runner, not a shift. It is written down because a
-		// number seen once on a hosted leg is still a number seen, and a
-		// record that silently drops it would re-arm the same warning the
-		// next time the runner hiccups while looking like the retake had
-		// settled something.
+		// THE RECORDS THESE REPLACE were taken under the earlier arming,
+		// when the watchdog was armed before the connection opened, and
+		// their provenance notes are in this file's history before this
+		// change. They are not carried: they measured a different interval.
+		// Linux: the worst of 20 passes, 16.073012 ms,
+		// under the race detector; CI run 36626474850, attempt 5, job 109635431363.
+		Linux: {WorstGap: 16073012 * time.Nanosecond, Runs: 20, Date: "2026-09-29", Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 15000000, FlushBudget: 0, Flushes: 36, WorstFixtureGap: 16094983, ValidGapMin: 15299298, ValidGapMedian: 15531604, ValidGapMax: 16094983}},
 		//
-		// EVEN THE EXCURSION CLEARS THE WINDOW BY 7×, which is why the
-		// window is unchanged at 230ms. Had 31.708ms been reproducible
-		// the margin would still hold; the retake is about the RECORD
-		// being honest, not about the bound being at risk.
+		// Darwin: the worst of 20 passes, 48.725708 ms,
+		// under the race detector; CI run 36626474850, attempt 2, job 109612678814.
+		Darwin: {WorstGap: 48725708 * time.Nanosecond, Runs: 20, Date: "2026-09-29", Integrity: &PaceIntegrity{Attempts: 21, Valid: 20, Starved: 1, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 15000000, FlushBudget: 0, Flushes: 36, WorstFixtureGap: 66403291, ValidGapMin: 17365209, ValidGapMedian: 22587500, ValidGapMax: 34800125}},
 		//
-		// ValidGapMin and ValidGapMedian are reconstructed from the
-		// published ratios (1.05/1.06 of the 15ms pace), which carry two
-		// decimals — so they are good to about ±0.15ms, unlike every
-		// other field here, which the probe prints exactly. Said out loud
-		// because a reconstructed figure sitting in a column of measured
-		// ones is indistinguishable from a measured one.
-		Windows: {WorstGap: 16424800 * time.Nanosecond, Runs: 40, Date: "2026-09-12",
-			Integrity: &PaceIntegrity{Attempts: 40, Valid: 40, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 15 * time.Millisecond, Flushes: 36,
-				WorstFixtureGap: 16264400, ValidGapMin: 15750000,
-				ValidGapMedian: 15900000, ValidGapMax: 16264400}},
+		// Windows: the worst of 20 passes, 26.585800 ms,
+		// without the race detector; CI run 36624122549, attempt 5, job 109625514491.
+		Windows: {WorstGap: 26585800 * time.Nanosecond, Runs: 20, Date: "2026-09-29", Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 15000000, FlushBudget: 0, Flushes: 36, WorstFixtureGap: 23318200, ValidGapMin: 15824900, ValidGapMedian: 16044600, ValidGapMax: 23318200}},
 	},
 	SetBy: Darwin,
 }
@@ -1636,6 +1519,14 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 var StreamPartialLineIsNotAStall = Entry{
 	Name: "StreamPartialLineIsNotAStall",
 	Row:  "TestBytesArrivingWithoutANewlineAreNotAStall",
+	// 285 ms: five times darwin's 56.283875 ms is 281.42 ms, rounded up
+	// to the next 5 ms. RE-SIZED 2026-09-29 from the re-measurement under the
+	// current arming, the watchdog armed on the response (the records
+	// below). It was 255 ms. Everything after this paragraph is the
+	// history of windows sized under the earlier arming, kept as history;
+	// where it points to evidence "below", that is the records this change
+	// replaced, in this file's history.
+	//
 	// 255 ms: five times darwin's 50.792875 ms is 253.96 ms.
 	//
 	// THE SEQUENCE IS 60, 150, 250, 350, 400, 230, 650, 255, and every
@@ -1646,7 +1537,7 @@ var StreamPartialLineIsNotAStall = Entry{
 	// reading 128.757833 ms while the fixture itself had stopped for
 	// 139.277875 ms at a stated 20 ms pace. 255 is what is left when
 	// passes like that are classified instead of recorded.
-	Window: 255 * time.Millisecond,
+	Window: 285 * time.Millisecond,
 	Side:   Read,
 	Governs: "the interval between two partial writes of one frame ARRIVING at this " +
 		"client at the fixture's own pace — the pace plus delivery plus scheduling; " +
@@ -1685,56 +1576,29 @@ var StreamPartialLineIsNotAStall = Entry{
 	// followed the reading, and the fixture then followed the window
 	// once, by hand, with the row refusing until a person did it.
 	Measurements: map[Leg]Measurement{
-		// 20.831652ms under the detector, 20.591115ms without it.
-		Linux: {WorstGap: 21612000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, Flushes: 61,
-				WorstFixtureGap: 20591111, ValidGapMin: 20398193,
-				ValidGapMedian: 20421878, ValidGapMax: 20591111}},
-		// # DARWIN'S MAXIMUM CAME OFF A DEVELOPER MAC, NOT OFF THE RUNNER
+		// RE-MEASURED 2026-09-29 UNDER THE CURRENT ARMING, and PASTED. Ten
+		// green runs of the gate on one tree, twenty passes per leg (each run
+		// runs the probe with and without the race detector). Each record
+		// below is the pass with the worst gap on its leg, copied from the
+		// probe's own RECORD line in that job's log; the only change is the
+		// package qualifier this file does not need. Every pass is kept in
+		// the maintainer's log of this measurement, with its job.
 		//
-		// 128.757833 ms, one pass of twenty on 2026-09-11, out of eleven
-		// such passes whose other ten ran 24.283 to 34.717 ms. The
-		// gate's own macOS runner gave 45.707917 ms under the detector
-		// and 43.846625 ms without, over two passes of twenty on
-		// 2026-09-10, and that figure held this record until the larger
-		// one turned up.
+		// THE RECORDS THESE REPLACE were taken under the earlier arming,
+		// when the watchdog was armed before the connection opened, and
+		// their provenance notes are in this file's history before this
+		// change. They are not carried: they measured a different interval.
+		// Linux: the worst of 20 passes, 20.926714 ms,
+		// under the race detector; CI run 36626474850, attempt 4, job 109628050921.
+		Linux: {WorstGap: 20926714 * time.Nanosecond, Runs: 20, Date: "2026-09-29", Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 20000000, FlushBudget: 0, Flushes: 61, WorstFixtureGap: 20797129, ValidGapMin: 20377575, ValidGapMedian: 20411270, ValidGapMax: 20797129}},
 		//
-		// PER LEG MEANS PER OS. A darwin reading is a darwin reading
-		// whichever darwin took it, and a record that kept the runner's
-		// number because the runner is the machine the gate watches
-		// would be recording where it looked rather than what is there.
-		// The other two read-side entries were checked the same way and
-		// both keep the runner's figure: StreamGoesQuiet 10.284 ms
-		// against this machine's 6.785, StreamKeepAlives 104.352 ms
-		// against this machine's 45.453.
+		// Darwin: the worst of 20 passes, 56.283875 ms,
+		// under the race detector; CI run 36626474850, attempt 1, job 109604636886.
+		Darwin: {WorstGap: 56283875 * time.Nanosecond, Runs: 20, Date: "2026-09-29", Integrity: &PaceIntegrity{Attempts: 22, Valid: 20, Starved: 2, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 20000000, FlushBudget: 0, Flushes: 61, WorstFixtureGap: 82407875, ValidGapMin: 22525708, ValidGapMedian: 26962334, ValidGapMax: 55886292}},
 		//
-		// WHAT THE OUTLIER IS. In that pass the FIXTURE's own widest gap
-		// between flushes was 139.277875 ms, at a stated 20 ms pace —
-		// larger than the client's worst arrival gap, which is what it
-		// looks like when the machine starves the server goroutine and
-		// the client then receives two writes together. So the quantity
-		// is not delivery and it is not this client: it is how long this
-		// kind of machine can stop the far end from writing. That is the
-		// same quantity StreamKeepAlives measures with a different pace,
-		// and its darwin record — 104.352 ms, also a starvation event,
-		// also one pass — is the same phenomenon at a comparable size.
-		// Two entries sampling one distribution and carrying windows a
-		// factor of two apart is an open item rather than a finding.
-		Darwin: {WorstGap: 48391958 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, Flushes: 61,
-				WorstFixtureGap: 48492625, ValidGapMin: 21446750,
-				ValidGapMedian: 22331708, ValidGapMax: 48492625}},
-		// 21.4369ms under the detector, 26.8971ms without it.
-		Windows: {WorstGap: 21346000 * time.Nanosecond, Runs: 20, Date: "2026-09-11",
-			Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0,
-				ThresholdNum: 3, ThresholdDen: 1,
-				StatedPace: 20 * time.Millisecond, Flushes: 61,
-				WorstFixtureGap: 21103800, ValidGapMin: 20786900,
-				ValidGapMedian: 20883600, ValidGapMax: 21103800}},
+		// Windows: the worst of 20 passes, 23.188400 ms,
+		// under the race detector; CI run 36624122549, attempt 4, job 109618390387.
+		Windows: {WorstGap: 23188400 * time.Nanosecond, Runs: 20, Date: "2026-09-29", Integrity: &PaceIntegrity{Attempts: 20, Valid: 20, Starved: 0, ThresholdNum: 3, ThresholdDen: 1, StatedPace: 20000000, FlushBudget: 0, Flushes: 61, WorstFixtureGap: 23188400, ValidGapMin: 20814800, ValidGapMedian: 20955700, ValidGapMax: 23188400}},
 	},
 	SetBy: Darwin,
 }
