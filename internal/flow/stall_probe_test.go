@@ -1481,16 +1481,19 @@ func confirmPace(t *testing.T, entry *timing.Entry, script eventScript) {
 }
 
 // oneStreamRun opens one connection and returns the worst interval
-// between the watchdog's arming — here, the instant before the request
-// goes out — and each byte arriving, and how many arrivals it saw.
+// between the watchdog's arming — here, the instant the response arrives
+// — and each byte arriving, and how many arrivals it saw.
 func oneStreamRun(ctx context.Context, base string) (time.Duration, int, error) {
 	var worst time.Duration
 	arrivals := 0
-	// ARMED BEFORE THE CONNECTION IS OPENED, which is where the shipped
-	// watchdog is armed. Measuring from the first byte instead would
-	// leave establishment out of a number the client's own timer
-	// includes.
-	last := time.Now()
+	// ARMED ON THE RESPONSE, which is where the shipped watchdog is armed.
+	// The clock starts once the response headers are in, because
+	// connecting and waiting for the answer are bounded by the transport
+	// and are not the stall window's to cover. It used to start before
+	// the request went out, when the shipped watchdog did too; measuring
+	// from there now would put establishment back into a number the
+	// client's own timer no longer includes.
+	var last time.Time
 	seen := func() {
 		now := time.Now()
 		if gap := now.Sub(last); gap > worst {
@@ -1510,6 +1513,7 @@ func oneStreamRun(ctx context.Context, base string) (time.Duration, int, error) 
 		return worst, arrivals, fmt.Errorf("opening the probe stream: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	last = time.Now()
 
 	// The same shape the client reads with: a bufio.Reader over
 	// streamProgress, pulling whole lines.
