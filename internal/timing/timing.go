@@ -356,8 +356,8 @@ type FixturePace struct {
 	//
 	// ZERO IS A STATEMENT AND NOT A BLANK. One of these fixtures writes
 	// its frames and then goes silent for the rest of the row, so there
-	// is no interval to state, and what its gap is made of is
-	// connection establishment plus delivery plus the scheduler. Which
+	// is no interval to state, and what its gap is made of is delivery
+	// plus the scheduler, from the response arriving. Which
 	// of the two a zero means is answered by the field below and by the
 	// entry's own Governs line; "nobody said" is a nil FixturePace, and
 	// the guard beside this package refuses that.
@@ -1271,16 +1271,25 @@ var UploadWedgedStops = Entry{
 // the connection open, sending nothing.
 //
 // ITS GOVERNING QUANTITY IS NOT THE OTHER TWO STREAM ROWS'. The window
-// has to outlast the gap from the watchdog being armed — which happens
-// BEFORE the connection is opened — to the first byte arriving, so it
-// covers connection establishment as well as delivery. Nothing paces
-// this fixture, so there is no inter-frame gap to measure.
+// has to outlast the gap from the watchdog being armed — on the response
+// arriving — to the first byte of the first frame, which is delivery and
+// scheduling. Nothing paces this fixture, so there is no inter-frame gap
+// to measure. Connecting and the wait for the response are no longer in
+// it: each has its own bound on the transport.
+//
+// MEASURED UNDER THE EARLIER ARMING. Until the build-log reader armed
+// its watchdog on the response, it armed it before the connection was
+// opened, and every measurement and window in this entry was taken
+// that way. They stand as they are until the entry is re-measured
+// under the current arming, and no window here is re-sized before
+// then.
+//
 // A SECOND ROW TAKES THIS WINDOW, and it is recorded here rather than
 // only at the row, because a reader of this entry would otherwise think
 // it bounds one thing. TestASilentStreamEndsTheReadingRatherThanWaiting
 // covers the status read of a stream that has gone silent: a different
-// caller, the same quantity — the watchdog is armed before the
-// connection is opened, the fixture delivers and then holds, and the
+// caller, the same quantity — the watchdog is armed on the response,
+// the fixture delivers and then holds, and the
 // instrument named below is the one both readings are wrapped in. The
 // measurement is carried with that reason rather than re-taken, which is
 // what this registry permits and what it forbids doing silently.
@@ -1297,9 +1306,10 @@ var StreamGoesQuiet = Entry{
 	// sized against its worst.
 	Window: 235 * time.Millisecond,
 	Side:   Read,
-	Governs: "the interval from the watchdog being armed — before the connection is " +
-		"opened — to the first byte of the first frame arriving: connection " +
-		"establishment plus delivery plus whatever the scheduler adds",
+	Governs: "the interval from the watchdog being armed — on the response arriving — " +
+		"to the first byte of the first frame arriving: delivery plus whatever the " +
+		"scheduler adds. Measured under the earlier arming, when it also covered " +
+		"connection establishment; re-measured under this one before the window moves",
 	Instrument: "streamProgress, internal/flow/stream.go",
 	// NOTHING PACES THIS ONE, and the zero says so rather than leaving
 	// it out. The fixture writes its frames and then holds the
@@ -1486,7 +1496,9 @@ var StreamKeepAlivesAreProofOfLife = Entry{
 	Governs: "the interval between two flushes ARRIVING at this client at the " +
 		"fixture's keep-alive pace — the pace plus delivery plus scheduling, not " +
 		"the pace on its own; the first such interval runs from the watchdog " +
-		"being armed, which is before the connection is opened",
+		"being armed, which is on the response arriving. Measured under the " +
+		"earlier arming, before the connection was opened; re-measured under " +
+		"this one before the window moves",
 	Instrument: "streamProgress, internal/flow/stream.go",
 	// Seventy-five comment frames and a terminating one, fifteen
 	// milliseconds apart — 1.125 s of nothing but keep-alives, which is
@@ -1639,7 +1651,8 @@ var StreamPartialLineIsNotAStall = Entry{
 	Governs: "the interval between two partial writes of one frame ARRIVING at this " +
 		"client at the fixture's own pace — the pace plus delivery plus scheduling; " +
 		"the first such interval runs from the watchdog being armed, which is " +
-		"before the connection is opened",
+		"on the response arriving. Measured under the earlier arming, before the " +
+		"connection was opened; re-measured under this one before the window moves",
 	Instrument: "streamProgress, internal/flow/stream.go",
 	// A hundred and fifteen one-byte pieces of a single log frame and a
 	// terminating frame, twenty milliseconds apart: 2.3 s of delivery,

@@ -115,6 +115,16 @@ const (
 	streamDropped   = "Lost the build log"
 	streamWentQuiet = "The build log went quiet"
 
+	// streamNoConnect, streamNoTLS and streamNoAnswer are the three ways
+	// the build log can fail to open, one per bound on the transport, for
+	// the same reason: each points somewhere different. A network that
+	// cannot reach the host, a connection that cannot be secured, and a
+	// server that took the request and never answered are three different
+	// things to go and look at.
+	streamNoConnect = "Could not connect to the build log"
+	streamNoTLS     = "Could not finish a secure connection to the build log"
+	streamNoAnswer  = "The build log did not answer"
+
 	// reconnectNarration closes both of them, because a build log that
 	// silently starts again from an earlier point is worse than one that
 	// says what happened.
@@ -339,14 +349,26 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DoneEvent, error) {
 	}
 }
 
-// reconnectReason names WHICH of the two endings this was. The stall
-// watchdog cancels with its own cause precisely so this question has an
-// answer: without it the two are one indistinguishable "context
-// canceled", and the client would have to describe a live connection as a
-// lost one.
+// reconnectReason names WHICH ending this was, one sentence per bound.
+// The stall watchdog cancels with its own cause precisely so this
+// question has an answer: without it a stall and a drop are one
+// indistinguishable "context canceled", and the client would have to
+// describe a live connection as a lost one. A failure to open carries the
+// phase it failed in, from the client, for the same reason.
 func reconnectReason(err error) string {
 	if errors.Is(err, errStreamStalled) {
 		return streamWentQuiet
+	}
+	var open *api.StreamOpenError
+	if errors.As(err, &open) {
+		switch open.Stage {
+		case api.StageConnect:
+			return streamNoConnect
+		case api.StageTLS:
+			return streamNoTLS
+		case api.StageResponse:
+			return streamNoAnswer
+		}
 	}
 	return streamDropped
 }
@@ -379,24 +401,32 @@ func readStream(ctx context.Context, deps streamDeps, run *streamRun) (done wire
 	if stall <= 0 {
 		stall = streamStallWindow
 	}
-	// The watchdog is armed BEFORE the connection is opened, so a server
-	// that accepts a connection and then never answers is covered by the
-	// same rule as one that goes quiet halfway through. Every byte that
-	// arrives pushes it back; a Reset that races a firing timer is
-	// harmless, because by then the request is already cancelled and
-	// nothing reads the timer again.
+	// THE WATCHDOG IS ARMED WHEN THE RESPONSE ARRIVES, not before the
+	// connection is opened. Everything before the response has its own
+	// bound on the transport: the dial, the TLS handshake, and the server
+	// answering at all, each with its own sentence for the person
+	// watching. A server that accepts a connection and never answers is
+	// refused by the last of those, as "did not answer"; this watchdog
+	// bounds only the silence of a stream that is already talking. It was
+	// once armed before the connection, and the window then silently
+	// covered connecting and the first byte as well — time the fixtures
+	// that sized it never measured, which is how a healthy connection on
+	// a loaded runner came to be cut.
+	//
+	// Every byte that arrives pushes it back; a Reset that races a firing
+	// timer is harmless, because by then the request is already cancelled
+	// and nothing reads the timer again.
 	deps.trace(StreamTraceOpen, 0)
-	watchdog := time.AfterFunc(stall, func() {
-		deps.trace(StreamTraceStalled, 0)
-		cancel(errStreamStalled)
-	})
-	defer watchdog.Stop()
-
 	body, err := deps.Events(reqCtx)
 	if err != nil {
 		return wire.DoneEvent{}, false, err
 	}
 	deps.trace(StreamTraceOpened, 0)
+	watchdog := time.AfterFunc(stall, func() {
+		deps.trace(StreamTraceStalled, 0)
+		cancel(errStreamStalled)
+	})
+	defer watchdog.Stop()
 	defer func() { _ = body.Close() }()
 
 	// A bufio.Reader RATHER THAN THE STANDARD LINE SCANNER, and no size

@@ -156,23 +156,25 @@ type StreamReportDeps struct {
 // would throw away the phase and the output the stream did deliver,
 // which is the whole of what a caller can act on.
 func ReadDeployStream(ctx context.Context, deps StreamReportDeps) (StreamReport, error) {
-	// THE WATCHDOG IS ARMED BEFORE THE CONNECTION IS OPENED, so a server
-	// that accepts and then never answers is covered by the same rule as
-	// one that goes quiet halfway through.
+	// THE WATCHDOG IS ARMED WHEN THE RESPONSE ARRIVES, as the renderer's
+	// is. A server that accepts and never answers is refused by the
+	// transport's own bound on the answer, and returned as an error from
+	// the open; this watchdog bounds only the silence of a stream that is
+	// already talking, so each interval has exactly one bound.
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stall := deps.StallTimeout
 	if stall <= 0 {
 		stall = streamStallWindow
 	}
-	watchdog := time.AfterFunc(stall, cancel)
-	defer watchdog.Stop()
 
 	body, err := deps.Events(reqCtx)
 	if err != nil {
 		return StreamReport{}, err
 	}
 	defer func() { _ = body.Close() }()
+	watchdog := time.AfterFunc(stall, cancel)
+	defer watchdog.Stop()
 
 	var report StreamReport
 	// THE SCAN'S OWN ENDING IS DELIBERATELY NOT READ, and this is the
