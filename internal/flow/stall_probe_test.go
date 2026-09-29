@@ -230,6 +230,16 @@ func report(t *testing.T, entry *timing.Entry, runs int, measured time.Duration,
 		entry.Name, leg, detectorNote(), measured, runs, entry.Window,
 		pinNote(pin), extra)
 
+	// EVERY PASS PRINTS ITS WHOLE RECORD, exact to the nanosecond, on one
+	// line that starts with RECORD so it can be found in a CI log. A
+	// registry record is pasted or re-measured and never derived, and the
+	// line above gives the fixture's gaps only as rounded ratios, which
+	// cannot be pasted. The literal used to be printed only for an entry
+	// with no complete record, so a re-measurement of one that had a
+	// record found nothing to paste.
+	t.Logf("RECORD %s %s %s: %s", entry.Name, leg, conditionWord(),
+		recordLiteral(measured, runs, pin, integrity, entry))
+
 	if measured >= entry.Window {
 		t.Errorf("%s measured a worst gap of %v on %s, at or past its own %v "+
 			"window. The row this window stands behind could not have passed on "+
@@ -787,11 +797,31 @@ func integrityLiteral(p *timing.PaceIntegrity) string {
 		return ""
 	}
 	return fmt.Sprintf(", Integrity: &timing.PaceIntegrity{Attempts: %d, Valid: %d, "+
-		"Starved: %d, ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, Flushes: %d, "+
-		"WorstFixtureGap: %d, ValidGapMin: %d, ValidGapMedian: %d, ValidGapMax: %d}",
+		"Starved: %d, ThresholdNum: %d, ThresholdDen: %d, StatedPace: %d, FlushBudget: %d, "+
+		"Flushes: %d, WorstFixtureGap: %d, ValidGapMin: %d, ValidGapMedian: %d, ValidGapMax: %d}",
 		p.Attempts, p.Valid, p.Starved, p.ThresholdNum, p.ThresholdDen,
-		p.StatedPace, p.Flushes, p.WorstFixtureGap,
+		p.StatedPace, p.FlushBudget, p.Flushes, p.WorstFixtureGap,
 		p.ValidGapMin, p.ValidGapMedian, p.ValidGapMax)
+}
+
+// recordLiteral is one pass's complete measurement as a Go literal, the
+// worst gap in exact nanoseconds, ready to paste into the registry.
+func recordLiteral(measured time.Duration, runs int, pin *timing.PinnedPair, integrity *timing.PaceIntegrity, entry *timing.Entry) string {
+	budget := ""
+	if integrity != nil && integrity.FlushBudget > 0 {
+		budget = fmt.Sprintf(", FlushBudget: %d * time.Nanosecond", int64(integrity.FlushBudget))
+	}
+	return fmt.Sprintf("{WorstGap: %d * time.Nanosecond, Runs: %d, Date: %q%s%s%s%s}",
+		int64(measured), runs, time.Now().Format("2006-01-02"), budget,
+		blockPointHint(entry), pinLiteral(pin), integrityLiteral(integrity))
+}
+
+// conditionWord names the condition a pass ran under, for the RECORD line.
+func conditionWord() string {
+	if raceDetector {
+		return "race"
+	}
+	return "plain"
 }
 
 // integrityNote renders what a pass says about its own instrument.
