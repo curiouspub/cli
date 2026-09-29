@@ -162,6 +162,17 @@ type DeployDeps struct {
 	StreamStallTimeout  time.Duration
 	StreamReconnectStep time.Duration
 
+	// ConnectTimeout, TLSHandshakeTimeout and ResponseHeaderTimeout
+	// override the three bounds on opening a connection, for every client
+	// this deploy builds. Optional, all three together or none; without
+	// them the timing registry's values apply, which is what production
+	// passes. They are seams for the reason StreamStallTimeout is: a row
+	// proving a server that never answers is refused by the header bound
+	// cannot wait the thirty seconds that bound is.
+	ConnectTimeout        time.Duration
+	TLSHandshakeTimeout   time.Duration
+	ResponseHeaderTimeout time.Duration
+
 	// StreamTrace, when set, is told what the build-log reader did and
 	// when: each ask for the stream, each response, each read that moved
 	// bytes, and the watchdog firing. It is a ROW'S INSTRUMENT, for
@@ -464,7 +475,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 		}
 	}
 
-	authed, err := api.New(endpoint, api.WithToken(token))
+	authed, err := api.New(endpoint, deps.clientOptions(api.WithToken(token))...)
 	if err != nil {
 		return nil, endpointUnusableFailure()
 	}
@@ -555,7 +566,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 			if err != nil {
 				return nil, err
 			}
-			client, err := api.New(endpoint, api.WithToken(fresh))
+			client, err := api.New(endpoint, deps.clientOptions(api.WithToken(fresh))...)
 			if err != nil {
 				return nil, endpointUnusableFailure()
 			}
@@ -689,7 +700,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 // an account is spent at the verify step, so the gate belongs
 // immediately before the login it gates, on both routes in.
 func authenticate(ctx context.Context, deps DeployDeps, endpoint string, now func() time.Time) (ui.Secret, error) {
-	client, err := api.New(endpoint)
+	client, err := api.New(endpoint, deps.clientOptions()...)
 	if err != nil {
 		return "", endpointUnusableFailure()
 	}
@@ -909,4 +920,14 @@ func carryingDeployID(err error, id string) error {
 		failure.DeployID = id
 	}
 	return err
+}
+
+// clientOptions is the options every client this deploy builds carries:
+// the ones the call site passes, plus the connection bounds when a row
+// has overridden them. Production sets none, and the registry's apply.
+func (deps DeployDeps) clientOptions(opts ...api.Option) []api.Option {
+	if deps.ConnectTimeout > 0 || deps.TLSHandshakeTimeout > 0 || deps.ResponseHeaderTimeout > 0 {
+		opts = append(opts, api.WithConnectionBounds(deps.ConnectTimeout, deps.TLSHandshakeTimeout, deps.ResponseHeaderTimeout))
+	}
+	return opts
 }

@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"sync"
 )
 
 // deployPath builds the path of a per-deploy endpoint.
@@ -34,10 +37,14 @@ func deployPath(deployID, action string) string {
 // keep-alive frames cannot rescue one, because keeping a connection alive
 // does not extend a deadline that is counting anyway.
 //
-// So there is no deadline here at all. What ends this request is the
-// caller's context: the stream's own terminating event, a cancellation,
-// or a liveness rule the caller applies to the bytes it is reading, which
-// is where that rule can actually see the thing it is about.
+// So there is no deadline on the stream as a whole. Getting it OPEN is
+// bounded, phase by phase, by the transport: dialling, the TLS handshake,
+// and the server answering each have their own bound, and a failure in
+// any of them comes back as a StreamOpenError naming the phase. Once the
+// response has arrived, what ends this request is the caller's context:
+// the stream's own terminating event, a cancellation, or a liveness rule
+// the caller applies to the bytes it is reading, which is where that rule
+// can actually see the thing it is about.
 //
 // It is not retried either, and for once that is not a decision this
 // function has to make: a stream that ends early is reconnected by
@@ -57,12 +64,66 @@ func (c *Client) DeployEvents(ctx context.Context, deployID string) (io.ReadClos
 	req.Header.Set("User-Agent", c.userAgent)
 	c.withBearerToken()(req)
 
+	// HOW FAR THE REQUEST GOT is recorded as it goes, so a failure can say
+	// which phase it failed in: the dial, the TLS handshake, or the server
+	// answering. Each phase has its own bound on the transport and its own
+	// sentence for the person watching, and the standard library exports
+	// none of the errors that would tell them apart. The phase reached is
+	// the fact; an error's wording is not.
+	secure := req.URL.Scheme == "https"
+	var mu sync.Mutex
+	var reached streamStage
+	reach := func(s streamStage) {
+		mu.Lock()
+		if s > reached {
+			reached = s
+		}
+		mu.Unlock()
+	}
+	trace := &httptrace.ClientTrace{
+		// A reused connection has already been dialled and secured.
+		GotConn: func(info httptrace.GotConnInfo) {
+			if info.Reused {
+				reach(stageAnswering)
+			}
+		},
+		// Over plain HTTP, the loopback-only development case, there is
+		// no handshake to wait for, so a connection moves straight to
+		// the server answering.
+		ConnectDone: func(_, _ string, err error) {
+			if err != nil {
+				return
+			}
+			if secure {
+				reach(stageSecuring)
+			} else {
+				reach(stageAnswering)
+			}
+		},
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err == nil {
+				reach(stageAnswering)
+			}
+		},
+		// A plain-HTTP connection has no handshake: writing the request is
+		// what moves it past the phases before the answer.
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				reach(stageAnswering)
+			}
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// networkError names the host and never the request, which is
 		// what keeps the Authorization header this call just set out of
 		// the message.
-		return nil, networkError(err, c.baseURL)
+		mu.Lock()
+		stage := reached.stage()
+		mu.Unlock()
+		return nil, &StreamOpenError{Stage: stage, Err: networkError(err, c.baseURL)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
@@ -70,3 +131,51 @@ func (c *Client) DeployEvents(ctx context.Context, deployID string) (io.ReadClos
 	}
 	return resp.Body, nil
 }
+
+// StreamStage is the phase of opening the build log that a failure
+// happened in. Each has its own bound on the transport.
+type StreamStage string
+
+const (
+	// StageConnect is dialling the server.
+	StageConnect StreamStage = "connect"
+	// StageTLS is the TLS handshake on an established connection.
+	StageTLS StreamStage = "tls"
+	// StageResponse is waiting for the server to answer a request that
+	// was sent.
+	StageResponse StreamStage = "response"
+)
+
+// streamStage is the phase a request has reached, ordered so that later
+// compares greater. The trace moves it forward from more than one
+// goroutine, so it is read and written under a lock. Its zero value is
+// the first phase.
+type streamStage int
+
+const (
+	stageConnecting streamStage = iota
+	stageSecuring
+	stageAnswering
+)
+
+func (s streamStage) stage() StreamStage {
+	switch s {
+	case stageSecuring:
+		return StageTLS
+	case stageAnswering:
+		return StageResponse
+	default:
+		return StageConnect
+	}
+}
+
+// StreamOpenError is a build-log request that failed before any response
+// arrived, carrying the phase it failed in. The message is the underlying
+// network error's, which names the host and never the request.
+type StreamOpenError struct {
+	Stage StreamStage
+	Err   error
+}
+
+func (e *StreamOpenError) Error() string { return e.Err.Error() }
+func (e *StreamOpenError) Unwrap() error { return e.Err }

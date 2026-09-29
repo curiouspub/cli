@@ -322,6 +322,17 @@ type eventScript struct {
 	// After no terminating event it is a stream that has gone quiet with
 	// nothing broken, which is what a liveness rule has to see.
 	hold bool
+
+	// answerAfter holds the response headers back this long before
+	// answering at all, so a row can put a slow answer inside the
+	// transport's bound on it and show the stall window does not cover
+	// that time.
+	answerAfter time.Duration
+
+	// neverAnswer takes the request and never writes a response, until
+	// the test ends or the client goes away: the server the transport's
+	// bound on answering exists for.
+	neverAnswer bool
 }
 
 // eventsPathSuffix and startPathSuffix name the two per-deploy endpoints
@@ -382,6 +393,27 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 		s.eventTimelines = append(s.eventTimelines, marks)
 		s.mu.Unlock()
 	}()
+
+	if script.neverAnswer {
+		select {
+		case <-release:
+			mark("released")
+		case <-r.Context().Done():
+			mark("client hung up")
+		}
+		return
+	}
+	if script.answerAfter > 0 {
+		select {
+		case <-time.After(script.answerAfter):
+		case <-release:
+			mark("released")
+			return
+		case <-r.Context().Done():
+			mark("client hung up")
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)

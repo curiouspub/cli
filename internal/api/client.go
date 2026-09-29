@@ -31,6 +31,29 @@ const defaultAPIBase = "https://api.curious.pub"
 // Ctrl-C can end.
 const defaultTimeout = 30 * time.Second
 
+// DefaultConnectTimeout, DefaultTLSHandshakeTimeout and
+// DefaultResponseHeaderTimeout bound the three phases before a response
+// exists: dialling the server, the TLS handshake, and the server
+// answering a request it was sent. They are PROVISIONAL: starting points
+// chosen before anything was measured, to be re-set from measurement.
+// Each is recorded, with the reason for its number, beside the stall
+// windows the tests use, and that record reads these constants rather
+// than restating them, so this is the one home of each number.
+//
+// The TLS bound is the figure the standard library's own default
+// transport uses, which a custom transport does not inherit; that
+// transport dials with a longer bound, and this one is shorter on purpose,
+// so a host that will never answer is reported as unreachable sooner. The
+// header
+// bound equals the per-request total, so no ordinary call is bounded more
+// tightly than before; for the build log, which has no total, it is the
+// bound on a server that accepts a connection and never answers.
+const (
+	DefaultConnectTimeout        = 10 * time.Second
+	DefaultTLSHandshakeTimeout   = 10 * time.Second
+	DefaultResponseHeaderTimeout = 30 * time.Second
+)
+
 // Version is this binary's release version, folded into every request's
 // User-Agent. cmd/curious's own `version` variable belongs to package
 // main and is set at release time via -ldflags; it cannot be imported
@@ -176,6 +199,20 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }
 
+// WithConnectionBounds overrides the three bounds on opening a
+// connection: dialling, the TLS handshake, and waiting for the response
+// headers. Each defaults to its Default constant above. A zero or
+// negative value is refused by New, for the reason WithTimeout's is: to
+// the transport, zero means no bound at all.
+//
+// IT EXISTS FOR THE ROWS. A row proving that a server which never answers
+// is refused by the header bound cannot wait thirty seconds to see it.
+func WithConnectionBounds(connect, tlsHandshake, responseHeaders time.Duration) Option {
+	return func(c *Client) {
+		c.connectTimeout, c.tlsTimeout, c.headerTimeout = connect, tlsHandshake, responseHeaders
+	}
+}
+
 // WithToken sets the bearer token this Client attaches to a call that
 // takes one. The four unauthenticated calls do not — auth/verify RETURNS
 // a token, it does not spend one — so this has no visible effect against
@@ -217,6 +254,14 @@ type Client struct {
 	httpClient *http.Client
 	timeout    time.Duration
 	userAgent  string
+
+	// connectTimeout, tlsTimeout and headerTimeout bound the three phases
+	// before a response exists: dialling, the TLS handshake, and the
+	// server answering. Their defaults are the Default constants above;
+	// see WithConnectionBounds.
+	connectTimeout time.Duration
+	tlsTimeout     time.Duration
+	headerTimeout  time.Duration
 
 	// Token is exported on purpose. internal/guard's fourth guard
 	// forbids an UNEXPORTED struct field that can reach a ui.Secret,
@@ -273,9 +318,12 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	}
 
 	c := &Client{
-		baseURL:   normalized,
-		timeout:   defaultTimeout,
-		userAgent: fmt.Sprintf("curious/%s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH),
+		baseURL:        normalized,
+		timeout:        defaultTimeout,
+		userAgent:      fmt.Sprintf("curious/%s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH),
+		connectTimeout: DefaultConnectTimeout,
+		tlsTimeout:     DefaultTLSHandshakeTimeout,
+		headerTimeout:  DefaultResponseHeaderTimeout,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -289,8 +337,27 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 				"omit the option entirely for the %v default", c.timeout, defaultTimeout)
 	}
 
+	if c.connectTimeout <= 0 || c.tlsTimeout <= 0 || c.headerTimeout <= 0 {
+		return nil, fmt.Errorf(
+			"refusing to construct a client with a connection bound of zero or less "+
+				"(connect %v, TLS %v, headers %v): to the transport, zero means no bound "+
+				"at all, so a server that never answered would be waited on for ever — "+
+				"pass positive durations to WithConnectionBounds, or omit it for the "+
+				"registry's defaults", c.connectTimeout, c.tlsTimeout, c.headerTimeout)
+	}
+
 	c.httpClient = &http.Client{
 		Transport: &http.Transport{
+			// ONE NAMED BOUND PER PHASE BEFORE A RESPONSE EXISTS. The
+			// per-request total below covers the ordinary calls end to
+			// end, but the build log is deliberately given no total, and
+			// for it these three are the only thing between a request
+			// and a server that accepts it and never answers. Each value
+			// is the timing registry's, where its reason is written.
+			DialContext:           (&net.Dialer{Timeout: c.connectTimeout}).DialContext,
+			TLSHandshakeTimeout:   c.tlsTimeout,
+			ResponseHeaderTimeout: c.headerTimeout,
+
 			// http.DefaultTransport sets this for free, which is exactly
 			// what makes leaving it off a custom Transport dangerous: a
 			// bare &http.Transport{} silently ignores HTTPS_PROXY,
