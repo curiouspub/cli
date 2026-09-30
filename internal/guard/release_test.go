@@ -1750,12 +1750,16 @@ func TestCutReleaseMakesNoOutwardChangeWithoutConsent(t *testing.T) {
 	if !strings.Contains(text, "--yes") {
 		t.Errorf("the script stopped without saying what would make it proceed\n%s", text)
 	}
-	// A notarisation timeout is recovered by a re-run of the same run, not
-	// by a new version, and the operator meets it in the middle of a
-	// release. So the recovery is printed here, with the commands.
-	for _, want := range []string{"if notarisation times out", "notarytool history", "gh run rerun <run id> --failed"} {
+	// A notarisation timeout and a failed signer install are each
+	// recovered by a re-run of the same run, not by a new version, and the
+	// operator meets them in the middle of a release. So the recovery is
+	// printed here, with the commands.
+	for _, want := range []string{"if notarisation times out", "notarytool history", "gh run rerun <run id> --failed",
+		"if the signing tool fails to install", "trusted root is required"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("the script does not print the recovery from a notarisation timeout (%q)\n%s", want, text)
+			t.Errorf("the script does not print a recovery step it owes the operator (%q): a "+
+				"notarisation timeout and a failed signer install both publish nothing and are "+
+				"recovered by re-running the same run\n%s", want, text)
 		}
 	}
 }
