@@ -373,6 +373,19 @@ main() {
 	printf 'Each binary is submitted in turn, so a later one can time out as well.\n'
 	printf 'The answer is the same.\n\n'
 
+	# A FAILED SIGNER INSTALL IS THE SAME SHAPE. The signing tool is
+	# installed and verified at the start of the publishing job, and that
+	# verification reads a trust root from the signing service's own
+	# repository. When that repository cannot be reached, the install
+	# fails before anything is built, so nothing has been published and
+	# the same run can be picked up once the service answers again.
+	printf '=== if the signing tool fails to install ===\n\n'
+	printf 'The job stops at the cosign install with "trusted root is required" or\n'
+	printf '"Could not fetch trusted_root.json" (Sigstore TUF unreachable), before\n'
+	printf 'anything is built or published. Nothing is lost and nothing is re-cut:\n'
+	printf 're-run the failed job once the service answers again:\n\n'
+	printf '       gh run rerun <run id> --failed --repo %s\n\n' "$REPO"
+
 	if [ "$yes" -ne 1 ]; then
 		printf 'Nothing has been changed. Re-run with --yes to execute exactly the two\n'
 		printf 'commands above, or run them yourself.\n'
