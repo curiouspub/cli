@@ -238,6 +238,16 @@ archive adds bytes of its own for every entry it holds, so a great many
 small, incompressible files can weigh more once packed than they do on
 disk — `curious` names the files worth removing when that happens.
 
+Two more numbers bound what the build produces, and only the server can
+check them, because the output does not exist until the build has run:
+
+- `MaxOutputFiles` — 1,000 files at most.
+- `MaxOutputTotalBytes` — 30 MB in total, counting the small badge added
+  to each HTML page.
+
+A site over either is refused when its build finishes, with a message
+giving the size it reached and the limit.
+
 ## Where the login lives
 
 The login is a token, held in a small JSON file `curious` reads and
