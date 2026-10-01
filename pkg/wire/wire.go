@@ -545,9 +545,11 @@ const (
 	// earlier still, so the residue cannot outlive it, and publish is
 	// idempotent, so a retry always completes the transition.
 	StatusBuilt DeployStatus = "built"
-	// StatusLive ships with no producer yet, deliberately: nothing emits it
-	// at the time this constant is declared, but the vocabulary ships
-	// complete anyway, because the cost of a client never having to think
+	// StatusLive is what a deploy's record says once the publish step has
+	// made it the deploy its site serves, and a stream opened on a deploy
+	// already published ends with a `done` event carrying it. It was
+	// declared before anything produced it, deliberately: the vocabulary
+	// ships complete, because the cost of a client never having to think
 	// about a status lands in installed binaries, not compile errors — see
 	// the package doc.
 	StatusLive   DeployStatus = "live"
@@ -578,11 +580,13 @@ var AllDeployStatuses = []DeployStatus{
 // comparison between them, which the reader has no compiler to check while
 // staring at a log line.
 //
-// The control plane emits queued, starting and publishing; the build
+// Only the middle four constants below are emitted today: the build
 // agent's own four internal phase names — extracting, installing,
-// building, uploading — are translated onto the middle four constants
-// below by a single server-side function, so an internal rename never
-// reaches this public contract.
+// building, uploading — are translated onto them by a single server-side
+// function, so an internal rename never reaches this public contract.
+// Queued, starting and publishing have no producer yet. They ship in the
+// vocabulary for the reason PhasePublishing gives, and a stream that
+// never sends them is a correct stream.
 //
 // An unknown phase is rendered as generic progress, never switched on
 // exhaustively — see the package doc's enum-evolution rule, restated here
