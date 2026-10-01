@@ -761,7 +761,7 @@ func TestAStreamThatStopsTalkingIsReconnected(t *testing.T) {
 	// firing a full window after its last read, and the server must show
 	// the client hanging up after that, on the first connection.
 	client := trace.snapshot()
-	server := run.script.timelines()
+	server := run.script.settledTimelines(t, harnessSettleBound)
 	timeline := streamTimeline(server, client)
 	var lastRead, stalled time.Time
 	stalls := 0

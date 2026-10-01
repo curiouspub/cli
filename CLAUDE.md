@@ -101,6 +101,25 @@ it had been gated green individually; the gate does not carry this check,
 and that is precisely why the chaining has to be written down rather than
 remembered.
 
+**And a second instance, 2026-10-01, which is why the rule now names the
+pipe.** The check's output was piped into `tail` so that only its last
+line showed — `make surface-check … | tail -1 && git push` — and a
+pipeline's exit status is its LAST command's. `tail` succeeds, so the
+chain pushed whatever the check said: on the run that exposed it the check
+was red (it had been handed a range that resolved to nothing) and the
+push went out. The same shape had been used on eighteen earlier pushes
+over a week. The check that runs in CI on every pull request caught
+nothing on any of them, and every one merged with it green, so nothing
+unchecked reached the default branch; what went out unchecked at push time
+were branch names, commit messages and pull-request text, which are the
+surfaces this check exists to read before they are published.
+
+**The rule: a check's output goes to a file and is read from that file,
+never through a pipe** — `make surface-check … > out.log 2>&1 && git push`,
+then read `out.log`. A pipe hands the chain the exit status of the last
+command in it, not the check's, so anything after `|` turns the check into
+a decoration as surely as the `echo` did.
+
 That check exists because the hand-check it replaces failed twice here,
 once by the same hand that had written the sentence describing the hole.
 **A rule with no mechanism gets followed until the moment somebody is
