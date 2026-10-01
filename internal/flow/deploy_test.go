@@ -270,7 +270,19 @@ type deployScript struct {
 	// row's timeline. The client's half comes from the reader's own
 	// trace, and only the two together can say whether a cut connection
 	// was the machine or the client. See streamTimeline.
+	//
+	// INDEXED BY ARRIVAL. A connection's slot is reserved when its request
+	// arrives, and its marks are written into that slot as they happen, so
+	// eventTimelines[0] is the first connection the client opened whatever
+	// order the handlers finish in. It used to be appended when a handler
+	// RETURNED: on a loaded runner a reconnect finished before the first
+	// handler noticed its client had gone, and a stall row read the second
+	// connection as the first (cli #95's queue run, 2026-10-01).
 	eventTimelines [][]serverMark
+	// eventHandlers counts the event handlers still running, so a row can
+	// read every timeline only once each connection has finished. See
+	// settledTimelines.
+	eventHandlers sync.WaitGroup
 
 	// publishOutcome scripts the publish's answer, publishSubdomain and
 	// publishExpiresAt the success body, and publishBody replaces that
@@ -384,15 +396,16 @@ func (s *deployScript) eventScriptFor(n int) eventScript {
 // held-open stream keeps this goroutine for the life of the row, and
 // holding the mutex with it would deadlock every assertion made
 // afterwards — including the ones about the start that ran before it.
-func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, script eventScript, release <-chan struct{}) {
-	var marks []serverMark
-	mark := func(what string) { marks = append(marks, serverMark{what: what, at: time.Now()}) }
-	mark("arrived")
-	defer func() {
+func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, script eventScript, release <-chan struct{}, slot int) {
+	// Each mark goes into this connection's own slot, reserved on arrival,
+	// and is taken under the mutex only for the append itself.
+	mark := func(what string) {
+		at := time.Now()
 		s.mu.Lock()
-		s.eventTimelines = append(s.eventTimelines, marks)
+		s.eventTimelines[slot] = append(s.eventTimelines[slot], serverMark{what: what, at: at})
 		s.mu.Unlock()
-	}()
+	}
+	mark("arrived")
 
 	if script.neverAnswer {
 		select {
@@ -502,7 +515,30 @@ func (c *streamTrace) snapshot() []StreamTraceEvent {
 	return append([]StreamTraceEvent(nil), c.events...)
 }
 
-// timelines returns a copy of every connection's server-side timeline.
+// settledTimelines waits until every event handler has returned, then
+// returns their timelines in arrival order. A row that ASSERTS on a
+// connection's ending reads this, not timelines: a handler that has not
+// returned has not finished its timeline, and reading it early is a
+// misreading by a different route.
+//
+// The bound is not a stall window and is not in the timing registry: it
+// bounds how long a row waits for its own fixture to finish, and expiring
+// is its own failure, never a timeline read wrong.
+func (s *deployScript) settledTimelines(t *testing.T, bound time.Duration) [][]serverMark {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { s.eventHandlers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(bound):
+		t.Fatalf("an event handler never returned within %v, so its timeline is not finished:\n%s",
+			bound, streamTimeline(s.timelines(), nil))
+	}
+	return s.timelines()
+}
+
+// timelines returns a copy of every connection's server-side timeline,
+// in arrival order, as far as each has got.
 func (s *deployScript) timelines() [][]serverMark {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -643,8 +679,12 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if _, action, ok := deployAction(r.URL.Path); ok && action == eventsAction {
 		s.eventGETs++
 		script, release := s.eventScriptFor(s.eventGETs), s.release
+		slot := len(s.eventTimelines)
+		s.eventTimelines = append(s.eventTimelines, nil)
+		s.eventHandlers.Add(1)
 		s.mu.Unlock()
-		s.serveEvents(w, r, script, release)
+		defer s.eventHandlers.Done()
+		s.serveEvents(w, r, script, release, slot)
 		return
 	}
 
