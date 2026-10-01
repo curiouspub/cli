@@ -52,14 +52,8 @@ const (
 	nothingDeployed = "Nothing has been deployed."
 )
 
-// supportAddress is the CLI's support contact, and it has ONE named home
-// for the reason every other piece of copy here does: an address typed
-// into a string is an address that exists in two places the next time
-// anybody needs it, and the two spellings are then one typo apart.
-//
-// It is written out in words, as it is everywhere this project names an
-// address, and a guard holds every published file to that one form.
-const supportAddress = "support at curious.pub"
+// The support address's one home is ui.SupportAddress: the internal-fault
+// copy names it too, and ui cannot import this package.
 
 // NewWaitlistOffer builds the hand-off the login flow calls when the
 // account cap closes at the moment an account would be spent.
@@ -237,7 +231,7 @@ func signupFailedStop(err error, resetsAt, now time.Time) *ui.Failure {
 		ui.StageWaitlist,
 		"That didn't get you onto the list.",
 		uploadedNothing, ui.NextWait,
-		"Email "+supportAddress+" and we'll add you by hand.\nRun `curious deploy` "+
+		"Email "+ui.SupportAddress+" and we'll add you by hand.\nRun `curious deploy` "+
 			"again "+afterTheReset(resetsAt, now)+".").
 		Quoting(serverSaid(err))
 }

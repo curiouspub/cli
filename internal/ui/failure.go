@@ -493,6 +493,17 @@ const (
 // what Secret is for — a Secret folded into an error's text renders as a
 // placeholder here like everywhere else, and there is a test for exactly
 // that.
+// SupportAddress is the CLI's support contact, and it has ONE named home
+// for the reason every other piece of copy here does: an address typed
+// into a string is an address that exists in two places the next time
+// anybody needs it, and the two spellings are then one typo apart.
+//
+// It is written out in words, as it is everywhere this project names an
+// address, and a guard holds every published file to that one form. It
+// lives here rather than in flow because both packages name it, and flow
+// imports ui, never the other way round.
+const SupportAddress = "support at curious.pub"
+
 func (u *UI) Internal(err error) {
 	f := &Failure{
 		ID:    IDInternalFault,
@@ -501,7 +512,7 @@ func (u *UI) Internal(err error) {
 		Why:   internalWhy,
 		Next:  NextGiveUp,
 		NextText: "Re-run with " + debugEnvVar + "=1 to see the detail, and please\n" +
-			"report it with that output.",
+			"send that output to " + SupportAddress + ".",
 	}
 
 	if u.debug {
@@ -510,7 +521,7 @@ func (u *UI) Internal(err error) {
 			detail = err.Error()
 		}
 		f.Why = internalDebugWhy + "\n\n  " + detail
-		f.NextText = "Please report this, with the detail above."
+		f.NextText = "Please send this, with the detail above, to " + SupportAddress + "."
 	}
 
 	u.Fail(f)

@@ -279,7 +279,7 @@ func TestASignupThatFailedSaysSoAndNamesSomewhereToGo(t *testing.T) {
 	for _, want := range []string{
 		"didn't get you onto the list",
 		"The list is not accepting anyone at the moment.",
-		supportAddress,
+		ui.SupportAddress,
 	} {
 		if !strings.Contains(seen, want) {
 			t.Errorf("a failed signup never said %q:\n%s", want, seen)
@@ -514,16 +514,19 @@ func TestEveryStopOnThisPathNamesAnAction(t *testing.T) {
 // address that exists in two places the next time anybody needs one, and
 // the two spellings are then one typo apart.
 //
-// WHAT IT DOES NOT SEE, said here rather than left to be discovered: it
-// reads THIS PACKAGE's shipped sources and no others, so a second
-// spelling in another package is outside its view. That is the scope the
-// constant has today; a second consumer arriving is the moment to widen
-// both.
+// It reads the shipped sources of BOTH packages that name the address:
+// this one, and internal/ui, where the constant now lives. Widened when
+// the second consumer arrived (the internal-fault copy names it too), as
+// this comment said it would be. WHAT IT DOES NOT SEE: any third package.
+// A third consumer is the moment to widen it again.
 //
 // REQUIRED MUTATION, RUN: write the address inline in signupFailedStop
 // instead of referencing the constant.
 func TestTheSupportAddressHasOneHome(t *testing.T) {
-	sources := shippedSources(t)
+	sources := shippedSources(t, ".")
+	for name, body := range shippedSources(t, filepath.Join("..", "ui")) {
+		sources[filepath.Join("ui", name)] = body
+	}
 	if len(sources) == 0 {
 		t.Fatal("this row read no sources at all")
 	}
@@ -534,7 +537,7 @@ func TestTheSupportAddressHasOneHome(t *testing.T) {
 	var offenders []string
 	for path, body := range sources {
 		for i, line := range strings.Split(body, "\n") {
-			if strings.Contains(line, "supportAddress = ") {
+			if strings.Contains(line, "SupportAddress = ") {
 				declared++
 				continue
 			}
@@ -544,32 +547,32 @@ func TestTheSupportAddressHasOneHome(t *testing.T) {
 			// happens — an address folded into a sentence, where no
 			// closing quote follows it — and came back green. A row that
 			// can only see one spelling of a value is a spelling checker.
-			if !strings.Contains(line, supportAddress) {
+			if !strings.Contains(line, ui.SupportAddress) {
 				continue
 			}
 			offenders = append(offenders, fmt.Sprintf("%s:%d", path, i+1))
 		}
 	}
 	if declared != 1 {
-		t.Fatalf("the constant is declared %d times in this package's shipped "+
+		t.Fatalf("the constant is declared %d times in flow's and ui's shipped "+
 			"sources, want exactly 1 — with none, this row is scanning for a value "+
 			"that is not here and can only report a clean sweep", declared)
 	}
 	if len(offenders) > 0 {
 		t.Errorf("the support address is written out at %s; reference the "+
-			"supportAddress constant instead", strings.Join(offenders, ", "))
+			"ui.SupportAddress constant instead", strings.Join(offenders, ", "))
 	}
 }
 
 // shippedSources reads every Go source in this package that is compiled
 // into the binary — test files excluded, because a fixture is allowed to
 // spell a value out and is not shipped anywhere.
-func shippedSources(t *testing.T) map[string]string {
+func shippedSources(t *testing.T, dir string) map[string]string {
 	t.Helper()
 
-	entries, err := os.ReadDir(".")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("reading this package's own directory: %v", err)
+		t.Fatalf("reading %s: %v", dir, err)
 	}
 	sources := map[string]string{}
 	for _, entry := range entries {
@@ -578,7 +581,7 @@ func shippedSources(t *testing.T) map[string]string {
 			strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		body, err := os.ReadFile(name)
+		body, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("reading %s: %v", name, err)
 		}

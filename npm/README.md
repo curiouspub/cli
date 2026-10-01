@@ -104,9 +104,12 @@ verification off.
 
 ## If the install did not run
 
-Installing with `--ignore-scripts` skips the download, and the command
-then says so rather than failing with a stack trace. Install again
-without it, or take a binary from the
+Installing with `--ignore-scripts`, or with a package manager that
+blocks install scripts, skips the download at install time. Nothing
+needs doing: the first `curious` you run fetches the binary itself,
+with the same check, and prints one line while it does. If that fetch
+fails too, the command says why rather than failing with a stack trace;
+fix what it names and run it again, or take a binary from the
 [releases page](https://github.com/curiouspub/cli/releases).
 
 ## No telemetry
