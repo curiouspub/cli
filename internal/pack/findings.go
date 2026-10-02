@@ -2,6 +2,7 @@ package pack
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -65,7 +66,7 @@ func walkManifest() check.Manifest {
 
 // results is the walk's whole answer in the shape every producer here
 // returns.
-func results(files []File, symlinks []string, publicDir string) check.Results {
+func results(files []File, symlinks []string, names NameScope) check.Results {
 	paths := make([]string, 0, len(files))
 	for _, f := range files {
 		paths = append(paths, f.Path)
@@ -74,7 +75,12 @@ func results(files []File, symlinks []string, publicDir string) check.Results {
 	var findings []check.Finding
 	findings = append(findings, symlinkFindings(symlinks)...)
 	findings = append(findings, collisionFindings(paths)...)
-	findings = append(findings, charsetFindings(publishedVerbatim(paths, publicDir))...)
+	findings = append(findings, charsetFindings(publishedVerbatim(paths, names.Public))...)
+	if names.Public != "." {
+		// A public folder at the root already checked every name as it
+		// is, the pages included, and a page reported twice is noise.
+		findings = append(findings, routeFindings(paths, names.Pages)...)
+	}
 
 	// Sorted here as well as in the combiner, so this producer's own
 	// output is in report order for anything that looks at it directly.
@@ -179,6 +185,22 @@ const (
 	pathTotalLimit   = 1024
 )
 
+// NameScope is where the file-name check reads: the folders whose names
+// reach the built site. Both are project-relative and slash-separated,
+// as the caller resolved them from the project's config.
+type NameScope struct {
+	// Public is the folder Astro copies into the site unchanged. "."
+	// means the project root.
+	Public string
+	// Pages is the folder whose files become routes, `pages` inside
+	// the source folder.
+	Pages string
+}
+
+// DefaultNameScope is Astro's own layout, for a project whose config
+// moves neither folder.
+var DefaultNameScope = NameScope{Public: "public", Pages: "src/pages"}
+
 // publishedVerbatim is the part of the walk whose names survive the
 // build: the files under the public folder, which Astro copies into the
 // site unchanged.
@@ -208,6 +230,47 @@ func publishedVerbatim(paths []string, publicDir string) []string {
 	return out
 }
 
+// routeParam is one bracketed stretch of a page's name: a route
+// parameter, replaced by whatever values the page produces.
+var routeParam = regexp.MustCompile(`\[[^\]]*\]`)
+
+// routeFindings checks the pages folder for the characters a page's
+// name carries into its address.
+//
+// A PAGE'S ROUTE KEEPS EVERY CHARACTER OUTSIDE ITS BRACKETS. Astro
+// replaces a `[slug]` stretch with the values the page produces, and
+// leaves the rest of the name as it is: `café.astro` is served at
+// `café/`, and that is a name the platform will refuse after the build.
+// So the brackets are removed and what is left is checked, under the
+// same rule and wording as the public folder.
+//
+// A segment starting `_` is skipped, with everything under it: Astro
+// does not route those, so their names never reach the site.
+//
+// REQUIRED MUTATION, run 2026-10-03: return nil. The row over
+// `café.astro` reds, and the dynamic-route rows stay green.
+func routeFindings(paths []string, pagesDir string) []check.Finding {
+	prefix := pagesDir + "/"
+	var out []check.Finding
+outer:
+	for _, p := range paths {
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		segments := strings.Split(strings.TrimPrefix(p, prefix), "/")
+		for i, seg := range segments {
+			if strings.HasPrefix(seg, "_") {
+				continue outer
+			}
+			segments[i] = routeParam.ReplaceAllString(seg, "")
+		}
+		if reason := charsetProblem(strings.Join(segments, "/")); reason != "" {
+			out = append(out, charsetFinding(p, reason))
+		}
+	}
+	return out
+}
+
 // charsetFindings is the walk's HARD STOP: a name the platform will
 // refuse once the upload has already started. It is handed only the
 // names the build will publish as they are; see publishedVerbatim.
@@ -227,23 +290,27 @@ func publishedVerbatim(paths []string, publicDir string) []string {
 func charsetFindings(paths []string) []check.Finding {
 	var out []check.Finding
 	for _, p := range paths {
-		reason := charsetProblem(p)
-		if reason == "" {
-			continue
+		if reason := charsetProblem(p); reason != "" {
+			out = append(out, charsetFinding(p, reason))
 		}
-		out = append(out, check.Finding{
-			CheckID:   check.IDPathCharset,
-			FailureID: string(check.FamilyPathCharset),
-			Severity:  check.SeverityHardStop,
-			Message:   fmt.Sprintf("%s can't be published, because %s.", p, reason),
-			Paths:     check.NewPaths(p),
-			Why: fmt.Sprintf("Every part of a published path may use only letters, digits, "+
-				"and the characters . _ ~ and - , with at most %d bytes in any one part "+
-				"and %d bytes in the whole path.", pathSegmentLimit, pathTotalLimit),
-			Next: nextFor(p),
-		})
 	}
 	return out
+}
+
+// charsetFinding is the one finding both readers produce, naming the
+// file as it is on disk.
+func charsetFinding(p, reason string) check.Finding {
+	return check.Finding{
+		CheckID:   check.IDPathCharset,
+		FailureID: string(check.FamilyPathCharset),
+		Severity:  check.SeverityHardStop,
+		Message:   fmt.Sprintf("%s can't be published, because %s.", p, reason),
+		Paths:     check.NewPaths(p),
+		Why: fmt.Sprintf("Every part of a published path may use only letters, digits, "+
+			"and the characters . _ ~ and - , with at most %d bytes in any one part "+
+			"and %d bytes in the whole path.", pathSegmentLimit, pathTotalLimit),
+		Next: nextFor(p),
+	}
 }
 
 // charsetProblem says why a path cannot be published, or returns empty

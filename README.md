@@ -557,11 +557,15 @@ a space, a character shown with its code point, a mark that attaches to
 the letter before it, or a length in bytes against the limit it passed.
 One message per path, because the reason differs per path.
 
-Only the public folder is checked: `public/`, or the folder your
-`astro.config` sets as `publicDir`. Astro copies those files into your site
-under their own names; everything else, a page named `[slug].astro`
-included, is built into names of its own. When the config sets `publicDir`
-in a way curious can't read, `public/` is checked and a warning says so.
+Only the names that reach your site are checked. That means the public
+folder (`public/`, or the folder your `astro.config` sets as `publicDir`),
+which Astro copies into your site unchanged, and your pages (`src/pages/`,
+or `pages` inside your `srcDir`), whose addresses keep every character of
+their names except the bracketed parameters. So `[slug].astro` and
+`tags/[tag]/` pass and `café.astro` does not. Names starting `_` are
+skipped, because Astro does not route them. Everything else is built into
+names of its own. When the config sets `publicDir` in a way curious can't
+read, `public/` is checked and a warning says so.
 
 ### project-dir-missing
 

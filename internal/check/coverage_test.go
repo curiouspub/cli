@@ -75,7 +75,7 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 		standIn(check.IDLocalhost),
 	}, preflight.OSFileSystem{}, "irrelevant")
 
-	tree, err := pack.Walk(pack.OSFileSystem{}, t.TempDir(), preflight.DefaultPublicDir)
+	tree, err := pack.Walk(pack.OSFileSystem{}, t.TempDir(), pack.DefaultNameScope)
 	if err != nil {
 		t.Fatalf("walking an empty directory: %v", err)
 	}

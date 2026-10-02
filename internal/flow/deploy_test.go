@@ -1934,7 +1934,8 @@ func TestAWarningAnsweredYesReachesThePackAndTheUpload(t *testing.T) {
 // REQUIRED MUTATIONS, run 2026-10-03: walk with the default folder in
 // place of the resolved one, and the configured-folder row reds, the
 // refusal missing and a request sent; leave the resolver's results out
-// of the report, and the fallback row reds, never asked and exiting 1.
+// of the report, and the fallback row reds, never asked and exiting 1;
+// walk with the default pages folder, and the moved-source row reds.
 func TestTheDeployChecksNamesWhereTheSiteKeepsThem(t *testing.T) {
 	t.Run("a dynamic route deploys", func(t *testing.T) {
 		run := newDeployRun(t, writeProject(t, astroProject(map[string][]byte{
@@ -1969,6 +1970,41 @@ func TestTheDeployChecksNamesWhereTheSiteKeepsThem(t *testing.T) {
 		}
 		if sent := run.script.sent(); sent != 0 {
 			t.Errorf("the refused project sent %d requests, want none", sent)
+		}
+	})
+
+	t.Run("a literal page name is refused, named", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(map[string][]byte{
+			"src/pages/about me.astro": []byte("<h1>about</h1>"),
+		})))
+
+		_, err := run.run()
+		if err == nil {
+			t.Fatal("a page whose route carries a space deployed")
+		}
+		if text := rendered(err); !strings.Contains(text, "src/pages/about me.astro") {
+			t.Errorf("the refusal does not name the page:\n%s", text)
+		}
+		if sent := run.script.sent(); sent != 0 {
+			t.Errorf("the refused project sent %d requests, want none", sent)
+		}
+	})
+
+	t.Run("a moved source folder's pages are the ones checked", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, map[string][]byte{
+			"package.json":                []byte(`{"name":"row","private":true,"dependencies":{"astro":"^5.0.0"}}`),
+			"package-lock.json":           []byte(`{"lockfileVersion":3}`),
+			"astro.config.mjs":            []byte("export default { srcDir: './source' };\n"),
+			"source/pages/index.astro":    []byte("<h1>hello</h1>"),
+			"source/pages/about me.astro": []byte("<h1>about</h1>"),
+		}))
+
+		_, err := run.run()
+		if err == nil {
+			t.Fatal("a page under the configured source folder whose route carries a space deployed")
+		}
+		if text := rendered(err); !strings.Contains(text, "source/pages/about me.astro") {
+			t.Errorf("the refusal does not name the page:\n%s", text)
 		}
 	})
 
@@ -2219,7 +2255,7 @@ func TestTheHandoffIsTheFormedRequest(t *testing.T) {
 		t.Errorf("SHA256 = %q, want a hex digest", handoff.SHA256)
 	}
 
-	tree, err := pack.Walk(pack.OSFileSystem{}, root, "public")
+	tree, err := pack.Walk(pack.OSFileSystem{}, root, pack.DefaultNameScope)
 	if err != nil {
 		t.Fatalf("walking the fixture to count it: %v", err)
 	}
