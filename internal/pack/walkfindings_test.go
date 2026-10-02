@@ -133,6 +133,102 @@ func TestWalkStopsOnAnAssetNameTheServerWouldRefuse(t *testing.T) {
 	}
 }
 
+// TestWalkLetsAstrosDynamicRoutesThrough is the fixture that found the
+// defect: a public Astro starter with a blog, refused before it was
+// built because four of its pages are named the way Astro names a
+// dynamic route. One of them sits in a bracketed FOLDER, which is the
+// case a fix written against file names alone would miss.
+//
+// The legal sibling under public/ and the space beside it are the other
+// half: the check still runs where the names are published as they are.
+//
+// REQUIRED MUTATION, run 2026-10-03: publishedVerbatim returns every
+// path. Reds here, naming the four route files.
+func TestWalkLetsAstrosDynamicRoutesThrough(t *testing.T) {
+	routes := []string{
+		"src/pages/[...slug].astro",
+		"src/pages/blog/[...page].astro",
+		"src/pages/blog/[slug].astro",
+		"src/pages/tags/[tag]/[...page].astro",
+	}
+	entries := []entry{
+		{path: "package.json", body: "{}"},
+		{path: "public/favicon.svg", body: "<svg/>"},
+		{path: "public/my photo.png", body: "img"},
+	}
+	for _, r := range routes {
+		entries = append(entries, entry{path: r, body: "---\n---\n"})
+	}
+
+	res := mustWalk(t, OSFileSystem{}, writeTree(t, entries)).Results
+	stops := findingsFor(res, check.IDPathCharset)
+	var named []string
+	for _, f := range stops {
+		named = append(named, f.Paths...)
+	}
+	if !reflect.DeepEqual(named, []string{"public/my photo.png"}) {
+		t.Errorf("path-charset named %v, want only the public/ asset with a space — "+
+			"a route's source name never reaches the built site", named)
+	}
+}
+
+// TestAnAccentedNameStopsOnlyWhereItIsPublished is the non-ASCII half,
+// from a synthetic listing so no filesystem's opinion of the name
+// matters: an accented letter under public/ is still a hard stop, and
+// the same letter in a page's source name is not this check's business.
+func TestAnAccentedNameStopsOnlyWhereItIsPublished(t *testing.T) {
+	fsys := fakeFS{dirs: map[string][]fakeEntry{
+		"":          {{name: "public", mode: fs.ModeDir}, {name: "src", mode: fs.ModeDir}},
+		"public":    {{name: "caf\u00e9.png", size: 1}},
+		"src":       {{name: "pages", mode: fs.ModeDir}},
+		"src/pages": {{name: "caf\u00e9.astro", size: 1}},
+	}}
+
+	stops := findingsFor(mustWalk(t, fsys, "root").Results, check.IDPathCharset)
+	if len(stops) != 1 || stops[0].Severity != check.SeverityHardStop ||
+		!reflect.DeepEqual(stops[0].Paths, []string{"public/caf\u00e9.png"}) {
+		t.Errorf("path-charset = %+v, want one hard stop naming the public/ asset", stops)
+	}
+}
+
+// TestTheNameCheckReadsTheConfiguredPublicFolder is the same rule with
+// the public folder moved, which Astro allows: the check follows it, in
+// both directions.
+func TestTheNameCheckReadsTheConfiguredPublicFolder(t *testing.T) {
+	root := writeTree(t, []entry{
+		{path: "static/my photo.png", body: "img"},
+		{path: "public/my photo.png", body: "img"},
+		{path: "src/my notes.md", body: "text"},
+	})
+
+	for _, tc := range []struct {
+		publicDir string
+		want      []string
+	}{
+		{"static", []string{"static/my photo.png"}},
+		{"public", []string{"public/my photo.png"}},
+		// The project root itself: everything is copied as it is.
+		{".", []string{"public/my photo.png", "src/my notes.md", "static/my photo.png"}},
+	} {
+		t.Run(tc.publicDir, func(t *testing.T) {
+			tree, err := Walk(OSFileSystem{}, root, tc.publicDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var named []string
+			for _, f := range findingsFor(tree.Results, check.IDPathCharset) {
+				if f.Severity != check.SeverityHardStop {
+					t.Errorf("%s: Severity = %q, want a hard stop", f.Paths, f.Severity)
+				}
+				named = append(named, f.Paths...)
+			}
+			if !reflect.DeepEqual(named, tc.want) {
+				t.Errorf("path-charset named %v, want %v", named, tc.want)
+			}
+		})
+	}
+}
+
 // TestEveryManifestRowIsBuiltInOnePlace reads this package's own source
 // and asserts that a manifest row is constructed exactly once, inside
 // the helper named for the job.

@@ -434,9 +434,15 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	}
 	token := cfg.Token
 
-	// 3. THE WALK.
+	// 3. THE WALK, told where the public folder is.
+	//
+	// The folder is read out of the config FIRST because the walk's
+	// file-name check reads only that folder: its names are the ones
+	// the built site keeps. A config it cannot read leaves the default
+	// and a warning saying so, which joins the report below.
 	started := now()
-	tree, err := pack.Walk(fsys, root)
+	public := preflight.ResolvePublicDir(preflight.OSFileSystem{}, root)
+	tree, err := pack.Walk(fsys, root, public.Path)
 	if err != nil {
 		return nil, unreadableProjectFailure(err)
 	}
@@ -456,6 +462,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	report, err := check.Combine(
 		preflight.Run(deployChecks(tree.Files), preflight.OSFileSystem{}, root),
 		tree.Results,
+		public.Results,
 		limits,
 	)
 	if err != nil {

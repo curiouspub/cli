@@ -469,6 +469,12 @@ type astroConfig struct {
 	srcDirResolved  bool   // the key's value is a literal path; meaningless unless srcDirFound && !srcDirAmbiguous
 	srcDirValue     string // meaningful only when srcDirResolved
 
+	publicDirMentioned bool   // the file names publicDir anywhere; the one field still meaningful when unresolved
+	publicDirFound     bool   // a live, top-level publicDir key exists at all
+	publicDirAmbiguous bool   // more than one live top-level publicDir key was found
+	publicDirResolved  bool   // the key's value is a literal path; meaningless unless publicDirFound && !publicDirAmbiguous
+	publicDirValue     string // meaningful only when publicDirResolved
+
 	buildFormatFound     bool   // a live format key exists, nested one level inside a top-level build object
 	buildFormatAmbiguous bool   // more than one live "build" key, or more than one live "format" key inside it, was found
 	buildFormatResolved  bool   // that key's value is a plain string literal

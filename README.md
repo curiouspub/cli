@@ -557,6 +557,12 @@ a space, a character shown with its code point, a mark that attaches to
 the letter before it, or a length in bytes against the limit it passed.
 One message per path, because the reason differs per path.
 
+Only the public folder is checked: `public/`, or the folder your
+`astro.config` sets as `publicDir`. Astro copies those files into your site
+under their own names; everything else, a page named `[slug].astro`
+included, is built into names of its own. When the config sets `publicDir`
+in a way curious can't read, `public/` is checked and a warning says so.
+
 ### project-dir-missing
 
 **this machine.** A person is getting this machine ready before anything is sent: the project directory, where the login is kept, the API address or the temporary directory.

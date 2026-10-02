@@ -55,7 +55,12 @@ type Tree struct {
 // pointing at one of its own ancestors harmless, and nothing here reads
 // a file's contents except an ignore file — whose rules are bytes and
 // cannot be had any other way.
-func Walk(fsys FS, root string) (Tree, error) {
+//
+// publicDir is the folder whose files keep their names in the built
+// site, project-relative and slash-separated, as the caller resolved it
+// from the project's config. The file-name check reads only that folder;
+// see charsetFindings.
+func Walk(fsys FS, root, publicDir string) (Tree, error) {
 	w := &walker{fsys: fsys, root: root}
 	if err := w.descend("", nil); err != nil {
 		return Tree{}, err
@@ -70,7 +75,7 @@ func Walk(fsys FS, root string) (Tree, error) {
 	return Tree{
 		Files:    w.files,
 		Symlinks: w.symlinks,
-		Results:  results(w.files, w.symlinks),
+		Results:  results(w.files, w.symlinks, publicDir),
 	}, nil
 }
 

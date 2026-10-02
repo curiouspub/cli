@@ -175,7 +175,7 @@ func archiveSizeUnder(t *testing.T, dir string) int64 {
 // other number this sequence holds, and the one that must not be sent.
 func sourceTotal(t *testing.T, root string) int64 {
 	t.Helper()
-	tree, err := pack.Walk(pack.OSFileSystem{}, root)
+	tree, err := pack.Walk(pack.OSFileSystem{}, root, "public")
 	if err != nil {
 		t.Fatalf("walking the fixture to total it: %v", err)
 	}

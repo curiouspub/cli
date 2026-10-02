@@ -93,7 +93,7 @@ func idsOf(res check.Results) []string {
 
 func mustWalk(t *testing.T, fsys FS, root string) Tree {
 	t.Helper()
-	tree, err := Walk(fsys, root)
+	tree, err := Walk(fsys, root, "public")
 	if err != nil {
 		t.Fatalf("Walk(%s): %v", root, err)
 	}

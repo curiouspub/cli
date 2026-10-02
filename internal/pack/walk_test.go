@@ -586,7 +586,7 @@ func TestWalkDoesNotHangOnAPipeNamedLikeAnIgnoreFile(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		tree, err := Walk(OSFileSystem{}, root)
+		tree, err := Walk(OSFileSystem{}, root, "public")
 		done <- outcome{tree, err}
 	}()
 
@@ -633,7 +633,7 @@ func TestWalkReportsSizeAndMode(t *testing.T) {
 func TestWalkRefusesARootItCannotRead(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here")
 
-	_, err := Walk(OSFileSystem{}, missing)
+	_, err := Walk(OSFileSystem{}, missing, "public")
 	if err == nil {
 		t.Fatal("walking a directory that does not exist succeeded")
 	}
@@ -690,7 +690,7 @@ func TestWalkRefusesANestedDirectoryItCannotRead(t *testing.T) {
 		t.Skip("this process ignores directory permission bits (running as root?)")
 	}
 
-	_, err := Walk(OSFileSystem{}, root)
+	_, err := Walk(OSFileSystem{}, root, "public")
 	if err == nil {
 		t.Fatal("a directory inside the project could not be read and the walk reported " +
 			"success — the site would publish without whatever was in it, and nothing " +

@@ -394,7 +394,7 @@ func TestWalkManifestAnswersEveryIDItClaims(t *testing.T) {
 // the manifest exists for: silence from a check that looked and silence
 // from a check nobody wired up are the same silence without it.
 func TestCleanTreeStillProducesAFullManifest(t *testing.T) {
-	res := results(nil, nil)
+	res := results(nil, nil, "public")
 	if len(res.Findings) != 0 {
 		t.Errorf("findings = %v, want none", res.Findings)
 	}

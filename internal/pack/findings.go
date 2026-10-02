@@ -65,7 +65,7 @@ func walkManifest() check.Manifest {
 
 // results is the walk's whole answer in the shape every producer here
 // returns.
-func results(files []File, symlinks []string) check.Results {
+func results(files []File, symlinks []string, publicDir string) check.Results {
 	paths := make([]string, 0, len(files))
 	for _, f := range files {
 		paths = append(paths, f.Path)
@@ -74,7 +74,7 @@ func results(files []File, symlinks []string) check.Results {
 	var findings []check.Finding
 	findings = append(findings, symlinkFindings(symlinks)...)
 	findings = append(findings, collisionFindings(paths)...)
-	findings = append(findings, charsetFindings(paths)...)
+	findings = append(findings, charsetFindings(publishedVerbatim(paths, publicDir))...)
 
 	// Sorted here as well as in the combiner, so this producer's own
 	// output is in report order for anything that looks at it directly.
@@ -179,8 +179,38 @@ const (
 	pathTotalLimit   = 1024
 )
 
+// publishedVerbatim is the part of the walk whose names survive the
+// build: the files under the public folder, which Astro copies into the
+// site unchanged.
+//
+// EVERYTHING ELSE IS COMPILED, and that is why the name check stopped
+// reading it. The platform's character rule is a rule about the files it
+// stores and serves, which are the build's output. A page called
+// `[slug].astro`, or a folder called `[tag]`, is how Astro writes a
+// dynamic route; neither reaches the output under that name, and refusing
+// them refused every project with a blog. A name the build does produce
+// and the platform cannot store is still refused, by the platform, after
+// the build.
+//
+// REQUIRED MUTATION, run 2026-10-03: return paths unfiltered. The row
+// over the dynamic-route fixture reds, naming its four files.
+func publishedVerbatim(paths []string, publicDir string) []string {
+	if publicDir == "." {
+		return paths
+	}
+	prefix := publicDir + "/"
+	var out []string
+	for _, p := range paths {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // charsetFindings is the walk's HARD STOP: a name the platform will
-// refuse once the upload has already started.
+// refuse once the upload has already started. It is handed only the
+// names the build will publish as they are; see publishedVerbatim.
 //
 // It qualifies as a hard stop under the standing rule that those are for
 // facts a scanner can prove. This one is a character test over a name
