@@ -443,7 +443,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	// joins the report below.
 	started := now()
 	folders := preflight.ResolveFolders(preflight.OSFileSystem{}, root)
-	tree, err := pack.Walk(fsys, root, pack.NameScope{Public: folders.Public, Pages: folders.Pages})
+	tree, err := pack.Walk(fsys, root, pack.NameScope{Public: folders.Public, Source: folders.Source, Pages: folders.Pages})
 	if err != nil {
 		return nil, unreadableProjectFailure(err)
 	}

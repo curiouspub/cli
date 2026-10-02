@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -73,7 +74,7 @@ func Walk(fsys FS, root string, names NameScope) (Tree, error) {
 	return Tree{
 		Files:    w.files,
 		Symlinks: w.symlinks,
-		Results:  results(w.files, w.symlinks, names),
+		Results:  results(w.files, w.symlinks, w.targets, names),
 	}, nil
 }
 
@@ -82,6 +83,7 @@ type walker struct {
 	root     string
 	files    []File
 	symlinks []string
+	targets  map[string]string
 }
 
 func (w *walker) osPath(rel string) string {
@@ -148,6 +150,12 @@ func (w *walker) descend(rel string, inherited []*ignoreFile) error {
 			// packing it would put a file the author did not choose into
 			// their site.
 			w.symlinks = append(w.symlinks, child)
+			if target, ok := readLink(w.fsys, w.osPath(child)); ok {
+				if w.targets == nil {
+					w.targets = map[string]string{}
+				}
+				w.targets[child] = describeTarget(w.root, child, target)
+			}
 		case e.IsDir():
 			if err := w.descend(child, stack); err != nil {
 				return err
@@ -284,4 +292,29 @@ func forcedExcludeNames() []string {
 		out = append(out, rule.display())
 	}
 	return out
+}
+
+// describeTarget says where a link points in words that are safe to print.
+//
+// A TARGET INSIDE THE PROJECT IS NAMED, by its path inside the project:
+// that is the file its owner needs in order to replace the link. A target
+// OUTSIDE IT IS NOT, in any form. A link to a key under somebody's home
+// directory would otherwise put that path into scrollback, a screenshot,
+// and the bug report they paste into a public issue tracker, and the
+// reader learns nothing from it they could act on here.
+func describeTarget(root, link, target string) string {
+	const outside = "a location outside the project"
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return outside
+	}
+	resolved := filepath.FromSlash(target)
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(rootAbs, filepath.FromSlash(path.Dir(link)), resolved)
+	}
+	rel, err := filepath.Rel(rootAbs, filepath.Clean(resolved))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return outside
+	}
+	return filepath.ToSlash(rel)
 }

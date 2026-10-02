@@ -41,7 +41,10 @@ func TestWalkEmitsItsFindingsFromOneTree(t *testing.T) {
 		t.Skip("this account cannot create symbolic links, and the row needs a real one " +
 			"alongside the other findings to show they arrive together")
 	}
-	if err := os.Symlink(filepath.Join(root, "index.html"), filepath.Join(root, "content")); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "index.html"), filepath.Join(root, "src", "content")); err != nil {
 		t.Fatalf("creating the symlink fixture: %v", err)
 	}
 
@@ -77,12 +80,13 @@ func TestWalkEmitsEveryFindingFromOneListing(t *testing.T) {
 	fsys := fakeFS{dirs: map[string][]fakeEntry{
 		"": {
 			{name: "index.html", size: 6},
-			{name: "content", mode: fs.ModeSymlink},
 			{name: "README.md", size: 1},
 			{name: "readme.md", size: 1},
 			{name: "public", mode: fs.ModeDir},
+			{name: "src", mode: fs.ModeDir},
 		},
 		"public": {{name: "cafe\u0301.png", size: 1}},
+		"src":    {{name: "content", mode: fs.ModeSymlink}},
 	}}
 
 	res := mustWalk(t, fsys, "root").Results
