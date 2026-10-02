@@ -124,9 +124,14 @@ type Failure struct {
 	// takes an id — so the refusal ends the conversation exactly where
 	// the follow-up question begins.
 	//
-	// It is therefore carried, never rendered here, and the surface that
-	// wants it reads the field. That keeps the terminal's copy
-	// byte-for-byte what it was.
+	// It is carried as a field rather than written into the copy, and
+	// the terminal prints it on a line of its own after the copy, beside
+	// the failure id (see renderFailure). It was once never printed
+	// there, on the grounds that a person does not type a base36 id at
+	// anything. A person does quote one: a fault on the service's side
+	// asks them to report it with this id, and support can look a
+	// deploy up by it and cannot by a headline. Copy that asked for an
+	// id the screen never showed was the defect that changed this.
 	//
 	// EMPTY IS HONEST. A run refused before the server created a record
 	// has no id to carry, and every failure before that step leaves this
@@ -348,6 +353,18 @@ func (u *UI) renderFailure(f *Failure) string {
 	if f.ID != "" {
 		out += "\n" + failureIDPrefix + string(f.ID) + "\n"
 	}
+	// THE DEPLOY ID, under it, when the failure happened to a deploy the
+	// server had already recorded. Sanitised like everything else that
+	// arrives from the far end.
+	//
+	// REQUIRED MUTATION, run 2026-10-03: drop this line. The deploy-id
+	// rows red.
+	if f.DeployID != "" {
+		if f.ID == "" {
+			out += "\n"
+		}
+		out += deployIDPrefix + Sanitize(f.DeployID) + "\n"
+	}
 	return out
 }
 
@@ -355,6 +372,10 @@ func (u *UI) renderFailure(f *Failure) string {
 // because a reader who learns to search for it in a terminal should find
 // the same words in an agent's transcript.
 const failureIDPrefix = "Failure ID: "
+
+// deployIDPrefix labels the deploy id line, which a fault on the
+// service's side asks the reader to quote.
+const deployIDPrefix = "Deploy ID: "
 
 // Escaped is the failure's parts, in the order they are shown, with
 // every one of them through the escape table.

@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -254,6 +255,13 @@ func TestTheOriginSurvivesTheStream(t *testing.T) {
 			if failure.DeployID == "" {
 				t.Error("the failure carries no deploy id — it is the one thing a person " +
 					"can quote afterwards, and a service fault is exactly when they need to")
+			}
+			// AND THE TERMINAL SHOWS IT, through the renderer the
+			// program uses, so the copy asking for it can be followed.
+			var screen bytes.Buffer
+			ui.New(nil, &screen, &screen).Fail(failure)
+			if want := "Deploy ID: " + ui.Sanitize(failure.DeployID); !strings.Contains(screen.String(), want) {
+				t.Errorf("the terminal never shows the deploy id (%q):\n%s", want, screen.String())
 			}
 		})
 	}

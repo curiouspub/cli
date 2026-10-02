@@ -71,6 +71,40 @@ func TestAFailureWithNoIdRendersNoIdLine(t *testing.T) {
 	}
 }
 
+// TestTheDeployIdReachesTheTerminal. A failure that happened to a
+// recorded deploy prints the deploy's id under the failure id, after the
+// copy; a failure with none prints no label. The copy that asks the
+// reader to quote it is checked to point the right way.
+//
+// REQUIRED MUTATION, run 2026-10-03: drop the deploy id line from
+// renderFailure. The first half reds.
+func TestTheDeployIdReachesTheTerminal(t *testing.T) {
+	var out bytes.Buffer
+	u := New(nil, &out, &out)
+
+	f := NewFailure(IDBuildServiceFault, StageBuilding,
+		"curious could not run the build.",
+		"This one is ours.", NextWait,
+		"If it keeps happening, report it and quote the deploy id below.")
+	f.DeployID = "k3j9x2\x1b[31m"
+
+	rendered := u.renderFailure(f)
+	if !strings.HasSuffix(rendered, "Failure ID: build-service-fault\nDeploy ID: "+Sanitize(f.DeployID)+"\n") {
+		t.Errorf("the deploy id is not the last line, under the failure id:\n%q", rendered)
+	}
+	if strings.Contains(rendered, "\x1b[31m") {
+		t.Errorf("the deploy id reached the terminal unsanitised:\n%q", rendered)
+	}
+	if i, j := strings.Index(rendered, "quote the deploy id below"), strings.Index(rendered, "Deploy ID:"); i < 0 || i > j {
+		t.Errorf("the copy asking for the id is not above the id it asks for:\n%s", rendered)
+	}
+
+	f.DeployID = ""
+	if got := u.renderFailure(f); strings.Contains(got, "Deploy ID:") {
+		t.Errorf("a failure with no deploy printed a deploy id label anyway:\n%s", got)
+	}
+}
+
 // TestTheGeneralValidatorAcceptsAllFourActions, and the standing
 // failures keep a stricter rule.
 //
