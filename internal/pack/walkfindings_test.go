@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -130,6 +131,165 @@ func TestWalkStopsOnAnAssetNameTheServerWouldRefuse(t *testing.T) {
 	}
 	if strings.Contains(headline(stops[0])+stops[0].Why+stops[0].Next, "a-b_c.1~2.png") {
 		t.Errorf("the finding names the legal sibling")
+	}
+}
+
+// TestWalkLetsAstrosDynamicRoutesThrough is the fixture that found the
+// defect: a public Astro starter with a blog, refused before it was
+// built because four of its pages are named the way Astro names a
+// dynamic route. One of them sits in a bracketed FOLDER, which is the
+// case a fix written against file names alone would miss.
+//
+// The legal sibling under public/ and the space beside it are the other
+// half: the check still runs where the names are published as they are.
+//
+// REQUIRED MUTATION, run 2026-10-03: publishedVerbatim returns every
+// path. Reds here, naming the four route files.
+func TestWalkLetsAstrosDynamicRoutesThrough(t *testing.T) {
+	routes := []string{
+		"src/pages/[...slug].astro",
+		"src/pages/blog/[...page].astro",
+		"src/pages/blog/[slug].astro",
+		"src/pages/tags/[tag]/[...page].astro",
+	}
+	entries := []entry{
+		{path: "package.json", body: "{}"},
+		{path: "public/favicon.svg", body: "<svg/>"},
+		{path: "public/my photo.png", body: "img"},
+	}
+	for _, r := range routes {
+		entries = append(entries, entry{path: r, body: "---\n---\n"})
+	}
+
+	res := mustWalk(t, OSFileSystem{}, writeTree(t, entries)).Results
+	stops := findingsFor(res, check.IDPathCharset)
+	var named []string
+	for _, f := range stops {
+		named = append(named, f.Paths...)
+	}
+	if !reflect.DeepEqual(named, []string{"public/my photo.png"}) {
+		t.Errorf("path-charset named %v, want only the public/ asset with a space — "+
+			"a route's source name never reaches the built site", named)
+	}
+}
+
+// TestAnAccentedNameStopsOnlyWhereItIsPublished is the non-ASCII half,
+// from a synthetic listing so no filesystem's opinion of the name
+// matters: an accented letter under public/ is still a hard stop, and
+// the same letter in a component's name, which the build compiles away,
+// is not this check's business.
+func TestAnAccentedNameStopsOnlyWhereItIsPublished(t *testing.T) {
+	fsys := fakeFS{dirs: map[string][]fakeEntry{
+		"":               {{name: "public", mode: fs.ModeDir}, {name: "src", mode: fs.ModeDir}},
+		"public":         {{name: "caf\u00e9.png", size: 1}},
+		"src":            {{name: "components", mode: fs.ModeDir}},
+		"src/components": {{name: "caf\u00e9.astro", size: 1}},
+	}}
+
+	stops := findingsFor(mustWalk(t, fsys, "root").Results, check.IDPathCharset)
+	if len(stops) != 1 || stops[0].Severity != check.SeverityHardStop ||
+		!reflect.DeepEqual(stops[0].Paths, []string{"public/caf\u00e9.png"}) {
+		t.Errorf("path-charset = %+v, want one hard stop naming the public/ asset", stops)
+	}
+}
+
+// TestAPageKeepsTheCharactersOutsideItsBrackets is the pages half: a
+// page's route keeps every character of its name except the bracketed
+// parameters, so those characters are checked, and the bracketed
+// stretches are not.
+//
+// From a synthetic listing, so the accented name is the same bytes on
+// every platform.
+func TestAPageKeepsTheCharactersOutsideItsBrackets(t *testing.T) {
+	fsys := fakeFS{dirs: map[string][]fakeEntry{
+		"":    {{name: "src", mode: fs.ModeDir}, {name: "source", mode: fs.ModeDir}},
+		"src": {{name: "pages", mode: fs.ModeDir}},
+		"src/pages": {
+			{name: "caf\u00e9.astro", size: 1},
+			{name: "about me.astro", size: 1},
+			{name: "[...slug].astro", size: 1},
+			{name: "[lang]-caf\u00e9.astro", size: 1},
+			{name: "_drafts", mode: fs.ModeDir},
+			{name: "tags", mode: fs.ModeDir},
+		},
+		"src/pages/_drafts":    {{name: "caf\u00e9.astro", size: 1}},
+		"src/pages/tags":       {{name: "[tag]", mode: fs.ModeDir}},
+		"src/pages/tags/[tag]": {{name: "[...page].astro", size: 1}},
+		"source":               {{name: "pages", mode: fs.ModeDir}},
+		"source/pages":         {{name: "caf\u00e9.astro", size: 1}},
+	}}
+
+	for _, tc := range []struct {
+		pages string
+		want  []string
+	}{
+		{"src/pages", []string{
+			"src/pages/[lang]-caf\u00e9.astro",
+			"src/pages/about me.astro",
+			"src/pages/caf\u00e9.astro",
+		}},
+		// A moved source folder is followed, and the old one is then
+		// not a pages folder at all.
+		{"source/pages", []string{"source/pages/caf\u00e9.astro"}},
+	} {
+		t.Run(tc.pages, func(t *testing.T) {
+			tree, err := Walk(fsys, "root", NameScope{Public: "public", Pages: tc.pages})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var named []string
+			for _, f := range findingsFor(tree.Results, check.IDPathCharset) {
+				if f.Severity != check.SeverityHardStop {
+					t.Errorf("%s: Severity = %q, want a hard stop", f.Paths, f.Severity)
+				}
+				if !strings.Contains(f.Message, f.Paths[0]) {
+					t.Errorf("the message %q does not name the file", f.Message)
+				}
+				named = append(named, f.Paths...)
+			}
+			sort.Strings(named)
+			if !reflect.DeepEqual(named, tc.want) {
+				t.Errorf("path-charset named %v, want %v — brackets stripped, `_` skipped", named, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheNameCheckReadsTheConfiguredPublicFolder is the same rule with
+// the public folder moved, which Astro allows: the check follows it, in
+// both directions.
+func TestTheNameCheckReadsTheConfiguredPublicFolder(t *testing.T) {
+	root := writeTree(t, []entry{
+		{path: "static/my photo.png", body: "img"},
+		{path: "public/my photo.png", body: "img"},
+		{path: "src/my notes.md", body: "text"},
+	})
+
+	for _, tc := range []struct {
+		publicDir string
+		want      []string
+	}{
+		{"static", []string{"static/my photo.png"}},
+		{"public", []string{"public/my photo.png"}},
+		// The project root itself: everything is copied as it is.
+		{".", []string{"public/my photo.png", "src/my notes.md", "static/my photo.png"}},
+	} {
+		t.Run(tc.publicDir, func(t *testing.T) {
+			tree, err := Walk(OSFileSystem{}, root, NameScope{Public: tc.publicDir, Pages: "src/pages"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var named []string
+			for _, f := range findingsFor(tree.Results, check.IDPathCharset) {
+				if f.Severity != check.SeverityHardStop {
+					t.Errorf("%s: Severity = %q, want a hard stop", f.Paths, f.Severity)
+				}
+				named = append(named, f.Paths...)
+			}
+			if !reflect.DeepEqual(named, tc.want) {
+				t.Errorf("path-charset named %v, want %v", named, tc.want)
+			}
+		})
 	}
 }
 

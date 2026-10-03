@@ -1920,6 +1920,118 @@ func TestAWarningAnsweredYesReachesThePackAndTheUpload(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
+// The public folder
+// -------------------------------------------------------------------
+
+// TestTheDeployChecksNamesWhereTheSiteKeepsThem is the name check
+// reached through the whole sequence, where the config is read: the
+// file-name rule follows publicDir, and a dynamic route's source name is
+// not a published name.
+//
+// The routes are the shapes of the public starter that found the
+// defect, a bracketed folder among them.
+//
+// REQUIRED MUTATIONS, run 2026-10-03: walk with the default folder in
+// place of the resolved one, and the configured-folder row reds, the
+// refusal missing and a request sent; leave the resolver's results out
+// of the report, and the fallback row reds, never asked and exiting 1;
+// walk with the default pages folder, and the moved-source row reds.
+func TestTheDeployChecksNamesWhereTheSiteKeepsThem(t *testing.T) {
+	t.Run("a dynamic route deploys", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(map[string][]byte{
+			"src/pages/[...slug].astro":            []byte("---\n---\n"),
+			"src/pages/blog/[slug].astro":          []byte("---\n---\n"),
+			"src/pages/tags/[tag]/[...page].astro": []byte("---\n---\n"),
+		}))).scriptedLogin()
+		run.prompt.confirms = []answer{no()}
+
+		handoff, err := run.run()
+		if err != nil {
+			t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+		}
+		defer handoff.Release()
+		if got := len(run.store.received()); got != 1 {
+			t.Errorf("the store received %d upload(s), want one", got)
+		}
+	})
+
+	t.Run("the configured public folder is the one checked", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(map[string][]byte{
+			"astro.config.mjs":    []byte("export default { publicDir: './static' };\n"),
+			"static/my photo.png": []byte("img"),
+		})))
+
+		_, err := run.run()
+		if err == nil {
+			t.Fatal("a space in a name under the configured public folder deployed")
+		}
+		if text := rendered(err); !strings.Contains(text, "static/my photo.png") {
+			t.Errorf("the refusal does not name the file:\n%s", text)
+		}
+		if sent := run.script.sent(); sent != 0 {
+			t.Errorf("the refused project sent %d requests, want none", sent)
+		}
+	})
+
+	t.Run("a literal page name is refused, named", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(map[string][]byte{
+			"src/pages/about me.astro": []byte("<h1>about</h1>"),
+		})))
+
+		_, err := run.run()
+		if err == nil {
+			t.Fatal("a page whose route carries a space deployed")
+		}
+		if text := rendered(err); !strings.Contains(text, "src/pages/about me.astro") {
+			t.Errorf("the refusal does not name the page:\n%s", text)
+		}
+		if sent := run.script.sent(); sent != 0 {
+			t.Errorf("the refused project sent %d requests, want none", sent)
+		}
+	})
+
+	t.Run("a moved source folder's pages are the ones checked", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, map[string][]byte{
+			"package.json":                []byte(`{"name":"row","private":true,"dependencies":{"astro":"^5.0.0"}}`),
+			"package-lock.json":           []byte(`{"lockfileVersion":3}`),
+			"astro.config.mjs":            []byte("export default { srcDir: './source' };\n"),
+			"source/pages/index.astro":    []byte("<h1>hello</h1>"),
+			"source/pages/about me.astro": []byte("<h1>about</h1>"),
+		}))
+
+		_, err := run.run()
+		if err == nil {
+			t.Fatal("a page under the configured source folder whose route carries a space deployed")
+		}
+		if text := rendered(err); !strings.Contains(text, "source/pages/about me.astro") {
+			t.Errorf("the refusal does not name the page:\n%s", text)
+		}
+	})
+
+	// A config the read cannot settle checks public/ and says so, and
+	// the saying is a warning: asked about, never a refusal by itself.
+	t.Run("an unreadable publicDir is a warning naming the fallback", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(map[string][]byte{
+			"astro.config.mjs": []byte("const dir = './static';\nexport default { publicDir: dir };\n"),
+		})))
+		run.prompt.confirms = []answer{no()}
+
+		_, err := run.run()
+		events := run.journal.all()
+		said := strings.Join(events, "\n")
+		if !strings.Contains(said, "checked under public/ instead") {
+			t.Errorf("the run never said where it checked:\n  %s", strings.Join(events, "\n  "))
+		}
+		if indexOfEvent(events, "asked: Continue anyway?") < 0 {
+			t.Errorf("the fallback did not reach the warning prompt:\n  %s", strings.Join(events, "\n  "))
+		}
+		if _, code := renderedBytes(t, err); code != 0 {
+			t.Errorf("exit code = %d, want 0 — the person declined; nothing was refused", code)
+		}
+	})
+}
+
+// -------------------------------------------------------------------
 // What each ending costs
 // -------------------------------------------------------------------
 
@@ -2143,7 +2255,7 @@ func TestTheHandoffIsTheFormedRequest(t *testing.T) {
 		t.Errorf("SHA256 = %q, want a hex digest", handoff.SHA256)
 	}
 
-	tree, err := pack.Walk(pack.OSFileSystem{}, root)
+	tree, err := pack.Walk(pack.OSFileSystem{}, root, pack.DefaultNameScope)
 	if err != nil {
 		t.Fatalf("walking the fixture to count it: %v", err)
 	}

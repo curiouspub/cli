@@ -55,7 +55,10 @@ type Tree struct {
 // pointing at one of its own ancestors harmless, and nothing here reads
 // a file's contents except an ignore file — whose rules are bytes and
 // cannot be had any other way.
-func Walk(fsys FS, root string) (Tree, error) {
+//
+// names says where the file-name check reads, as the caller resolved it
+// from the project's config; see NameScope.
+func Walk(fsys FS, root string, names NameScope) (Tree, error) {
 	w := &walker{fsys: fsys, root: root}
 	if err := w.descend("", nil); err != nil {
 		return Tree{}, err
@@ -70,7 +73,7 @@ func Walk(fsys FS, root string) (Tree, error) {
 	return Tree{
 		Files:    w.files,
 		Symlinks: w.symlinks,
-		Results:  results(w.files, w.symlinks),
+		Results:  results(w.files, w.symlinks, names),
 	}, nil
 }
 

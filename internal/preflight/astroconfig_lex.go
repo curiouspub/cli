@@ -1,6 +1,7 @@
 package preflight
 
 import (
+	"bytes"
 	"net/url"
 	"strings"
 	"unicode/utf16"
@@ -992,10 +993,14 @@ func hasTopLevelSpread(toks []token, open, close int) bool {
 func parseAstroConfig(content []byte) astroConfig {
 	toks, unresolved, reason := tokenize(content)
 	if unresolved {
-		return astroConfig{unresolved: true, unresolvedReason: reason}
+		// The tokens cannot be trusted, so whether the file names
+		// publicDir is answered from its bytes — a mention inside a
+		// comment counts, which errs towards saying so.
+		return astroConfig{unresolved: true, unresolvedReason: reason,
+			publicDirMentioned: bytes.Contains(content, []byte("publicDir"))}
 	}
 
-	var cfg astroConfig
+	cfg := astroConfig{publicDirMentioned: mentions(toks, "publicDir")}
 
 	objOpen, objClose, ok, unknownWrapper := findExportedConfigObject(toks)
 	if unknownWrapper != "" {
@@ -1008,6 +1013,7 @@ func parseAstroConfig(content []byte) astroConfig {
 			unresolved: true,
 			unresolvedReason: "an export wrapped in `" + unknownWrapper +
 				"(...)` (only Astro's own defineConfig is known to hand back the object it was given)",
+			publicDirMentioned: cfg.publicDirMentioned,
 		}
 	}
 	if !ok {
@@ -1030,33 +1036,19 @@ func parseAstroConfig(content []byte) astroConfig {
 		// the position of the spread relative to a key is deliberately
 		// not considered — see hasTopLevelSpread.
 		return astroConfig{
-			unresolved:       true,
-			unresolvedReason: "a spread (`...`) in the exported config object (its keys come from somewhere this check can't see)",
+			unresolved:         true,
+			unresolvedReason:   "a spread (`...`) in the exported config object (its keys come from somewhere this check can't see)",
+			publicDirMentioned: cfg.publicDirMentioned,
 		}
 	}
 
-	srcDirKeys := findTopLevelKeyOccurrences(toks, objOpen, objClose, "srcDir")
-	switch len(srcDirKeys) {
-	case 0:
-		// No live top-level key: everything stays at its zero value —
-		// srcDirFound stays false, which the caller reads as "unresolved,
-		// not absent" rather than "the default applies".
-	case 1:
-		cfg.srcDirFound = true
-		p := srcDirKeys[0] + 2
-		if v, isValue := readStringLiteralValue(toks, p); isValue {
-			cfg.srcDirResolved = true
-			cfg.srcDirValue = v
-		} else if raw, end, matched := matchFileURLIdiom(toks, p); matched &&
-			end < len(toks) && isValueTerminator(toks[end]) {
-			if decoded, ok := decodeURLPathname(raw); ok {
-				cfg.srcDirResolved = true
-				cfg.srcDirValue = decoded
-			}
-		}
-	default:
-		cfg.srcDirAmbiguous = true
-	}
+	// No live top-level key leaves everything at its zero value —
+	// srcDirFound stays false, which the caller reads as "unresolved,
+	// not absent" rather than "the default applies".
+	cfg.srcDirFound, cfg.srcDirAmbiguous, cfg.srcDirResolved, cfg.srcDirValue =
+		readPathKey(toks, objOpen, objClose, "srcDir")
+	cfg.publicDirFound, cfg.publicDirAmbiguous, cfg.publicDirResolved, cfg.publicDirValue =
+		readPathKey(toks, objOpen, objClose, "publicDir")
 
 	value, found, resolved, ambiguous := findBuildFormatValue(toks, objOpen, objClose)
 	switch {
@@ -1069,6 +1061,45 @@ func parseAstroConfig(content []byte) astroConfig {
 	}
 
 	return cfg
+}
+
+// readPathKey reads a top-level key whose value is a directory: a plain
+// string literal, or Astro's own file-URL idiom. It is srcDir's reading,
+// lifted out unchanged when publicDir became the second key read this
+// way — two copies of one reading are how the two keys would come to
+// disagree about what counts as a literal.
+func readPathKey(toks []token, objOpen, objClose int, name string) (found, ambiguous, resolved bool, value string) {
+	keys := findTopLevelKeyOccurrences(toks, objOpen, objClose, name)
+	switch len(keys) {
+	case 0:
+		return false, false, false, ""
+	case 1:
+		p := keys[0] + 2
+		if v, isValue := readStringLiteralValue(toks, p); isValue {
+			return true, false, true, v
+		}
+		if raw, end, matched := matchFileURLIdiom(toks, p); matched &&
+			end < len(toks) && isValueTerminator(toks[end]) {
+			if decoded, ok := decodeURLPathname(raw); ok {
+				return true, false, true, decoded
+			}
+		}
+		return true, false, false, ""
+	default:
+		return true, true, false, ""
+	}
+}
+
+// mentions reports whether any token anywhere in the file spells name
+// as a key would: a bare identifier or a plain string equal to it.
+// Comments are not tokens, so a mention in one does not count here.
+func mentions(toks []token, name string) bool {
+	for _, tk := range toks {
+		if isKeyToken(tk, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // findBuildFormatValue looks for a format key nested exactly one level
