@@ -312,6 +312,10 @@ time, the message itself — quoted straight from this repository's own
 failure catalog (`catalog.json`) so it cannot silently drift from what
 the program actually prints.
 
+A failure that happened to a deploy the server had already recorded also
+ends with `Deploy ID:` and the deploy's id. Quote it when you report a
+problem; it is how a particular deploy is found.
+
 <!-- failure-headlines -->
 
 ### answer-not-understood
