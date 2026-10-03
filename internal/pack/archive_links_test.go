@@ -119,7 +119,9 @@ func TestNoSkippedLinkReachesTheArchive(t *testing.T) {
 // back the first time somebody makes the message more helpful.
 //
 // REQUIRED MUTATION, RUN: have the walk record each link as
-// "path -> target" and the finding will render both.
+// "path -> target" and the finding will render both. Re-run 2026-10-03,
+// when a target INSIDE the project started being named: have
+// describeTarget return the raw target, and this row reds.
 func TestTheSkippedLinkWarningNamesNoTarget(t *testing.T) {
 	if !symlinkSupported(t) {
 		t.Skip("this machine will not let the test create a symbolic link, and the row " +
@@ -137,20 +139,29 @@ func TestTheSkippedLinkWarningNamesNoTarget(t *testing.T) {
 		t.Fatalf("writing the stand-in key: %v", err)
 	}
 
-	root := writeTree(t, []entry{{path: "index.html", body: "<html>"}})
-	mustSymlink(t, "/etc/passwd", filepath.Join(root, "system-link"))
-	mustSymlink(t, key, filepath.Join(root, "home-link"))
+	// Under the public folder, so each is a WARNING, the finding a
+	// surface prints and the one that now names an inside target.
+	root := writeTree(t, []entry{{path: "index.html", body: "<html>"}, {path: "public/real.png", body: "img"}})
+	mustSymlink(t, "/etc/passwd", filepath.Join(root, "public", "system-link"))
+	mustSymlink(t, key, filepath.Join(root, "public", "home-link"))
 
 	tree := mustWalk(t, OSFileSystem{}, root)
 	found := findingsFor(tree.Results, check.IDSymlinks)
-	if len(found) != 1 {
-		t.Fatalf("symlink findings = %v, want the one this row is about", found)
+	if len(found) != 2 {
+		t.Fatalf("symlink findings = %v, want the two this row is about", found)
 	}
 
 	// Everything a surface has to render, in one string: the headline,
 	// the three optional parts, and the structured list an agent reads.
-	f := found[0]
-	rendered := strings.Join(append([]string{f.Message, f.What, f.Why, f.Next}, f.Paths...), "\n")
+	var parts []string
+	for _, f := range found {
+		if f.Severity != check.SeverityWarning {
+			t.Errorf("%v: Severity = %q, want a warning", f.Paths, f.Severity)
+		}
+		parts = append(parts, f.Message, f.What, f.Why, f.Next)
+		parts = append(parts, f.Paths...)
+	}
+	rendered := strings.Join(parts, "\n")
 
 	// The positive control: the links ARE named, so the absences below
 	// are not the absence of a warning.

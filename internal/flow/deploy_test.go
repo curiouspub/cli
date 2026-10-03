@@ -114,6 +114,10 @@ type countingFS struct {
 	packNoted  bool
 }
 
+// Readlink is the real filesystem's, as the walk's production filesystem
+// answers it, so a warning about a link names its target here too.
+func (c *countingFS) Readlink(name string) (string, error) { return os.Readlink(name) }
+
 func (c *countingFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if name == c.root {
 		c.traversals++
@@ -132,7 +136,8 @@ func (c *countingFS) Open(name string) (io.ReadCloser, error) {
 }
 
 // linkAddingFS is countingFS with one synthetic symbolic link in the
-// root listing.
+// listing of the project's src/ folder, where a link is a warning: the
+// build reads it. (A link at the root is a note nobody is asked about.)
 //
 // IT IS SYNTHETIC ON PURPOSE. A real link needs a privilege one of the
 // three platforms this ships to does not always grant, and the property
@@ -149,7 +154,7 @@ type linkAddingFS struct {
 
 func (l *linkAddingFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	entries, err := l.countingFS.ReadDir(name)
-	if err != nil || name != l.root {
+	if err != nil || name != filepath.Join(l.root, "src") {
 		return entries, err
 	}
 	return append(entries, symlinkEntry{name: l.name}), nil
@@ -2029,6 +2034,71 @@ func TestTheDeployChecksNamesWhereTheSiteKeepsThem(t *testing.T) {
 			t.Errorf("exit code = %d, want 0 — the person declined; nothing was refused", code)
 		}
 	})
+}
+
+// TestAFreshStarterDeploysWithNoQuestionAsked is the shape every official
+// Astro starter now ships: an agent-instructions file at the root that is
+// a symbolic link to another. No build reads it, so it is recorded and
+// not asked about, and a run with no terminal to ask in carries on.
+//
+// REQUIRED MUTATION, run 2026-10-03: warn on every link. Reds here: the
+// run stops for want of a terminal.
+func TestAFreshStarterDeploysWithNoQuestionAsked(t *testing.T) {
+	root := writeProject(t, astroProject(map[string][]byte{
+		"AGENTS.md": []byte("# Agents\n"),
+	}))
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Skip("this account cannot create symbolic links, and the row is about one: " + err.Error())
+	}
+	run := newDeployRun(t, root)
+	run.storedToken("stored-token", run.srv.URL)
+	run.prompt.notInteractive = true
+
+	handoff, err := run.run()
+	if err != nil {
+		t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+	}
+	defer handoff.Release()
+
+	for _, e := range run.journal.all() {
+		if strings.HasPrefix(e, "asked: ") {
+			t.Errorf("the run asked %q about a link no build reads", e)
+		}
+	}
+	if got := len(run.store.received()); got != 1 {
+		t.Errorf("the store received %d upload(s), want one", got)
+	}
+}
+
+// TestALinkInAMovedSourceFolderIsAskedAbout is the other half: a link
+// the build does read is still a warning, and the source folder is the
+// one the config names.
+//
+// REQUIRED MUTATION, run 2026-10-03: walk with the default source folder
+// in place of the resolved one. Reds here: nothing is asked.
+func TestALinkInAMovedSourceFolderIsAskedAbout(t *testing.T) {
+	root := writeProject(t, map[string][]byte{
+		"package.json":             []byte(`{"name":"row","private":true,"dependencies":{"astro":"^5.0.0"}}`),
+		"package-lock.json":        []byte(`{"lockfileVersion":3}`),
+		"astro.config.mjs":         []byte("export default { srcDir: './source' };\n"),
+		"source/pages/index.astro": []byte("<h1>hello</h1>"),
+		"shared/data.json":         []byte("{}"),
+	})
+	if err := os.Symlink(filepath.Join("..", "shared"), filepath.Join(root, "source", "data")); err != nil {
+		t.Skip("this account cannot create symbolic links, and the row is about one: " + err.Error())
+	}
+	run := newDeployRun(t, root)
+	run.prompt.confirms = []answer{no()}
+
+	_, _ = run.run()
+	events := run.journal.all()
+	if indexOfEvent(events, "asked: Continue anyway?") < 0 {
+		t.Errorf("a link in the configured source folder was not asked about:\n  %s",
+			strings.Join(events, "\n  "))
+	}
+	if said := strings.Join(events, "\n"); !strings.Contains(said, "source/data is a symbolic link to shared") {
+		t.Errorf("the warning does not name the link and its target:\n  %s", strings.Join(events, "\n  "))
+	}
 }
 
 // -------------------------------------------------------------------

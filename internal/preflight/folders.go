@@ -29,6 +29,9 @@ type Folders struct {
 	// slash-separated. "." means the project root itself.
 	Public string
 
+	// Source is the folder the build compiles: srcDir.
+	Source string
+
 	// Pages is the folder whose files become routes: `pages` inside the
 	// source folder.
 	Pages string
@@ -40,9 +43,12 @@ type Folders struct {
 	Results check.Results
 }
 
-// DefaultPagesDir is where Astro looks for pages when the config does not
-// move the source folder.
-const DefaultPagesDir = "src/pages"
+// DefaultSourceDir and DefaultPagesDir are where Astro looks for the
+// project's source and its pages when the config does not move them.
+const (
+	DefaultSourceDir = "src"
+	DefaultPagesDir  = "src/pages"
+)
 
 // ResolveFolders reads publicDir and srcDir out of the project's
 // astro.config, with public/ and src/pages as the defaults.
@@ -69,66 +75,73 @@ func ResolveFolders(fsys FS, root string) Folders {
 	configPath, _, unchecked, found := findConfig(fsys, root)
 	if !found {
 		if len(unchecked) > 0 {
-			return fallBack(fmt.Sprintf("%s couldn't be checked", joinWithAnd(unchecked)), DefaultPagesDir)
+			return fallBack(fmt.Sprintf("%s couldn't be checked", joinWithAnd(unchecked)), DefaultSourceDir)
 		}
-		return Folders{Public: DefaultPublicDir, Pages: DefaultPagesDir}
+		return Folders{Public: DefaultPublicDir, Source: DefaultSourceDir, Pages: DefaultPagesDir}
 	}
 	configName := filepath.Base(configPath)
 
 	content, err := readConfigCapped(fsys, configPath)
 	if err != nil {
-		return fallBack(fmt.Sprintf("%s couldn't be read (%v)", configName, err), DefaultPagesDir)
+		return fallBack(fmt.Sprintf("%s couldn't be read (%v)", configName, err), DefaultSourceDir)
 	}
 
 	parsed := parseAstroConfig(content)
-	pages := pagesDirOf(parsed)
+	source := sourceDirOf(parsed)
 	switch {
 	case parsed.unresolved:
 		if !parsed.publicDirMentioned {
-			return Folders{Public: DefaultPublicDir, Pages: pages}
+			return withSource(DefaultPublicDir, source)
 		}
 		return fallBack(fmt.Sprintf("%s names publicDir, but it also uses %s, so its value "+
-			"couldn't be read", configName, parsed.unresolvedReason), pages)
+			"couldn't be read", configName, parsed.unresolvedReason), source)
 	case !parsed.publicDirFound:
 		if !parsed.publicDirMentioned {
-			return Folders{Public: DefaultPublicDir, Pages: pages}
+			return withSource(DefaultPublicDir, source)
 		}
 		return fallBack(fmt.Sprintf("%s names publicDir in a way this check doesn't read",
-			configName), pages)
+			configName), source)
 	case parsed.publicDirAmbiguous:
-		return fallBack(fmt.Sprintf("%s sets publicDir more than once", configName), pages)
+		return fallBack(fmt.Sprintf("%s sets publicDir more than once", configName), source)
 	case !parsed.publicDirResolved:
 		return fallBack(fmt.Sprintf("%s sets publicDir to a value worked out when the "+
-			"config runs, which this check doesn't run", configName), pages)
+			"config runs, which this check doesn't run", configName), source)
 	}
 
 	resolved, rejectReason := resolveSrcDirPath(parsed.publicDirValue)
 	if rejectReason != "" {
 		return fallBack(fmt.Sprintf("%s sets publicDir to %q, which %s", configName,
-			parsed.publicDirValue, rejectReason), pages)
+			parsed.publicDirValue, rejectReason), source)
 	}
-	return Folders{Public: resolved, Pages: pages}
+	return withSource(resolved, source)
 }
 
-// pagesDirOf is the pages folder a parsed config implies: `pages` inside
-// a srcDir the read settled, or the default.
-func pagesDirOf(parsed astroConfig) string {
+// sourceDirOf is the source folder a parsed config implies: a srcDir the
+// read settled, or the default.
+func sourceDirOf(parsed astroConfig) string {
 	if parsed.unresolved || !parsed.srcDirFound || parsed.srcDirAmbiguous || !parsed.srcDirResolved {
-		return DefaultPagesDir
+		return DefaultSourceDir
 	}
 	resolved, rejectReason := resolveSrcDirPath(parsed.srcDirValue)
 	if rejectReason != "" {
-		return DefaultPagesDir
+		return DefaultSourceDir
 	}
-	return path.Join(resolved, "pages")
+	return resolved
+}
+
+// withSource fills the two folders the source folder decides.
+func withSource(public, source string) Folders {
+	return Folders{Public: public, Source: source, Pages: path.Join(source, "pages")}
 }
 
 // fallBack is the one place the advisory is written, so every reason
 // above ends in the same two sentences.
-func fallBack(reason, pages string) Folders {
+func fallBack(reason, source string) Folders {
+	f := withSource(DefaultPublicDir, source)
 	return Folders{
-		Public: DefaultPublicDir,
-		Pages:  pages,
+		Public: f.Public,
+		Source: f.Source,
+		Pages:  f.Pages,
 		Results: check.Results{Findings: []check.Finding{{
 			CheckID:  check.IDPathCharset,
 			Severity: check.SeverityWarning,

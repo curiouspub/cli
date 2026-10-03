@@ -47,3 +47,32 @@ func (OSFileSystem) ReadDir(name string) ([]fs.DirEntry, error) { return os.Read
 
 // Open implements FS.
 func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(name) }
+
+// linkReader is the one thing a warning about a link wants that the walk
+// does not otherwise need: where the link points. It is a separate,
+// optional interface so a filesystem that cannot answer — every test
+// double this package already has — still walks, and the warning then
+// names the link without its target.
+type linkReader interface {
+	Readlink(name string) (string, error)
+}
+
+// The real filesystem must answer it, or no warning in production names
+// a target and only the test doubles would notice.
+var _ linkReader = OSFileSystem{}
+
+// Readlink reads where a link points, without following it.
+func (OSFileSystem) Readlink(name string) (string, error) { return os.Readlink(name) }
+
+// readLink asks fsys where name points, when fsys can say.
+func readLink(fsys FS, name string) (string, bool) {
+	lr, ok := fsys.(linkReader)
+	if !ok {
+		return "", false
+	}
+	target, err := lr.Readlink(name)
+	if err != nil {
+		return "", false
+	}
+	return target, true
+}

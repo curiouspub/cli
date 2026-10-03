@@ -82,6 +82,8 @@ windows github.com/curiouspub/cli/internal/pack TestWalkListsARealSymlink
 windows github.com/curiouspub/cli/internal/pack TestWalkEmitsItsFindingsFromOneTree
 windows github.com/curiouspub/cli/internal/pack TestNoSkippedLinkReachesTheArchive
 windows github.com/curiouspub/cli/internal/pack TestTheSkippedLinkWarningNamesNoTarget
+windows github.com/curiouspub/cli/internal/flow TestAFreshStarterDeploysWithNoQuestionAsked
+windows github.com/curiouspub/cli/internal/flow TestALinkInAMovedSourceFolderIsAskedAbout
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_FIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkToFIFODoesNotHang
 windows github.com/curiouspub/cli/internal/preflight TestCheckAstroConfig_SymlinkedConfigResolves

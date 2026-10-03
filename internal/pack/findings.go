@@ -66,14 +66,14 @@ func walkManifest() check.Manifest {
 
 // results is the walk's whole answer in the shape every producer here
 // returns.
-func results(files []File, symlinks []string, names NameScope) check.Results {
+func results(files []File, symlinks []string, targets map[string]string, names NameScope) check.Results {
 	paths := make([]string, 0, len(files))
 	for _, f := range files {
 		paths = append(paths, f.Path)
 	}
 
 	var findings []check.Finding
-	findings = append(findings, symlinkFindings(symlinks)...)
+	findings = append(findings, symlinkFindings(symlinks, targets, names)...)
 	findings = append(findings, collisionFindings(paths)...)
 	findings = append(findings, charsetFindings(publishedVerbatim(paths, names.Public))...)
 	if names.Public != "." {
@@ -88,27 +88,56 @@ func results(files []File, symlinks []string, names NameScope) check.Results {
 	return check.Results{Findings: findings, Manifest: walkManifest()}
 }
 
-// symlinkFindings reports every skipped link in ONE finding.
+// symlinkFindings reports the skipped links: a WARNING for each one the
+// build reads, and one NOTE for the rest.
 //
-// The unit is the walk's decision rather than the individual link: "these
-// were not included" is one sentence, and the renderer prints the list
-// under it. Splitting it per link would print that sentence once per
-// link, which is how a useful warning becomes noise on a project that
-// happens to use several.
-func symlinkFindings(symlinks []string) []check.Finding {
-	if len(symlinks) == 0 {
-		return nil
+// THE CLAIM IS ABOUT THE SITE, SO IT IS MADE ONLY WHERE THE SITE COMES
+// FROM. A link is never followed and never packed, which is right
+// everywhere. But "what it points at will not be part of your site" is
+// true only of a link in the public folder, which Astro copies, or in the
+// source folder, which it compiles. Every fresh official starter ships an
+// agent-instructions file at its root as a link, which no build reads;
+// warning about it asked every new project a question, and stopped every
+// run without a terminal at it.
+//
+// A warned link is one finding of its own, naming where it points, since
+// that is the half its owner needs in order to put the real file there.
+// The rest are one note: recorded in the report, shown by no surface.
+//
+// REQUIRED MUTATION, run 2026-10-03: warn on every link. The fresh-starter
+// rows red.
+func symlinkFindings(symlinks []string, targets map[string]string, names NameScope) []check.Finding {
+	var out []check.Finding
+	var elsewhere []string
+	for _, link := range symlinks {
+		if !within(link, names.Public) && !within(link, names.Source) {
+			elsewhere = append(elsewhere, link)
+			continue
+		}
+		points := "somewhere this check couldn't read"
+		if target, ok := targets[link]; ok {
+			points = target
+		}
+		out = append(out, check.Finding{
+			CheckID:  check.IDSymlinks,
+			Severity: check.SeverityWarning,
+			Message: fmt.Sprintf("%s is a symbolic link to %s. Links are skipped, so what it "+
+				"points at will not be part of your site.", link, points),
+			Paths: check.NewPaths(link),
+			Next: "If your site needs that content, replace the link with the real file or " +
+				"directory and deploy again.",
+		})
 	}
-	return []check.Finding{{
-		CheckID:  check.IDSymlinks,
-		Severity: check.SeverityWarning,
-		Message: fmt.Sprintf(
-			"%s skipped, so whatever they point at will not be part of your site:",
-			countOf(len(symlinks), "symbolic link was", "symbolic links were")),
-		Paths: check.NewPaths(symlinks...),
-		Next: "If your site needs that content, replace each link with the real file " +
-			"or directory and deploy again.",
-	}}
+	if len(elsewhere) > 0 {
+		out = append(out, check.Finding{
+			CheckID:  check.IDSymlinks,
+			Severity: check.SeverityNote,
+			Message: fmt.Sprintf("%s outside the public and source folders skipped; no build "+
+				"reads them:", countOf(len(elsewhere), "symbolic link was", "symbolic links were")),
+			Paths: check.NewPaths(elsewhere...),
+		})
+	}
+	return out
 }
 
 // collisionFindings reports names that would become one file once the
@@ -192,6 +221,8 @@ type NameScope struct {
 	// Public is the folder Astro copies into the site unchanged. "."
 	// means the project root.
 	Public string
+	// Source is the folder the build compiles, srcDir.
+	Source string
 	// Pages is the folder whose files become routes, `pages` inside
 	// the source folder.
 	Pages string
@@ -199,7 +230,12 @@ type NameScope struct {
 
 // DefaultNameScope is Astro's own layout, for a project whose config
 // moves neither folder.
-var DefaultNameScope = NameScope{Public: "public", Pages: "src/pages"}
+var DefaultNameScope = NameScope{Public: "public", Source: "src", Pages: "src/pages"}
+
+// within reports whether p is dir or lies under it. "." holds everything.
+func within(p, dir string) bool {
+	return dir == "." || p == dir || strings.HasPrefix(p, dir+"/")
+}
 
 // publishedVerbatim is the part of the walk whose names survive the
 // build: the files under the public folder, which Astro copies into the
