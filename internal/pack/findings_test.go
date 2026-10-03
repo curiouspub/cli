@@ -1,6 +1,7 @@
 package pack
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -23,23 +24,44 @@ import (
 // Skipped symlinks
 // ---------------------------------------------------------------------
 
-// TestSymlinkFindingNamesEveryLinkOnce. A skipped link is one fact about
-// the packing — these were not included — so it is one finding carrying
-// the list, which the renderer prints under the headline. Splitting it
-// per file would print the same sentence once per link.
-func TestSymlinkFindingNamesEveryLinkOnce(t *testing.T) {
-	got := symlinkFindings([]string{"content", "src/data"})
-	if len(got) != 1 {
-		t.Fatalf("findings = %d, want one carrying both links", len(got))
+// TestALinkWarnsOnlyWhereTheBuildReads. A link in the public folder or
+// the source folder is a warning of its own, naming where it points; a
+// link anywhere else is one note, which no surface shows. The root-level
+// link is the shape every fresh official starter ships.
+//
+// REQUIRED MUTATION, run 2026-10-03: make every link a warning. Reds
+// here on the root-level link.
+func TestALinkWarnsOnlyWhereTheBuildReads(t *testing.T) {
+	got := symlinkFindings(
+		[]string{"CLAUDE.md", "docs/guide", "public/logo.png", "source/data"},
+		map[string]string{"public/logo.png": "assets/logo.png", "CLAUDE.md": "AGENTS.md"},
+		NameScope{Public: "public", Source: "source", Pages: "source/pages"})
+
+	var warned, noted []string
+	for _, f := range got {
+		if f.CheckID != check.IDSymlinks {
+			t.Errorf("CheckID = %q, want %q", f.CheckID, check.IDSymlinks)
+		}
+		switch f.Severity {
+		case check.SeverityWarning:
+			warned = append(warned, f.Paths...)
+		case check.SeverityNote:
+			noted = append(noted, f.Paths...)
+		default:
+			t.Errorf("%v: Severity = %q, want a warning or a note", f.Paths, f.Severity)
+		}
 	}
-	if got[0].CheckID != check.IDSymlinks {
-		t.Errorf("CheckID = %q, want %q", got[0].CheckID, check.IDSymlinks)
+	if !reflect.DeepEqual(warned, []string{"public/logo.png", "source/data"}) {
+		t.Errorf("warned about %v, want the links in the public and source folders", warned)
 	}
-	if got[0].Severity != check.SeverityWarning {
-		t.Errorf("Severity = %q, want a warning", got[0].Severity)
+	if !reflect.DeepEqual(noted, []string{"CLAUDE.md", "docs/guide"}) {
+		t.Errorf("noted %v, want the links no build reads", noted)
 	}
-	if !reflect.DeepEqual(got[0].Paths, []string{"content", "src/data"}) {
-		t.Errorf("Paths = %v, want both links", got[0].Paths)
+	if !strings.Contains(got[0].Message, "public/logo.png is a symbolic link to assets/logo.png") {
+		t.Errorf("Message = %q, want the link and its target named", got[0].Message)
+	}
+	if !strings.Contains(got[1].Message, "somewhere this check couldn't read") {
+		t.Errorf("Message = %q, want an unread target said so", got[1].Message)
 	}
 }
 
@@ -47,8 +69,33 @@ func TestSymlinkFindingNamesEveryLinkOnce(t *testing.T) {
 // measured against: a check that fires on a clean project is a check
 // people learn to ignore.
 func TestSymlinkFindingIsSilentWithNoLinks(t *testing.T) {
-	if got := symlinkFindings(nil); len(got) != 0 {
+	if got := symlinkFindings(nil, nil, DefaultNameScope); len(got) != 0 {
 		t.Errorf("findings = %v, want none", got)
+	}
+}
+
+// TestALinkTargetIsNamedOnlyInsideTheProject. Where a link points is
+// printed only when it is a file of the project's own; anything outside
+// is described without a path. See describeTarget.
+func TestALinkTargetIsNamedOnlyInsideTheProject(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct{ link, target, want string }{
+		{"public/logo.png", "../assets/logo.png", "assets/logo.png"},
+		{"CLAUDE.md", "AGENTS.md", "AGENTS.md"},
+		{"public/a", filepath.Join(root, "src", "a"), "src/a"},
+		{"public/key", "../../../../home/someone/.ssh/id_rsa", "a location outside the project"},
+		{"public/passwd", "/etc/passwd", "a location outside the project"},
+		// Rooted without a drive letter, and with one: outside on every
+		// platform. Windows first named "/etc/passwd" as a file inside the
+		// project, because filepath.IsAbs says no to it there.
+		{"public/sys", `\Windows\system32`, "a location outside the project"},
+		{"public/key2", "C:/Users/someone/.ssh/id_rsa", "a location outside the project"},
+		{"public/key3", `D:\keys\id_rsa`, "a location outside the project"},
+		{"up", "..", "a location outside the project"},
+	} {
+		if got := describeTarget(root, tc.link, tc.target); got != tc.want {
+			t.Errorf("describeTarget(%q -> %q) = %q, want %q", tc.link, tc.target, got, tc.want)
+		}
 	}
 }
 
@@ -394,7 +441,7 @@ func TestWalkManifestAnswersEveryIDItClaims(t *testing.T) {
 // the manifest exists for: silence from a check that looked and silence
 // from a check nobody wired up are the same silence without it.
 func TestCleanTreeStillProducesAFullManifest(t *testing.T) {
-	res := results(nil, nil, DefaultNameScope)
+	res := results(nil, nil, nil, DefaultNameScope)
 	if len(res.Findings) != 0 {
 		t.Errorf("findings = %v, want none", res.Findings)
 	}
