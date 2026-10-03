@@ -893,7 +893,7 @@ func buildFailedFailure(origin wire.FailureOrigin) error {
 				"there may be nothing above that explains it — and there is nothing\n"+
 				"to fix in your project. Your files were fine when they got here.", ui.NextWait,
 			"Wait a few minutes and run `curious deploy` again. If it keeps\n"+
-				"happening, report it and quote the deploy id above.")
+				"happening, report it and quote the deploy id below.")
 
 	case wire.OriginLimit:
 		// NEITHER OF THE OTHER TWO, and its copy has to carry the pair
