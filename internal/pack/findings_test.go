@@ -85,6 +85,12 @@ func TestALinkTargetIsNamedOnlyInsideTheProject(t *testing.T) {
 		{"public/a", filepath.Join(root, "src", "a"), "src/a"},
 		{"public/key", "../../../../home/someone/.ssh/id_rsa", "a location outside the project"},
 		{"public/passwd", "/etc/passwd", "a location outside the project"},
+		// Rooted without a drive letter, and with one: outside on every
+		// platform. Windows first named "/etc/passwd" as a file inside the
+		// project, because filepath.IsAbs says no to it there.
+		{"public/sys", `\Windows\system32`, "a location outside the project"},
+		{"public/key2", "C:/Users/someone/.ssh/id_rsa", "a location outside the project"},
+		{"public/key3", `D:\keys\id_rsa`, "a location outside the project"},
 		{"up", "..", "a location outside the project"},
 	} {
 		if got := describeTarget(root, tc.link, tc.target); got != tc.want {
