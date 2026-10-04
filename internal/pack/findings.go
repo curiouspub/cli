@@ -140,14 +140,23 @@ func symlinkFindings(symlinks []string, targets map[string]string, names NameSco
 	return out
 }
 
-// collisionFindings reports names that would become one file once the
-// site is served, one finding per colliding GROUP.
+// collisionFindings reports names that differ only in letter case, one
+// finding per GROUP.
 //
 // The group is the unit because that is what a reader can act on: told
 // about one half of a pair, they would still have to go and find the
 // other. The comparison is over the WHOLE path — two files with the same
-// name in two directories do not collide, and two files whose
-// directories differ only in case do.
+// name in two directories are not a pair, and two files whose
+// directories differ only in case are.
+//
+// IT IS A WARNING, AND ITS TEXT IS CONDITIONAL. Every step that stores
+// and serves a site keeps a path's letter case, so each spelling stays
+// its own file at its own address. What is left is that two addresses
+// differing only in case are easy to mistype, and a
+// case-changed address is a page that is not there. The detector also
+// runs over every walked path, including a pair outside the published
+// folders that never reaches the site at all, so the text says what
+// happens IF the names are published and does not say that they will be.
 func collisionFindings(paths []string) []check.Finding {
 	groups := make(map[string][]string, len(paths))
 	var order []string
@@ -170,12 +179,13 @@ func collisionFindings(paths []string) []check.Finding {
 		out = append(out, check.Finding{
 			CheckID:  check.IDCaseCollision,
 			Severity: check.SeverityWarning,
-			Message: fmt.Sprintf(
-				"%s differ only in capitalisation and would collide once the site is served:",
+			Message: fmt.Sprintf("%s differ only in capitalisation:",
 				countOf(len(colliding), "file name", "file names")),
 			Paths: check.NewPaths(colliding...),
-			Next: "Rename one of them so the names differ by more than case, or the site " +
-				"will serve whichever the platform kept.",
+			Next: "If they end up on the site, each is its own address, and a link has to " +
+				"match its capitalisation exactly. " +
+				"If they are meant to be one file, keep one; otherwise rename one so the " +
+				"names differ by more than case.",
 		})
 	}
 	return out
