@@ -395,6 +395,22 @@
       "action": [
         "FreshDeploy"
       ],
+      "family": "limit-public-files",
+      "headline": {
+        "pre-flight": null
+      },
+      "headline_reason": {
+        "pre-flight": "composed"
+      },
+      "id": "limit-public-files",
+      "stages": [
+        "pre-flight"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
       "family": "limit-total",
       "headline": {
         "pre-flight": null

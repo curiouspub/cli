@@ -19,6 +19,7 @@ import (
 	"github.com/curiouspub/cli/internal/config"
 	"github.com/curiouspub/cli/internal/pack"
 	"github.com/curiouspub/cli/internal/ui"
+	"github.com/curiouspub/cli/internal/units"
 	"github.com/curiouspub/cli/pkg/wire"
 )
 
@@ -2024,7 +2025,7 @@ func TestTheDeployChecksNamesWhereTheSiteKeepsThem(t *testing.T) {
 		_, err := run.run()
 		events := run.journal.all()
 		said := strings.Join(events, "\n")
-		if !strings.Contains(said, "checked under public/ instead") {
+		if !strings.Contains(said, "checked and files counted under public/ instead") {
 			t.Errorf("the run never said where it checked:\n  %s", strings.Join(events, "\n  "))
 		}
 		if indexOfEvent(events, "asked: Continue anyway?") < 0 {
@@ -2197,6 +2198,104 @@ func TestWhatEachEndingCosts(t *testing.T) {
 // -------------------------------------------------------------------
 // What a refused run leaves behind
 // -------------------------------------------------------------------
+
+// publicFolderFiles is n small files under dir, nested two deep, with one
+// hidden file among them, shaped as astroProject's extra argument.
+func publicFolderFiles(dir string, n int) map[string][]byte {
+	out := map[string][]byte{dir + "/.well-known": []byte("x")}
+	for i := 1; i < n; i++ {
+		out[fmt.Sprintf("%s/d%d/e%d/f%04d.txt", dir, i%2, i%3, i)] = []byte("x")
+	}
+	return out
+}
+
+// whatThePublicStopSaid is everything a person would have read: the
+// refusal as rendered, with its failure id line, and every journal event.
+func whatThePublicStopSaid(t *testing.T, run *deployRun, err error) string {
+	t.Helper()
+	text, _ := renderedBytes(t, err)
+	return text + "\n" + rendered(err) + "\n" + strings.Join(run.journal.all(), "\n")
+}
+
+// TestAPublicFolderOverTheOutputCapIsRefusedBeforeAnythingIsSent proves
+// the flow hands the count the folder it resolved: the default folder, a
+// configured one, and the fallback when the config cannot be read. Astro
+// copies that folder into the site whole, and the server refuses a site
+// over the file cap, so the answer is available locally and free.
+//
+// REQUIRED MUTATION, run 2026-10-04: have Deploy pass a fixed "public" to
+// the limits. The configured-folder half reds; the others stay green.
+// Also run: make the finding a warning. The default, configured and
+// fallback halves red, and the control stays green. Also run: record the
+// public-folder row as declined. The default and fallback halves red, and
+// so does the control.
+func TestAPublicFolderOverTheOutputCapIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	refused := func(t *testing.T, run *deployRun) string {
+		t.Helper()
+		handoff, err := run.run()
+		if err == nil {
+			handoff.Release()
+			t.Fatal("a public folder over the cap deployed")
+		}
+		if handoff != nil {
+			t.Error("a refused run handed back a request")
+		}
+		if sent := run.script.sent(); sent != 0 {
+			t.Errorf("the refused project sent %d requests (%v), want none", sent, run.script.paths)
+		}
+		if left := run.leftBehind(); len(left) != 0 {
+			t.Errorf("the run left %v behind", left)
+		}
+		return whatThePublicStopSaid(t, run, err)
+	}
+
+	t.Run("the default folder", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(publicFolderFiles("public", 1_001))))
+		said := refused(t, run)
+		for _, want := range []string{"limit-public-files", units.Count(1_001), units.Count(wire.MaxOutputFiles)} {
+			if !strings.Contains(said, want) {
+				t.Errorf("the output does not contain %q:\n%s", want, said)
+			}
+		}
+	})
+
+	t.Run("a configured folder", func(t *testing.T) {
+		files := publicFolderFiles("static", 1_001)
+		files["astro.config.mjs"] = []byte("export default { publicDir: './static' };\n")
+		run := newDeployRun(t, writeProject(t, astroProject(files)))
+		said := refused(t, run)
+		if !strings.Contains(said, "limit-public-files") {
+			t.Errorf("the output does not name the public-folder stop:\n%s", said)
+		}
+	})
+
+	t.Run("a folder the config could not settle falls back, and says so", func(t *testing.T) {
+		files := publicFolderFiles("public", 1_001)
+		files["astro.config.mjs"] = []byte("const dir = './static';\nexport default { publicDir: dir };\n")
+		run := newDeployRun(t, writeProject(t, astroProject(files)))
+		said := refused(t, run)
+		for _, want := range []string{"limit-public-files", "checked and files counted under public/ instead"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("the output does not contain %q:\n%s", want, said)
+			}
+		}
+	})
+
+	t.Run("control: a folder at the cap deploys and sends", func(t *testing.T) {
+		run := newDeployRun(t, writeProject(t, astroProject(publicFolderFiles("public", 1_000)))).scriptedLogin()
+		run.prompt.confirms = []answer{no()}
+
+		handoff, err := run.run()
+		if err != nil {
+			t.Fatalf("Deploy: %v\n%s", err, rendered(err))
+		}
+		defer handoff.Release()
+		if run.script.sent() == 0 {
+			t.Error("the control sent nothing either, so the zeros above say nothing " +
+				"about the stop and everything about the instrument")
+		}
+	})
+}
 
 // TestARefusedRunPacksNothingAndLeavesNothingBehind covers every way a
 // run can stop before the pack, and its control is the run that does

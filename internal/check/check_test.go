@@ -221,7 +221,7 @@ func TestDeclaredOrderIsTheCompleteUniverseInReportOrder(t *testing.T) {
 	want := []string{
 		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
-		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
+		IDLimitFiles, IDLimitPublicFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}
 	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("DeclaredOrder() = %v, want %v", got, want)
@@ -243,7 +243,7 @@ func TestDeclaredOrderHandsBackACopy(t *testing.T) {
 	want := []string{
 		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
-		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
+		IDLimitFiles, IDLimitPublicFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}
 	if got := DeclaredOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("after a caller overwrote what it was given, DeclaredOrder() = %v, want %v",

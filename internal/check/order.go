@@ -27,12 +27,13 @@ import "sort"
 // among the three still appears above every warning — what this decides
 // is the sequence WITHIN a severity, and the order of the manifest.
 //
-// THE FOUR LIMITS COME LAST, and the principle is the same one again.
+// THE FIVE LIMITS COME LAST, and the principle is the same one again.
 // Everything above answers whether this project can BUILD; these answer
 // whether it can be SENT, which is a question about something already
 // established to be a project. Among themselves they run smallest
-// question first — how many files there are, then how big one of them
-// is, then how big they are together — and the packed size last of all,
+// question first — how many files there are, then how many of them the
+// public folder holds, then how big one of them is, then how big they are
+// together — and the packed size last of all,
 // because it is the only one whose subject does not exist until every
 // other has passed.
 var declaredOrder = []string{
@@ -45,6 +46,7 @@ var declaredOrder = []string{
 	IDCaseCollision,
 	IDPathCharset,
 	IDLimitFiles,
+	IDLimitPublicFiles,
 	IDLimitFileSize,
 	IDLimitTotal,
 	IDLimitPacked,

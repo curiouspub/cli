@@ -124,6 +124,7 @@ const (
 	IDLockfileWorkspace   FailureID = "lockfile-workspace"
 	IDLockfileMissing     FailureID = "lockfile-missing"
 	IDLimitFiles          FailureID = "limit-files"
+	IDLimitPublicFiles    FailureID = "limit-public-files"
 	IDLimitFileSize       FailureID = "limit-file-size"
 	IDLimitTotal          FailureID = "limit-total"
 	IDLimitPacked         FailureID = "limit-packed"
@@ -176,8 +177,8 @@ var ActiveFailureIDs = []FailureID{
 
 	IDAstroDepMissing, IDAstroDepUnreadable, IDAstroDepInvalidJSON,
 	IDAstroDepNotObject, IDAstroDepAbsent, IDLockfileUnsupported,
-	IDLockfileWorkspace, IDLockfileMissing, IDLimitFiles, IDLimitFileSize,
-	IDLimitTotal, IDLimitPacked, IDPathCharset, IDProjectNotReady,
+	IDLockfileWorkspace, IDLockfileMissing, IDLimitFiles, IDLimitPublicFiles,
+	IDLimitFileSize, IDLimitTotal, IDLimitPacked, IDPathCharset, IDProjectNotReady,
 
 	IDNeedsATerminal, IDAnswerNotUnderstood, IDInternalFault,
 }

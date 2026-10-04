@@ -61,7 +61,7 @@ func TestTheRegisteredChecksClaimExactlyThisPackagesIDs(t *testing.T) {
 	missing, unexpected := check.CoverageGaps(res.Manifest)
 	wantMissing := []string{
 		check.IDSymlinks, check.IDCaseCollision, check.IDPathCharset,
-		check.IDLimitFiles, check.IDLimitFileSize, check.IDLimitTotal, check.IDLimitPacked,
+		check.IDLimitFiles, check.IDLimitPublicFiles, check.IDLimitFileSize, check.IDLimitTotal, check.IDLimitPacked,
 	}
 	if !equalStrings(missing, wantMissing) {
 		t.Errorf("missing = %v, want exactly the ids the file walk and the limits own %v",

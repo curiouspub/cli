@@ -80,7 +80,7 @@ func TestTheFileCountBoundaryIsInclusive(t *testing.T) {
 		{3_000, false},
 		{3_001, true},
 	} {
-		res := Limits(generatedFiles("src", row.count, 1))
+		res := Limits(generatedFiles("src", row.count, 1), "public")
 		found := findingsFor(res, check.IDLimitFiles)
 		if refused := len(found) > 0; refused != row.refused {
 			t.Errorf("%d files: refused = %v, want %v (%v)", row.count, refused, row.refused, found)
@@ -103,7 +103,7 @@ func TestTheFileCountBoundaryIsInclusive(t *testing.T) {
 func TestTooManyFilesNamesTheCountTheLimitAndWhereTheyAre(t *testing.T) {
 	files := append(generatedFiles("public/gallery", 3_400, 1), generatedFiles("src/pages", 12, 1)...)
 
-	res := Limits(files)
+	res := Limits(files, "public")
 	found := findingsFor(res, check.IDLimitFiles)
 	if len(found) != 1 {
 		t.Fatalf("findings = %v, want exactly one", found)
@@ -202,7 +202,7 @@ func TestTheFileSizeBoundaryIsInclusive(t *testing.T) {
 		{5_000_001, true},
 		{5 * 1024 * 1024, true},
 	} {
-		res := Limits([]File{{Path: "public/asset.bin", Size: row.size}})
+		res := Limits([]File{{Path: "public/asset.bin", Size: row.size}}, "public")
 		found := findingsFor(res, check.IDLimitFileSize)
 		if refused := len(found) > 0; refused != row.refused {
 			t.Errorf("a file of %d bytes: refused = %v, want %v", row.size, refused, row.refused)
@@ -258,7 +258,7 @@ func TestEveryOversizeFileIsReportedInOneRun(t *testing.T) {
 		{Path: "public/a.bin", Size: 18_900_000},
 		{Path: "public/d.bin", Size: 5_200_000},
 		{Path: "public/b.bin", Size: 12_400_000},
-	})
+	}, "public")
 
 	found := findingsFor(res, check.IDLimitFileSize)
 	if len(found) != 1 {
@@ -303,7 +303,7 @@ func TestTheOversizeListStopsAtTenAndSaysHowManyMore(t *testing.T) {
 		})
 	}
 
-	found := findingsFor(Limits(files), check.IDLimitFileSize)
+	found := findingsFor(Limits(files, "public"), check.IDLimitFileSize)
 	if len(found) != 1 {
 		t.Fatalf("findings = %v, want one", found)
 	}
@@ -355,7 +355,7 @@ func TestTheTotalBoundaryIsInclusive(t *testing.T) {
 			{Path: "b.bin", Size: 1_000_000},
 			{Path: "c.bin", Size: 1_000_000},
 		}
-		found := findingsFor(Limits(files), check.IDLimitTotal)
+		found := findingsFor(Limits(files, "public"), check.IDLimitTotal)
 		if refused := len(found) > 0; refused != row.refused {
 			t.Errorf("a total of %d bytes: refused = %v, want %v", row.total, refused, row.refused)
 		}
@@ -382,7 +382,7 @@ func TestTheTotalMessageNamesTheLargestFiles(t *testing.T) {
 		files = append(files, File{Path: fmt.Sprintf("assets/%02d.bin", i), Size: int64(3_000_000 - i)})
 	}
 
-	found := findingsFor(Limits(files), check.IDLimitTotal)
+	found := findingsFor(Limits(files, "public"), check.IDLimitTotal)
 	if len(found) != 1 {
 		t.Fatalf("findings = %v, want one", found)
 	}
@@ -420,7 +420,7 @@ func TestMeasuringTheLimitsDoesNotReorderTheCallersList(t *testing.T) {
 	}
 	before := pathsOf(files)
 
-	Limits(files)
+	Limits(files, "public")
 
 	if got := pathsOf(files); !reflect.DeepEqual(got, before) {
 		t.Errorf("the caller's list was reordered: %v, was %v", got, before)
@@ -468,7 +468,7 @@ func TestFilesTheWalkExcludedCountTowardNothing(t *testing.T) {
 			"empty measurement and this row would prove nothing")
 	}
 
-	res := Limits(tree.Files)
+	res := Limits(tree.Files, "public")
 	if len(check.Advisories(res.Findings)) != 0 {
 		t.Errorf("findings = %v, want none — an excluded directory counts toward nothing",
 			res.Findings)
@@ -514,7 +514,7 @@ func TestSkippedLinksAreNotCounted(t *testing.T) {
 		t.Fatalf("the walk listed %d files, want exactly the limit", len(tree.Files))
 	}
 
-	if found := findingsFor(Limits(tree.Files), check.IDLimitFiles); len(found) != 0 {
+	if found := findingsFor(Limits(tree.Files, "public"), check.IDLimitFiles); len(found) != 0 {
 		t.Errorf("findings = %v, want none — a skipped link is not a file that will be "+
 			"packed, so it is not a file that counts", found)
 	}
@@ -671,7 +671,7 @@ func TestTheForcedExcludeRulesStillMatchWhatTheyDidAsASwitch(t *testing.T) {
 // Limits' manifest. The claimed set reds and the coverage half reds with
 // it.
 func TestTheLimitsClaimExactlyTheirOwnIDs(t *testing.T) {
-	res := Limits(nil)
+	res := Limits(nil, "public")
 
 	var got []string
 	for _, row := range res.Manifest {
@@ -711,7 +711,7 @@ func TestTheLimitsClaimExactlyTheirOwnIDs(t *testing.T) {
 // REQUIRED MUTATION, run 2026-09-08: build the packed row with answered
 // instead of declined in Limits. Reds here on the outcome.
 func TestTheUnpackedRunSaysTheArchiveWasNotMeasuredRatherThanAnsweringZero(t *testing.T) {
-	row := rowFor(t, Limits(nil), check.IDLimitPacked)
+	row := rowFor(t, Limits(nil, "public"), check.IDLimitPacked)
 	if row.Outcome != check.Declined {
 		t.Errorf("Outcome = %v, want a decline — nothing has been packed", row.Outcome)
 	}
@@ -723,7 +723,7 @@ func TestTheUnpackedRunSaysTheArchiveWasNotMeasuredRatherThanAnsweringZero(t *te
 	}
 }
 
-// TestAProjectThatFailsPreFlightStillCarriesAllFourLimitRows.
+// TestAProjectThatFailsPreFlightStillCarriesAllItsLimitRows.
 //
 // THIS IS THE ROW THAT MAKES THE ALWAYS-RUN RULE A PROPERTY rather than
 // a sentence. The combiner refuses a report that does not cover every
@@ -741,7 +741,7 @@ func TestTheUnpackedRunSaysTheArchiveWasNotMeasuredRatherThanAnsweringZero(t *te
 // says only what it found would take, and the shape a run that skipped
 // the limits would produce. Reds here with a coverage error naming the
 // rows that went missing.
-func TestAProjectThatFailsPreFlightStillCarriesAllFourLimitRows(t *testing.T) {
+func TestAProjectThatFailsPreFlightStillCarriesAllItsLimitRows(t *testing.T) {
 	// The engine's own five, one of them a hard stop, as they would
 	// arrive from a project with no lockfile.
 	engine := check.Results{
@@ -762,7 +762,7 @@ func TestAProjectThatFailsPreFlightStillCarriesAllFourLimitRows(t *testing.T) {
 	tree := mustWalk(t, OSFileSystem{}, t.TempDir())
 	oversize := generatedFiles("public/gallery", 3_400, 1)
 
-	report, err := check.Combine(engine, tree.Results, Limits(oversize))
+	report, err := check.Combine(engine, tree.Results, Limits(oversize, "public"))
 	if err != nil {
 		t.Fatalf("combining a hard-stopped run with the limits: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestARefusedRunPacksNothingAndUploadsNothing(t *testing.T) {
 	dir := t.TempDir()
 	tree := mustWalk(t, OSFileSystem{}, root)
 
-	prepared, res, err := Prepare(OSFileSystem{}, root, dir, tree.Files, Limits(tree.Files))
+	prepared, res, err := Prepare(OSFileSystem{}, root, dir, tree.Files, Limits(tree.Files, "public"))
 	if err != nil {
 		t.Fatalf("Prepare on an ordinary project: %v", err)
 	}
@@ -848,7 +848,7 @@ func TestARefusedRunPacksNothingAndUploadsNothing(t *testing.T) {
 	// or directory".
 	refusedFS, refusedFiles := manyTinyFiles(wire.MaxSourceFiles + 1)
 	refusedDir := t.TempDir()
-	refusedLimits := Limits(refusedFiles)
+	refusedLimits := Limits(refusedFiles, "public")
 	if len(findingsFor(refusedLimits, check.IDLimitFiles)) == 0 {
 		t.Fatalf("the fixture is not over the count limit, so this half measures nothing: %v",
 			refusedLimits.Findings)
@@ -913,7 +913,7 @@ func TestAVerdictThatNeverMeasuredAnythingIsRefused(t *testing.T) {
 	}{
 		{"nothing was measured at all", check.Results{}, true},
 		{"every source limit declined", declinedEverything, true},
-		{"control: a real verdict packs", Limits(tree.Files), false},
+		{"control: a real verdict packs", Limits(tree.Files, "public"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -944,16 +944,22 @@ func TestAVerdictThatNeverMeasuredAnythingIsRefused(t *testing.T) {
 	}
 }
 
-// TestARunThatNeverPacksStillReportsAllFourRows. The report a refused
+// TestARunThatNeverPacksStillReportsAllItsRows. The report a refused
 // run produces has to pass the same gate as any other, and the packed
 // row nothing can answer yet says so rather than being absent. That is
 // Limits's row to carry, and it carries it on every run — including the
-// ones that stop before a packer is ever reached.
+// ones that stop before a packer is ever reached. The public-folder row
+// is one of them: it is answered, and a tree this large says so in a
+// finding of its own beside the whole-tree count.
 //
 // REQUIRED MUTATION, run 2026-09-08: drop the declined packed row from
 // Limits. Reds here on the row count.
-func TestARunThatNeverPacksStillReportsAllFourRows(t *testing.T) {
-	res := Limits(generatedFiles("public", 3_400, 1))
+//
+// REQUIRED MUTATION, run 2026-10-04: record the public-folder row as
+// declined in place of answered. Reds here, and nowhere else in this
+// package.
+func TestARunThatNeverPacksStillReportsAllItsRows(t *testing.T) {
+	res := Limits(generatedFiles("public", 3_400, 1), "public")
 
 	var got []string
 	for _, row := range res.Manifest {
@@ -965,8 +971,214 @@ func TestARunThatNeverPacksStillReportsAllFourRows(t *testing.T) {
 	if row := rowFor(t, res, check.IDLimitPacked); row.Outcome != check.Declined {
 		t.Errorf("the packed row says it answered, and nothing was packed")
 	}
+	if row := rowFor(t, res, check.IDLimitPublicFiles); row.Outcome != check.Answered {
+		t.Errorf("the public-folder row did not answer: %v", row)
+	}
 	if len(findingsFor(res, check.IDLimitFiles)) == 0 {
 		t.Errorf("the refused run said nothing about the limit it broke: %v", res.Findings)
+	}
+	if len(findingsFor(res, check.IDLimitPublicFiles)) == 0 {
+		t.Errorf("3,400 files under the public folder produced no public-folder finding: %v",
+			res.Findings)
+	}
+}
+
+// nestedFiles is n files under dir spread over two subdirectories, plus
+// one dotfile directly in it, so a count that skipped nesting or hidden
+// names would come up short of n.
+func nestedFiles(dir string, n int) []File {
+	out := []File{{Path: dir + "/.dotfile", Size: 1}}
+	rest := n - 1
+	out = append(out, generatedFiles(dir+"/a", rest/2, 1)...)
+	out = append(out, generatedFiles(dir+"/b/c", rest-rest/2, 1)...)
+	return out
+}
+
+// publicStops is the public-folder findings of one Limits run.
+func publicStops(files []File, publicDir string) []check.Finding {
+	return findingsFor(Limits(files, publicDir), check.IDLimitPublicFiles)
+}
+
+// TestAPublicFolderOverTheOutputCapIsAHardStopNamingItsOwnCount proves the
+// count is made over the public folder alone, nested and hidden files
+// included: 1,001 of them is a hard stop that states 1,001 against 1,000
+// and never the whole tree's 1,003.
+//
+// REQUIRED MUTATION, run 2026-10-04: count every walked file instead of
+// those under the folder. Reds here, on the whole-tree number appearing
+// in the message. Also run: state the whole tree's file count in the
+// headline of a named folder. Reds here alone in this package. Also run:
+// make the finding a warning. Reds here, on the severity.
+func TestAPublicFolderOverTheOutputCapIsAHardStopNamingItsOwnCount(t *testing.T) {
+	files := append(nestedFiles("public", 1_001),
+		File{Path: "package.json", Size: 10}, File{Path: "src/pages/index.astro", Size: 10})
+
+	found := publicStops(files, "public")
+	if len(found) != 1 {
+		t.Fatalf("findings = %v, want exactly one", found)
+	}
+	f := found[0]
+	if f.FailureID != "limit-public-files" {
+		t.Errorf("FailureID = %q, want limit-public-files", f.FailureID)
+	}
+	if f.Severity != check.SeverityHardStop {
+		t.Errorf("Severity = %q, want a hard stop", f.Severity)
+	}
+	if !strings.Contains(f.Message, units.Count(1_001)) || !strings.Contains(f.Message, units.Count(wire.MaxOutputFiles)) {
+		t.Errorf("the message %q does not state %s against %s",
+			f.Message, units.Count(1_001), units.Count(wire.MaxOutputFiles))
+	}
+	if strings.Contains(wholeFinding(f), units.Count(1_003)) {
+		t.Errorf("the finding states the whole tree's count:\n%s", wholeFinding(f))
+	}
+	if !strings.Contains(f.Message+f.What, "public/") {
+		t.Errorf("the finding does not name the folder:\n%s", wholeFinding(f))
+	}
+}
+
+// TestAPublicFolderAtTheOutputCapIsNotRefused is the boundary: exactly
+// 1,000 files is the most a site may hold, so the comparison is a strict
+// "more than".
+//
+// REQUIRED MUTATION, run 2026-10-04: compare with >= in place of >. Reds
+// here, and also on the root-folder row's 1,000-file half and the
+// walked-directory row.
+func TestAPublicFolderAtTheOutputCapIsNotRefused(t *testing.T) {
+	if found := publicStops(nestedFiles("public", 1_000), "public"); len(found) != 0 {
+		t.Errorf("findings = %v, want none at exactly the cap", found)
+	}
+}
+
+// TestASiblingFolderSharingThePublicPrefixIsNotThePublicFolder.
+//
+// REQUIRED MUTATION, run 2026-10-04: match the folder by string prefix
+// without the separator, in the one predicate the name checks share. Reds
+// here and nowhere else in this package. Counting the whole tree reds
+// here too.
+func TestASiblingFolderSharingThePublicPrefixIsNotThePublicFolder(t *testing.T) {
+	if found := publicStops(nestedFiles("public-old", 1_001), "public"); len(found) != 0 {
+		t.Errorf("findings = %v, want none: public-old/ is not the public folder", found)
+	}
+}
+
+// TestTheConfiguredPublicFolderIsTheOneCounted proves the folder argument
+// is used rather than a fixed name, and that only it is counted.
+//
+// REQUIRED MUTATION, run 2026-10-04: ignore the argument and count
+// "public". Reds on both halves, and on the root-folder row. Counting the
+// whole tree instead reds the second half alone.
+func TestTheConfiguredPublicFolderIsTheOneCounted(t *testing.T) {
+	t.Run("the configured folder over the cap is refused and named", func(t *testing.T) {
+		found := publicStops(nestedFiles("static", 1_001), "static")
+		if len(found) != 1 {
+			t.Fatalf("findings = %v, want exactly one", found)
+		}
+		if !strings.Contains(found[0].Message+found[0].What, "static/") {
+			t.Errorf("the finding does not name static/:\n%s", wholeFinding(found[0]))
+		}
+	})
+	t.Run("the default folder over the cap is ignored when another is configured", func(t *testing.T) {
+		if found := publicStops(nestedFiles("public", 1_001), "static"); len(found) != 0 {
+			t.Errorf("findings = %v, want none: public/ is not the configured folder", found)
+		}
+	})
+}
+
+// TestAProjectRootPublicFolderCountsTheWholeWalkedTree. A public folder
+// of "." holds everything the walk kept, whatever its directories are
+// called.
+//
+// REQUIRED MUTATION, run 2026-10-04: ignore the argument and count
+// "public", so a "." folder is not the whole tree. Reds here. Comparing
+// with >= in place of > reds here as well, on the 1,000-file half. Also
+// run: word the root's finding as a named folder's. Reds here alone.
+func TestAProjectRootPublicFolderCountsTheWholeWalkedTree(t *testing.T) {
+	spread := func(n int) []File {
+		var out []File
+		for i, d := range []string{"alpha", "beta/gamma", "delta"} {
+			share := n / 3
+			if i == 0 {
+				share = n - 2*(n/3)
+			}
+			out = append(out, generatedFiles(d, share, 1)...)
+		}
+		return out
+	}
+	found := publicStops(spread(1_001), ".")
+	if len(found) != 1 {
+		t.Fatalf("1,001 files, public folder \".\": findings = %v, want exactly one", found)
+	}
+	// The root has no "out of it" to move files to, so the finding has to
+	// say what the folder is and point at the config instead.
+	if !strings.Contains(found[0].Message, "project itself") {
+		t.Errorf("the message does not say the project itself is the public folder: %q", found[0].Message)
+	}
+	if !strings.Contains(found[0].Next, "publicDir") || strings.Contains(found[0].Next, "Move them out") {
+		t.Errorf("the next step offers a move the root cannot make, or no way past: %q", found[0].Next)
+	}
+	if found := publicStops(spread(1_000), "."); len(found) != 0 {
+		t.Errorf("1,000 files, public folder \".\": findings = %v, want none", found)
+	}
+}
+
+// TestThePublicFolderFindingListsOnlyTheFolderOwnBusiestDirectories. A
+// reader told the public folder is too big has to be pointed inside it;
+// the 1,500 files under src/big/ are not what they can fix.
+//
+// REQUIRED MUTATION, run 2026-10-04: rank directories over the whole
+// tree. Reds here alone.
+func TestThePublicFolderFindingListsOnlyTheFolderOwnBusiestDirectories(t *testing.T) {
+	files := append(nestedFiles("public", 1_001), generatedFiles("src/big", 1_500, 1)...)
+
+	found := publicStops(files, "public")
+	if len(found) != 1 {
+		t.Fatalf("findings = %v, want exactly one", found)
+	}
+	if strings.Contains(found[0].What, "src/") {
+		t.Errorf("What names a directory outside the public folder:\n%s", found[0].What)
+	}
+	if !strings.Contains(found[0].What, "public/a") && !strings.Contains(found[0].What, "public/b") {
+		t.Errorf("What names none of the public folder's own busiest directories:\n%s", found[0].What)
+	}
+}
+
+// TestFilesTheWalkExcludedAreNotCountedTowardThePublicFolder walks a real
+// directory: 1,000 files under public/ plus one the ignore file drops
+// leaves exactly the cap, which is no refusal. Nothing here is a link, so
+// no skip is involved.
+//
+// REQUIRED MUTATION, run 2026-10-04: refuse at the cap rather than over
+// it. Reds here, at exactly 1,000. So does counting the whole walked
+// tree, which holds more than the public folder does.
+func TestFilesTheWalkExcludedAreNotCountedTowardThePublicFolder(t *testing.T) {
+	entries := []entry{
+		{path: "package.json", body: "{}"},
+		{path: ".gitignore", body: "public/ignored.txt\n"},
+		{path: "public/ignored.txt", body: "x"},
+	}
+	for i := 0; i < 1_000; i++ {
+		entries = append(entries, entry{path: fmt.Sprintf("public/d%d/f%04d.txt", i%7, i), body: "x"})
+	}
+	root := writeTree(t, entries)
+
+	tree, err := Walk(OSFileSystem{}, root, NameScope{Public: "public", Source: "src", Pages: "src/pages"})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	inPublic := 0
+	for _, f := range tree.Files {
+		if strings.HasPrefix(f.Path, "public/") {
+			inPublic++
+		}
+		if f.Path == "public/ignored.txt" {
+			t.Fatal("the walk kept the ignored file, so this row measures nothing")
+		}
+	}
+	if inPublic != 1_000 {
+		t.Fatalf("the walk kept %d files under public/, want 1,000 — the fixture is wrong", inPublic)
+	}
+	if found := publicStops(tree.Files, "public"); len(found) != 0 {
+		t.Errorf("findings = %v, want none: an ignored file counts toward nothing", found)
 	}
 }
 
@@ -985,7 +1197,7 @@ func TestTheSuccessReceiptNamesFilesSourceAndArchive(t *testing.T) {
 	})
 	tree := mustWalk(t, OSFileSystem{}, root)
 
-	prepared, _, err := Prepare(OSFileSystem{}, root, t.TempDir(), tree.Files, Limits(tree.Files))
+	prepared, _, err := Prepare(OSFileSystem{}, root, t.TempDir(), tree.Files, Limits(tree.Files, "public"))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -1037,12 +1249,12 @@ func TestAnArchiveOverTheCapIsRefusedWithNoReceiptAboveIt(t *testing.T) {
 			"is only about a project that passed every source limit",
 			total, wire.MaxSourceTotalBytes)
 	}
-	if found := findingsFor(Limits(list), check.IDLimitFiles); len(found) != 0 {
+	if found := findingsFor(Limits(list, "public"), check.IDLimitFiles); len(found) != 0 {
 		t.Fatalf("the fixture is already refused by an earlier limit: %v", found)
 	}
 
 	dir := t.TempDir()
-	prepared, res, err := Prepare(fsys, "root", dir, list, Limits(list))
+	prepared, res, err := Prepare(fsys, "root", dir, list, Limits(list, "public"))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -1153,7 +1365,7 @@ func TestAnOrdinaryProjectHasNothingToSay(t *testing.T) {
 	})
 	tree := mustWalk(t, OSFileSystem{}, root)
 
-	res := Limits(tree.Files)
+	res := Limits(tree.Files, "public")
 	if len(res.Findings) != 0 {
 		t.Errorf("findings = %v, want none from an ordinary project", res.Findings)
 	}
@@ -1197,7 +1409,7 @@ func TestAnOrdinaryProjectHasNothingToSay(t *testing.T) {
 func TestAFourFigureCountIsGroupedWhereverAMessagePrintsOne(t *testing.T) {
 	fsys, files := manyTinyFiles(1_200)
 
-	prepared, _, err := Prepare(fsys, "root", t.TempDir(), files, Limits(files))
+	prepared, _, err := Prepare(fsys, "root", t.TempDir(), files, Limits(files, "public"))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -1210,7 +1422,7 @@ func TestAFourFigureCountIsGroupedWhereverAMessagePrintsOne(t *testing.T) {
 	for _, f := range files {
 		oversize = append(oversize, File{Path: f.Path, Size: wire.MaxSourceFileBytes + 1})
 	}
-	found := findingsFor(Limits(oversize), check.IDLimitFileSize)
+	found := findingsFor(Limits(oversize, "public"), check.IDLimitFileSize)
 	if len(found) != 1 {
 		t.Fatalf("findings = %v, want one", found)
 	}
@@ -1397,9 +1609,9 @@ func everyLimitFinding(t *testing.T) map[string]check.Finding {
 
 	out := map[string]check.Finding{}
 	for _, res := range []check.Results{
-		Limits(generatedFiles("public", 3_400, 1)),
-		Limits([]File{{Path: "public/big.bin", Size: 6_000_000}}),
-		Limits([]File{{Path: "a.bin", Size: 20_000_000}, {Path: "b.bin", Size: 20_000_000}}),
+		Limits(generatedFiles("public", 3_400, 1), "public"),
+		Limits([]File{{Path: "public/big.bin", Size: 6_000_000}}, "public"),
+		Limits([]File{{Path: "a.bin", Size: 20_000_000}, {Path: "b.bin", Size: 20_000_000}}, "public"),
 	} {
 		for _, f := range res.Findings {
 			out[f.CheckID] = f
@@ -1413,13 +1625,13 @@ func everyLimitFinding(t *testing.T) map[string]check.Finding {
 	for _, id := range limitIDs {
 		if _, ok := out[id]; !ok {
 			t.Fatalf("no fixture produced a finding for %s — a row over this map would "+
-				"pass while covering three of the four", id)
+				"pass while covering only some of the limits", id)
 		}
 	}
 	return out
 }
 
-// TestThePackedFindingNamesEachFileOnce is the fourth limit's half of the
+// TestThePackedFindingNamesEachFileOnce is the packed limit's half of the
 // sized-path model.
 //
 // It used to lay its own table into the copy — a packed size, an on-disk

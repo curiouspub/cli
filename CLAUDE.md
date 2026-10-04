@@ -663,6 +663,13 @@ archive adds bytes of its own for every entry it holds, so a great many
 small files that do not compress can weigh more packed than they do on
 disk. The message says so, and names the files worth removing.
 
+One limit on what the BUILD produces is also checked here: a project
+whose public folder alone holds more than **1,000 files** is refused,
+because Astro copies that folder into the built site whole and the server
+refuses a site over 1,000 files. That folder's count is a floor on the
+site's, so once the folder is known the refusal is certain rather than a
+guess; everything else the build emits only the server can count.
+
 These are stated here because they are useful to know before you try. The
 client checks them so you get a fast, local, specific answer instead of a
 failed upload — but **the client is not the boundary.** Every one of them
