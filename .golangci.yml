@@ -1,0 +1,45 @@
+# golangci-lint configuration, in the version 2 schema.
+#
+# LINT GATES, OVER TWO CLASSES OF FINDING AND NO OTHERS: declarations
+# nothing uses (unused), and staticcheck's correctness checks (its SA
+# family). Every other linter is off, and the reason is a measurement
+# rather than a preference.
+#
+# Measured 2026-10-05 with golangci-lint 2.14.0: the linter's default set
+# was run over this tree with every finding printed, and all three CI legs
+# reported the same 110.
+#
+#   - errcheck: 93, and every one was false. Each was a write to a
+#     terminal or a report stream that the program cannot act on when it
+#     fails, where the exit status already carries the verdict, or a Close
+#     on something opened only for reading. errcheck cannot tell a Close
+#     that could lose a write from one that cannot, by the name it reads,
+#     so there is no narrower form of it to keep.
+#   - staticcheck's style families (S1, ST and QF): 10. Nine were rewrites
+#     of code that already reads clearly. The tenth would have done damage:
+#     it asked for a fmt.Sprintf("%s", value) to become the value itself,
+#     inside the positive control of a redaction test, where formatting
+#     through that verb is the very path the control exists to run.
+#   - unused and the SA family: 7, and all signal. Four dead declarations
+#     and one deprecated call were fixed. Two lines that exist to prove
+#     something stay, each with an annotation on the line saying what it
+#     proves and why the linter is wrong about it.
+#
+# So the classes that are off produced nothing worth changing and one
+# change that would have weakened a test; the classes that are on produced
+# nothing else. govet and ineffassign, the rest of the default set,
+# reported nothing; vet runs anyway, as its own step of make ci.
+#
+# WHAT THIS DOES NOT SEE: an unchecked error is not linted at all.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      # The correctness checks only, for the reason above.
+      checks:
+        - "SA*"
