@@ -174,6 +174,75 @@ func TestCaseCollisionComparesTheWholePath(t *testing.T) {
 	}
 }
 
+// TestCaseCollisionTextIsConditionalOnReachingTheSite pins the words of
+// the warning, because the claim in them is the whole point of it.
+//
+// The detector runs over EVERY walked path, including files that never
+// reach the site — two components under the source folder, say — so the
+// text cannot say what WILL happen to the names. It says what happens
+// IF they are published: each spelling is kept as its own file at its
+// own address, and an address has to match its file's capitalisation
+// exactly. The row also refuses the two phrases that made the earlier
+// text false: a claim that the names would collide, and a claim that the
+// site would serve whichever of them survived. Both the two-name and
+// the three-name group are read, because the count is spelled differently
+// in each and the Message is built from it.
+//
+// The expected strings are literals, and the actual ones come from the
+// function's own output, so the row can neither copy the text it checks
+// nor pass on a text it never read.
+//
+// REQUIRED MUTATION, run 2026-10-04: six edits to the function, each
+// run against this row alone and each restored from a copy compared
+// byte for byte. The earlier Message restored; the earlier Next
+// restored; the count's two words swapped; "capitalisation" spelled with
+// a z; "or they collide" appended to the Next; the Message's trailing
+// colon removed. Every one reds both subtests, and none reds only one.
+func TestCaseCollisionTextIsConditionalOnReachingTheSite(t *testing.T) {
+	const wantNext = "If they end up on the site, each is its own address, and a link has to " +
+		"match its capitalisation exactly. If they are meant to be one file, keep one; " +
+		"otherwise rename one so the names differ by more than case."
+
+	for _, tc := range []struct {
+		name        string
+		paths       []string
+		wantMessage string
+	}{
+		{
+			name:        "two names",
+			paths:       []string{"README.md", "readme.md"},
+			wantMessage: "2 file names differ only in capitalisation:",
+		},
+		{
+			name:        "three names",
+			paths:       []string{"README.md", "Readme.MD", "readme.md"},
+			wantMessage: "3 file names differ only in capitalisation:",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := collisionFindings(tc.paths)
+			if len(got) != 1 {
+				t.Fatalf("findings = %d, want one group: %v", len(got), got)
+			}
+			f := got[0]
+			if f.Message != tc.wantMessage {
+				t.Errorf("Message = %q, want %q", f.Message, tc.wantMessage)
+			}
+			if f.Next != wantNext {
+				t.Errorf("Next = %q, want %q", f.Next, wantNext)
+			}
+			for field, text := range map[string]string{"Message": f.Message, "Next": f.Next} {
+				folded := strings.ToLower(text)
+				for _, banned := range []string{"collid", "whichever the platform kept"} {
+					if strings.Contains(folded, banned) {
+						t.Errorf("%s = %q, which contains %q — a claim the detector cannot make", field, text, banned)
+					}
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------
 // The key charset — the hard stop
 // ---------------------------------------------------------------------
