@@ -124,6 +124,37 @@ jobs:
         shell: pwsh
         run: choco install make --version=4.4.1 -y --no-progress
 
+      # golangci-lint, AT AN EXACT VERSION, on every leg, because the lint
+      # target is a step of make ci and make ci is what every leg runs.
+      # Until this step existed no leg had the linter: the target's skip
+      # line was printed inside every make ci step, and lint ran nowhere.
+      # The target now refuses that skip on CI, so a leg this step does not
+      # reach fails at lint rather than passing it.
+      #
+      # THROUGH THE GO TOOLCHAIN rather than a release download. An install
+      # at an exact module version is checked against the checksum database
+      # this job's Go is configured with, so the version below pins the
+      # content and not only the name. The linter is then built by the same
+      # Go this leg tests with, and that matters in one direction: a linter
+      # built by an older Go cannot type-check a newer one's standard
+      # library, and fails on files nobody touched. What it costs is a build
+      # of the linter on every run of every leg.
+      #
+      # THE VERSION MOVES BY HAND. The scheduled update policy bumps action
+      # references and cannot see a version written in a line of shell.
+      #
+      # THE VERSION IT PRINTS is the record of which linter the leg ran: the
+      # lint target runs whichever golangci-lint is first on PATH, and this
+      # line says which one that was. Built without cgo, as everything this
+      # module builds is, so no leg's C toolchain takes part.
+      - name: install golangci-lint
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+          golangci-lint --version
+
       - name: make ci
         shell: bash
         run: make ci
