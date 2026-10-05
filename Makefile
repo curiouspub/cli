@@ -223,11 +223,39 @@ fmt:
 		exit 1; \
 	fi
 
-# lint is a no-op until a linter is actually configured for this repo —
-# it must never fail ci for the reason "no linter is installed".
+# lint runs golangci-lint over the whole module.
+#
+# ON CI IT IS INSTALLED, SO AN ABSENT LINTER IS A FAILURE. This comment
+# used to say the opposite: that lint must never fail ci for the reason
+# "no linter is installed". While that held, no workflow installed one,
+# every leg printed the skip line below inside its make ci step, and lint
+# ran nowhere with nothing to say so but that line. The workflow now
+# installs the linter at an exact version on every leg before make ci, so
+# on CI there is nothing to tolerate: a skip there would be this target
+# reporting that it ran when it did not. CI is told apart the way
+# guard-a-branch-to-work-on tells it apart, by a CI variable that is set
+# and not empty.
+#
+# ON A MACHINE WITHOUT IT, it still skips, and says so. The linter is not
+# a build dependency of this module, and a contributor has no reason to
+# hold it. The skip line is kept word for word because it is what a CI log
+# is searched for to show the linter did not run, and a reworded skip
+# would make that search find nothing whether or not it ran.
+#
+# EVERY FINDING IS PRINTED. By default the linter caps how many findings
+# it prints per linter and how many share one message, and keeps one
+# finding per line, so a new finding can land inside a group it has
+# already collapsed and the count it prints does not move. A report that
+# drops findings cannot be read as a list of them; these flags turn all
+# three reductions off.
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./...; \
+		golangci-lint run --max-issues-per-linter=0 --max-same-issues=0 --uniq-by-line=false ./...; \
+	elif [ -n "$$CI" ]; then \
+		echo "golangci-lint is not installed, and on CI that is a failure rather than a skip."; \
+		echo "The workflow installs it at an exact version before make ci runs, so if it"; \
+		echo "is missing here, that step did not run or did not put it on PATH."; \
+		exit 1; \
 	else \
 		echo "golangci-lint not installed; skipping lint"; \
 	fi

@@ -126,7 +126,7 @@ func TestUnknownFieldsRenderKeysAndNeverValues(t *testing.T) {
 	// ...any parameter, which is exactly where vet cannot look either.
 	var asAny any = loaded
 	renderings := map[string]string{
-		"%s of the config":         fmt.Sprintf("%s", asAny),
+		"%s of the config":         fmt.Sprintf("%s", asAny), //nolint:staticcheck // the wrong verb is the point: a debug print through an any is how a secret would leak, vet cannot see it, and this row proves it does not leak
 		"%v of the config":         fmt.Sprintf("%v", loaded),
 		"%+v of the config":        fmt.Sprintf("%+v", loaded),
 		"%v of the value":          fmt.Sprintf("%v", *loaded),

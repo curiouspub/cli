@@ -846,40 +846,6 @@ func TestNamedURLConstantsStayUnderTheCeiling(t *testing.T) {
 // Guard 3: no private citation in a source comment.
 // ---------------------------------------------------------------------
 
-// loadCitationPatterns reads and compiles every pattern in the committed
-// manifest. It genuinely reads the file on every run rather than caching
-// a copy of its contents in this package: the required proof for this
-// guard is that deleting a line from the manifest measurably changes what
-// the guard can see, and a guard that read its own hardcoded copy of the
-// patterns would fail that proof while still going green on the day
-// nobody expects it to.
-func loadCitationPatterns(t *testing.T, root string) []*regexp.Regexp {
-	t.Helper()
-	path := filepath.Join(root, "scripts", "citation-patterns.txt")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-
-	declared, err := rulefile.Parse("scripts/citation-patterns.txt", string(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var patterns []*regexp.Regexp
-	for _, rule := range declared {
-		re, err := regexp.Compile(rule.Text)
-		if err != nil {
-			t.Fatalf("scripts/citation-patterns.txt:%d: %s is not a pattern this guard can "+
-				"compile: %v", rule.Line, rule.ID, err)
-		}
-		patterns = append(patterns, re)
-	}
-	if len(patterns) == 0 {
-		t.Fatal("scripts/citation-patterns.txt contains no patterns — this guard would silently pass")
-	}
-	return patterns
-}
-
 // loadVendorTerms reads the provider and service vocabulary this
 // repository may not name in authored text. Read on every run, no cached
 // copy, for the reason every rule file here is: deleting a line has to

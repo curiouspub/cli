@@ -179,32 +179,44 @@ func TestEveryGitInvocationGoesThroughTheDeadline(t *testing.T) {
 	const wrapped = "runInputNow"
 	const wrapper = "runInput"
 
+	// EVERY NON-TEST FILE IN THE DIRECTORY IS PARSED, whatever its build
+	// constraint, so a caller in a file built only for another platform is
+	// still seen. A package loader would answer for the host's build alone,
+	// and would add a dependency this module does not otherwise need.
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parsing this package: %v", err)
+		t.Fatalf("listing this package: %v", err)
+	}
+	var files []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+		files = append(files, file)
 	}
 
 	callers := map[string]int{}
 	scanned := 0
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			var enclosing string
-			ast.Inspect(file, func(n ast.Node) bool {
-				if fd, ok := n.(*ast.FuncDecl); ok {
-					enclosing = fd.Name.Name
-				}
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != wrapped {
-					return true
-				}
-				scanned++
-				callers[enclosing]++
+	for _, file := range files {
+		var enclosing string
+		ast.Inspect(file, func(n ast.Node) bool {
+			if fd, ok := n.(*ast.FuncDecl); ok {
+				enclosing = fd.Name.Name
+			}
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != wrapped {
 				return true
-			})
-		}
+			}
+			scanned++
+			callers[enclosing]++
+			return true
+		})
 	}
 
 	if scanned == 0 {

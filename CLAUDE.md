@@ -331,6 +331,51 @@ YAML is a step nobody can run before pushing.
 - `make fmt` `make vet` `make test` `make build` — `ci` runs them in that
   order, formatting first, so a formatting failure is not discovered
   after a five-minute suite.
+- **`make lint` GATES, over two classes of finding and no others, and
+  that is a ruling rather than a default** (2026-10-05). The workflow
+  installs golangci-lint at an exact version on every leg, through the Go
+  toolchain, and `lint` is a step of `make ci`, so a finding reds every
+  leg. On CI an absent linter is a failure, not a skip; on a machine
+  without it the target skips and says so. `.golangci.yml` enables
+  `unused` and staticcheck's correctness checks, and nothing else.
+
+  **Why those two.** The linter's default set was run over this tree with
+  every finding printed, and all three legs reported the same 110.
+  errcheck gave 93, and every one was false: a write to a terminal or a
+  report stream the program cannot act on when it fails, where the exit
+  status already carries the verdict, or a Close on something opened only
+  for reading. staticcheck's style families gave 10: nine rewrites of code
+  that already reads clearly, and one that would have done damage, asking
+  for a `fmt.Sprintf("%s", value)` inside a redaction test's positive
+  control to become the value itself, which would stop the control
+  running the path it exists for. The two classes kept gave 7, and every
+  one was signal: four dead declarations and a deprecated call, which
+  were fixed, and two lines that exist to prove something.
+
+  **Why a gate rather than advice.** `lint` runs inside `make ci`, on
+  every leg of every push. A step there whose exit code decides nothing
+  is a decoration, by this file's own rule: it spends its runtime on every
+  run, and while it is green its output is a log nobody reads. Advice is
+  honest where a person runs the linter and reads it; inside the gate it
+  is a cost with no consequence.
+
+  **The two annotations, and what they protect.** Each is a
+  `//nolint:<linter> // <reason>` on the line it excuses, so adding a
+  third is a reviewable change with its reason beside it, never a quiet
+  widening of the configuration:
+
+  - the `%s` of a whole config, through an `any`, in the unknown-fields
+    leak test. The verb is wrong for the type on purpose: a debug print
+    through an `any` is how a secret would leak, vet cannot see that path,
+    and the row exists to prove it does not leak;
+  - the shared floor for a stall-window leg with nothing recorded.
+    Nothing uses it today, by design: a refusal tells a caller to pass it,
+    and a guard polices that name, so deleting it would leave both naming
+    nothing.
+
+  **What it does not see:** an unchecked error is not linted at all.
+  errcheck cannot tell a Close that could lose a write from one that
+  cannot by the name it reads, so that class stays with review.
 - **`make surface-check` is the one check `ci` cannot carry, and the
   reason is the shape of its subject rather than its cost.** There is no
   push range in a working copy: a checkout is one state, and that check is
@@ -379,6 +424,14 @@ YAML is a step nobody can run before pushing.
   pull request was `CLEAN`, and the tool still refused. The reflex it
   invites is `--admin`, which would merge past the very queue this
   ruleset exists to enforce.
+
+  **The queue refuses to enqueue a pull request whose head commit carries
+  a failing run of a required check, even when another run of that check
+  on the same commit is green** — observed 2026-10-05: the push-event run
+  and the pull-request run both report `ci (windows-latest)`, and with the
+  first red and the second green the enqueue was refused with *"Pull
+  request has failing required statuses and Pull request Required status
+  check "ci (windows-latest)" is failing"*.
 
   **The seven required checks, spelled exactly as GitHub names them:**
 
