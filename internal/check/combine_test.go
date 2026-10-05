@@ -46,6 +46,7 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 	limits := Results{
 		Manifest: Manifest{
 			{CheckID: IDLimitFiles},
+			{CheckID: IDLimitPublicFiles},
 			{CheckID: IDLimitFileSize},
 			{CheckID: IDLimitTotal},
 			{CheckID: IDLimitPacked, Outcome: Declined, Kind: ByDesign, Reason: "nothing packed yet"},
@@ -81,7 +82,7 @@ func TestCombineMergesProducersIntoOneOrderedResult(t *testing.T) {
 	wantManifest := []string{
 		IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat, IDLocalhost,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
-		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
+		IDLimitFiles, IDLimitPublicFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}
 	if rows := ids(got.Manifest()); !reflect.DeepEqual(rows, wantManifest) {
 		t.Errorf("manifest = %v, want the declared order %v", rows, wantManifest)
@@ -231,6 +232,7 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 			{CheckID: IDCaseCollision},
 			{CheckID: IDPathCharset},
 			{CheckID: IDLimitFiles},
+			{CheckID: IDLimitPublicFiles},
 			{CheckID: IDLimitFileSize},
 			{CheckID: IDLimitTotal},
 			{CheckID: IDLimitPacked},
@@ -247,7 +249,7 @@ func TestCombineDoesNotDisturbTheProducersItWasGiven(t *testing.T) {
 	if rows := ids(producer.Manifest); !reflect.DeepEqual(rows, []string{
 		IDLocalhost, IDAstroDep, IDLockfile, IDPagesDir, IDBuildFormat,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
-		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
+		IDLimitFiles, IDLimitPublicFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}) {
 		t.Errorf("the caller's manifest was reordered: %v", rows)
 	}
@@ -273,7 +275,7 @@ func TestCoverageGapsReportsBothDirections(t *testing.T) {
 	wantMissing := []string{
 		IDLockfile, IDPagesDir, IDBuildFormat,
 		IDSymlinks, IDCaseCollision, IDPathCharset,
-		IDLimitFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
+		IDLimitFiles, IDLimitPublicFiles, IDLimitFileSize, IDLimitTotal, IDLimitPacked,
 	}
 	if !reflect.DeepEqual(missing, wantMissing) {
 		t.Errorf("missing = %v, want %v in the declared order", missing, wantMissing)

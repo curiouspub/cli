@@ -80,7 +80,7 @@ func TestCombinedCoverageEqualsTheDeclaredUniverse(t *testing.T) {
 		t.Fatalf("walking an empty directory: %v", err)
 	}
 
-	combined, err := check.Combine(engine, tree.Results, pack.Limits(tree.Files))
+	combined, err := check.Combine(engine, tree.Results, pack.Limits(tree.Files, pack.DefaultNameScope.Public))
 	if err != nil {
 		t.Fatalf("combining the producers: %v", err)
 	}

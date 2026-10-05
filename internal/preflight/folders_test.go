@@ -129,7 +129,7 @@ func TestResolveFoldersFallsBackAndSaysSo(t *testing.T) {
 			if !strings.Contains(f.Message, "astro.config.mjs") || !strings.Contains(f.Message, tc.reason) {
 				t.Errorf("Message = %q, want it to name the config and say %q", f.Message, tc.reason)
 			}
-			if !strings.Contains(f.Message, "checked under public/ instead") {
+			if !strings.Contains(f.Message, "checked and files counted under public/ instead") {
 				t.Errorf("Message = %q, want it to name the fallback", f.Message)
 			}
 			if len(got.Results.Manifest) != 0 {

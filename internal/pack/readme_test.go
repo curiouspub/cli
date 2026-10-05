@@ -138,8 +138,9 @@ func humanMB(n int) string {
 	return strconv.Itoa(n / 1_000_000)
 }
 
-// TestReadmeLimitsMatchWireConstants holds the four local limits the
-// README states to the four wire.Max* constants they are read from,
+// TestReadmeLimitsMatchWireConstants holds the four source limits the
+// README states, and the output file count the client also checks locally
+// for the public folder, to the wire.Max* constants they are read from,
 // rather than to a second, hand-typed copy of them.
 //
 // EACH CONSTANT IS BOUND TO ITS OWN FIGURE ON ITS OWN LINE, and the
@@ -159,6 +160,7 @@ func TestReadmeLimitsMatchWireConstants(t *testing.T) {
 		{"MaxSourceFileBytes", humanMB(wire.MaxSourceFileBytes) + " MB"},
 		{"MaxSourceTotalBytes", humanMB(wire.MaxSourceTotalBytes) + " MB"},
 		{"MaxPackedBytes", humanMB(wire.MaxPackedBytes) + " MB"},
+		{"MaxOutputFiles", humanCount(wire.MaxOutputFiles) + " files"},
 	}
 	lines := strings.Split(readme, "\n")
 	for _, c := range cases {

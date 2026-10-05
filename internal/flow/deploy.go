@@ -459,7 +459,7 @@ func Deploy(ctx context.Context, deps DeployDeps) (*Handoff, error) {
 	//
 	// The same gate is what makes the check list below checkable from
 	// outside: forget one, and the report cannot be built at all.
-	limits := pack.Limits(tree.Files)
+	limits := pack.Limits(tree.Files, folders.Public)
 	report, err := check.Combine(
 		preflight.Run(deployChecks(tree.Files), preflight.OSFileSystem{}, root),
 		tree.Results,

@@ -238,15 +238,19 @@ archive adds bytes of its own for every entry it holds, so a great many
 small, incompressible files can weigh more once packed than they do on
 disk — `curious` names the files worth removing when that happens.
 
-Two more numbers bound what the build produces, and only the server can
-check them, because the output does not exist until the build has run:
+Two more numbers bound what the build produces, and the server checks
+both once the build has run:
 
 - `MaxOutputFiles` — 1,000 files at most.
 - `MaxOutputTotalBytes` — 30 MB in total, counting the small badge added
   to each HTML page.
 
-A site over either is refused when its build finishes, with a message
-giving the size it reached and the limit.
+One part of the first is known before anything is sent. Astro copies the
+public folder into the site whole, so `curious` counts that folder
+locally and refuses a project whose public folder alone holds more than
+1,000 files. Everything else the build emits, only the server can count.
+A site over either limit is refused with a message giving the size it
+reached and the limit.
 
 ## Where the login lives
 
@@ -487,6 +491,17 @@ _The message here is assembled at run time, so there is no fixed sentence to quo
 It names how many files the project holds and how many one deploy may
 carry, then the handful of directories holding the most of them — so you
 have somewhere to point an ignore rule rather than a list to read.
+
+### limit-public-files
+
+**pre-flight.** A person is having the project checked before anything leaves the machine.
+
+_The message here is assembled at run time, so there is no fixed sentence to quote — see "A note on composed messages," below._
+
+It names the public folder, how many files it holds and the most a site
+can hold, then the handful of directories inside it holding the most
+files. The build copies that folder into the site whole, so a folder over
+the limit is a site over the limit before anything else is added.
 
 ### limit-packed
 
@@ -843,7 +858,7 @@ and the message says so rather than blaming your network.
 
 ### A note on composed messages
 
-Eighteen (id, stage) pairs build their message from the situation at run
+Nineteen (id, stage) pairs build their message from the situation at run
 time rather than writing one fixed sentence, and are deliberately not
 templated above: a hand-typed guess at their shape would be wording
 nothing checks, which is the exact fragility this whole section exists
@@ -856,7 +871,7 @@ to end. They are:
   `upload-refused-unexplained`, `upload-signature-mismatch`,
   `upload-stalled`.
 - **pre-flight** — `limit-file-size`, `limit-files`, `limit-packed`,
-  `limit-total`, `path-charset`.
+  `limit-public-files`, `limit-total`, `path-charset`.
 - **this machine** — `project-dir-missing`, `project-dir-unreadable`,
   `project-path-not-a-directory`.
 

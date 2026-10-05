@@ -236,6 +236,7 @@ func TestCombineIsIndependentOfArgumentOrder(t *testing.T) {
 			{CheckID: IDCaseCollision},
 			{CheckID: IDPathCharset},
 			{CheckID: IDLimitFiles},
+			{CheckID: IDLimitPublicFiles},
 			{CheckID: IDLimitFileSize},
 			{CheckID: IDLimitTotal},
 			{CheckID: IDLimitPacked},

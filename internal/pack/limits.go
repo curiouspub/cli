@@ -14,11 +14,12 @@ import (
 	"github.com/curiouspub/cli/pkg/wire"
 )
 
-// The local limits: how many files a project may send, how big any one
-// of them may be, how big they may be together, and how big the archive
-// may be once they are packed.
+// The local limits: how many files a project may send, how many of them
+// may sit in the public folder, how big any one of them may be, how big
+// they may be together, and how big the archive may be once they are
+// packed.
 //
-// THE FIRST THREE ARE MEASURED BEFORE ANYTHING IS PACKED, and that
+// THE FIRST FOUR ARE MEASURED BEFORE ANYTHING IS PACKED, and that
 // ordering is the product rather than an optimisation. Compressing 30 MB
 // to discover it was never going to be allowed spends the user's time at
 // the one point in the flow where they are watching a progress line, and
@@ -64,6 +65,7 @@ const listedContributors = 5
 // place.
 var limitIDs = []string{
 	check.IDLimitFiles,
+	check.IDLimitPublicFiles,
 	check.IDLimitFileSize,
 	check.IDLimitTotal,
 	check.IDLimitPacked,
@@ -85,8 +87,8 @@ type Prepared struct {
 	Receipt string
 }
 
-// Limits measures the three source limits over a walked file list and
-// reports all four limit rows.
+// Limits measures the four source limits over a walked file list and
+// reports all five limit rows.
 //
 // IT REPORTS THE PACKED ROW TOO, as a decline, and that is what makes it
 // usable for the report a person sees before anything is packed. The
@@ -99,10 +101,21 @@ type Prepared struct {
 // it costs: nothing outside the check went wrong, nothing about it is
 // the user's to fix, and a surface that stopped to ask somebody about it
 // would be asking them to decide about the passage of time.
-func Limits(files []File) check.Results {
+//
+// publicDir is the project's public folder as the deploy flow resolved
+// it from the project's config: project-relative and slash-separated,
+// with "." meaning the project root. It is an argument rather than
+// something read here because the folder is a fact about the config,
+// which the caller has already settled, and a second reading in this
+// package could disagree with the one the walk used.
+func Limits(files []File, publicDir string) check.Results {
 	findings := sourceFindings(files)
+	if f, over := publicCountFinding(files, publicDir); over {
+		findings = append(findings, f)
+	}
 	manifest := check.Manifest{
 		answered(check.IDLimitFiles),
+		answered(check.IDLimitPublicFiles),
 		answered(check.IDLimitFileSize),
 		answered(check.IDLimitTotal),
 		declined(check.IDLimitPacked, check.ByDesign,
@@ -119,7 +132,7 @@ func Limits(files []File) check.Results {
 //
 // # Why the measuring moved out
 //
-// This used to run the three source limits ITSELF and pack only if they
+// This used to run the source limits ITSELF and pack only if they
 // came back clean — one function, so a caller could not get the order
 // wrong. That shape cannot serve the deploy sequence, where the login
 // sits between the limits and the pack, and the reason is not merely the
@@ -137,7 +150,7 @@ func Limits(files []File) check.Results {
 // # What replaced it, and what it still guarantees
 //
 // The verdict arrives as an ARGUMENT. This refuses to pack unless the
-// report it is handed both COVERS the three source limits and carries no
+// report it is handed both COVERS the four source limits and carries no
 // finding — so the rule the one-function shape existed to protect is
 // still a property of the type rather than of a caller's memory: nothing
 // is packed that the limits refused, and no receipt is printed above a
@@ -254,9 +267,11 @@ func declined(id string, kind check.DeclineKind, reason string) check.Status {
 	return row
 }
 
-// sourceFindings is the three pre-pack limits, in declared order.
+// sourceFindings is the pre-pack limits that need no public folder, in
+// declared order; the public-folder count is added beside them by Limits,
+// which holds the folder.
 //
-// ALL THREE ARE EVALUATED, ALWAYS. A project with four oversize files
+// ALL OF THEM ARE EVALUATED, ALWAYS. A project with four oversize files
 // AND too many of them learns both facts from one run; reporting the
 // first and stopping is the round-trip this whole surface exists to
 // prevent.
@@ -307,6 +322,83 @@ func fileCountFinding(files []File) (check.Finding, bool) {
 		Why:       alreadyExcluded(),
 		Next: "Add whatever the site does not need to .gitignore, then run " +
 			"`curious deploy` again.",
+	}, true
+}
+
+// publicCountFinding is the too-many-files-in-the-public-folder hard stop.
+//
+// THE COUNT IS OVER THE WALK'S LIST UNDER THE PUBLIC FOLDER, which is the
+// list that would be packed: files the walk excluded and links it skipped
+// are not in it. That can only undercount what the build will find, and an
+// undercount misses a refusal rather than inventing one — the direction
+// this client is allowed to be wrong in, since the server counts the built
+// site itself.
+//
+// THE STOP IS CERTAIN, not a guess, because Astro copies the public folder
+// into the built site whole, dotfiles included. A site therefore holds at
+// least as many files as that folder does, whatever else the build adds,
+// and a folder over the most a site can hold is a deploy that can never
+// land.
+//
+// STRICTLY GREATER, so a folder holding exactly the most a site can hold
+// passes: the contract's number is a maximum, and refusing the maximum
+// would turn a limit into a limit less one.
+//
+// WHICH FILES ARE "UNDER THE FOLDER" IS ASKED OF publishedVerbatim, the
+// one definition the name checks already use, rather than answered by a
+// second prefix test here: two predicates for one folder would disagree
+// on a sibling such as public-old/ the day one of them changed.
+//
+// THE FOLDER COMES FROM THE CALLER for the reason Limits gives: it is a
+// fact about the project's config, settled once before the walk.
+func publicCountFinding(files []File, publicDir string) (check.Finding, bool) {
+	inside := make(map[string]bool)
+	for _, p := range publishedVerbatim(pathsOfFiles(files), publicDir) {
+		inside[p] = true
+	}
+	var public []File
+	for _, f := range files {
+		if inside[f.Path] {
+			public = append(public, f)
+		}
+	}
+	if len(public) <= wire.MaxOutputFiles {
+		return check.Finding{}, false
+	}
+
+	// The project root as the public folder has no "out of it" to move
+	// files to, so its way past is a narrower folder rather than a move.
+	var headline, next string
+	if publicDir == "." {
+		headline = fmt.Sprintf("The project itself is the public folder, so every one of its %s files goes into the site, and a site can hold at most %s.",
+			units.Count(len(public)), units.Count(wire.MaxOutputFiles))
+		next = "Set publicDir in your Astro config to a folder holding only what the site " +
+			"serves, or add what it does not need to .gitignore, then run `curious deploy` again."
+	} else {
+		headline = fmt.Sprintf("The public folder, %s/, holds %s files, and a site can hold at most %s.",
+			publicDir, units.Count(len(public)), units.Count(wire.MaxOutputFiles))
+		next = "Files the site does not serve do not belong in the public folder. Move them " +
+			"out of it (into the source folder, if the build reads them) or add them to " +
+			".gitignore, then run `curious deploy` again."
+	}
+
+	var b strings.Builder
+	b.WriteString(headline)
+	b.WriteString("\n\nThe directories in it holding the most files:\n")
+	for _, d := range topDirectories(public) {
+		fmt.Fprintf(&b, "\n  %8s  %s", units.Count(d.count), d.dir)
+	}
+
+	return check.Finding{
+		CheckID:   check.IDLimitPublicFiles,
+		FailureID: string(check.FamilyLimitPublicFiles),
+		Severity:  check.SeverityHardStop,
+		Message:   headline,
+		What:      b.String(),
+		Why: "Astro copies the public folder into the built site whole, so the site would " +
+			"have at least that many files, and curious.pub refuses a site with more than " +
+			units.Count(wire.MaxOutputFiles) + ". " + alreadyExcluded(),
+		Next: next,
 	}, true
 }
 
@@ -370,7 +462,7 @@ func fileSizeFinding(files []File) (check.Finding, bool) {
 // pays overhead it cannot earn back. TestAnArchiveOverTheCapIsRefused-
 // WithNoReceiptAboveIt builds the case — 3,000 files of 10,000 bytes is
 // exactly 30,000,000 bytes of source and packs to 32,257,024 — and the
-// fourth limit below exists for precisely that gap. The alternative — measuring what
+// packed-size limit below exists for precisely that gap. The alternative — measuring what
 // the upload would weigh — means packing first, which is exactly the
 // wait this check exists to spare somebody, and it means a project that
 // happens to compress well can be dozens of times over a limit the

@@ -87,9 +87,10 @@ const (
 	IDCaseCollision = "case-collision"
 	IDPathCharset   = "path-charset"
 
-	// The four the local limits own: how many files there are, how big
-	// the largest is, how big they are together, and how big the archive
-	// turned out once they were packed.
+	// The five the local limits own: how many files there are, how many
+	// of them sit in the public folder, how big the largest is, how big
+	// they are together, and how big the archive turned out once they were
+	// packed.
 	//
 	// THEY ARE IN THE UNIVERSE RATHER THAN OUTSIDE IT, and that was a
 	// decision with a real alternative. Leaving them out would work —
@@ -106,10 +107,11 @@ const (
 	// with no limit rows cannot be built at all, so a legitimate hard
 	// stop found before them would be a hard stop the program could not
 	// render.
-	IDLimitFiles    = "limit-files"
-	IDLimitFileSize = "limit-file-size"
-	IDLimitTotal    = "limit-total"
-	IDLimitPacked   = "limit-packed"
+	IDLimitFiles       = "limit-files"
+	IDLimitPublicFiles = "limit-public-files"
+	IDLimitFileSize    = "limit-file-size"
+	IDLimitTotal       = "limit-total"
+	IDLimitPacked      = "limit-packed"
 )
 
 // Finding is one pre-flight check's result: which check produced it, how
@@ -399,9 +401,10 @@ const (
 	FamilyLockfileWorkspace   FailureFamily = "lockfile-workspace"
 	FamilyLockfileMissing     FailureFamily = "lockfile-missing"
 
-	FamilyLimitFiles    FailureFamily = "limit-files"
-	FamilyLimitFileSize FailureFamily = "limit-file-size"
-	FamilyLimitTotal    FailureFamily = "limit-total"
-	FamilyLimitPacked   FailureFamily = "limit-packed"
-	FamilyPathCharset   FailureFamily = "path-charset"
+	FamilyLimitFiles       FailureFamily = "limit-files"
+	FamilyLimitPublicFiles FailureFamily = "limit-public-files"
+	FamilyLimitFileSize    FailureFamily = "limit-file-size"
+	FamilyLimitTotal       FailureFamily = "limit-total"
+	FamilyLimitPacked      FailureFamily = "limit-packed"
+	FamilyPathCharset      FailureFamily = "path-charset"
 )

@@ -100,7 +100,10 @@ func deploySiteDescription() string {
 			"network call at all. The client refuses a project with more than %d files, "+
 			"any single file over %d bytes, more than %d bytes of source in total, or an "+
 			"archive over %d bytes once packed — and the server checks every one of them "+
-			"again, so these are a fast local answer rather than the boundary. The build "+
+			"again, so these are a fast local answer rather than the boundary. The client "+
+			"also refuses, before any network call, a project whose public folder holds "+
+			"more than %d files: the build copies that folder into the site whole, so the "+
+			"server would refuse the site. The build "+
 			"must also produce no more than %d files and no more than %d bytes.\n\n"+
 			"WARNINGS DO NOT STOP A DEPLOY HERE. Anything the pre-flight checks found "+
 			"comes back in findings, with a severity on each, and the deploy goes ahead — "+
@@ -115,8 +118,8 @@ func deploySiteDescription() string {
 			"The address starts answering a little after the deploy is published, so opening "+
 			"it immediately may show a placeholder page.",
 		wire.MaxSourceFiles, wire.MaxSourceFileBytes, wire.MaxSourceTotalBytes,
-		wire.MaxPackedBytes, wire.MaxOutputFiles, wire.MaxOutputTotalBytes,
-		toolLoginStart)
+		wire.MaxPackedBytes, wire.MaxOutputFiles, wire.MaxOutputFiles,
+		wire.MaxOutputTotalBytes, toolLoginStart)
 }
 
 func deploySiteTool() Tool {

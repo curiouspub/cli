@@ -145,7 +145,7 @@ func fallBack(reason, source string) Folders {
 		Results: check.Results{Findings: []check.Finding{{
 			CheckID:  check.IDPathCharset,
 			Severity: check.SeverityWarning,
-			Message: fmt.Sprintf("%s, so file names were checked under %s/ instead.",
+			Message: fmt.Sprintf("%s, so file names were checked and files counted under %s/ instead.",
 				reason, DefaultPublicDir),
 			Why: "Astro copies the public folder into your site unchanged, so the names in " +
 				"it are the ones that have to be servable. If your public folder is somewhere " +
