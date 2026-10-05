@@ -260,6 +260,7 @@ func TestEveryErrorCodeConstantIsPinned(t *testing.T) {
 		"CodeBuildFailed":    "build_failed",
 		"CodeLimitReached":   "limit_reached",
 		"CodeStoreFull":      "store_full",
+		"CodeSiteWithdrawn":  "site_withdrawn",
 	}
 
 	declared := declaredErrorCodeValues(t)
@@ -620,6 +621,9 @@ func TestCarriesRetryAfterIsPinned(t *testing.T) {
 		// A full store reopens when someone empties it, at no time the
 		// server can name.
 		CodeStoreFull: false,
+		// A withdrawn site is never coming back, so there is no time to
+		// wait for.
+		CodeSiteWithdrawn: false,
 	}
 
 	listed := map[ErrorCode]bool{}
@@ -1172,6 +1176,8 @@ func TestStreamOnlyIsPinned(t *testing.T) {
 		CodeBuildFailed:    true,
 		CodeLimitReached:   true,
 		CodeStoreFull:      false,
+		// An HTTP refusal of the publish call, never a stream event.
+		CodeSiteWithdrawn: false,
 	}
 	for _, code := range AllErrorCodes {
 		want, stated := pinned[code]

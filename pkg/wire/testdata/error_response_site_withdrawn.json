@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "site_withdrawn",
+    "message": "This site has been withdrawn and will not be published again. Deploy again to publish a fresh one."
+  }
+}

@@ -249,13 +249,14 @@ var errorRouting = map[wire.ErrorCode]verifyRoute{
 	wire.CodeCapacityClosed: routeStop,
 
 	// NOT REACHABLE FROM A LOGIN. Two say how a build stopped and travel
-	// only on the build's event stream; the third is the publish step's
-	// full store. Stated because this table is keyed to the contract's
-	// list, and a code with no entry would be answered by a fallback
-	// nobody chose.
-	wire.CodeBuildFailed:  routeStop,
-	wire.CodeLimitReached: routeStop,
-	wire.CodeStoreFull:    routeStop,
+	// only on the build's event stream; the other two are the publish
+	// step's — its full store, and a withdrawn site. Stated because this
+	// table is keyed to the contract's list, and a code with no entry
+	// would be answered by a fallback nobody chose.
+	wire.CodeBuildFailed:   routeStop,
+	wire.CodeLimitReached:  routeStop,
+	wire.CodeStoreFull:     routeStop,
+	wire.CodeSiteWithdrawn: routeStop,
 
 	// The kill switch. Worth retrying later, and carrying no reset the
 	// server can honestly name — which is exactly why the contract's own

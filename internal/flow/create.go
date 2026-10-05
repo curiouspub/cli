@@ -88,9 +88,9 @@ var createRouting = map[wire.ErrorCode]createRoute{
 	wire.CodeForbidden: createStop,
 	wire.CodeNotFound:  createStop,
 	wire.CodeInternal:  createStop,
-	// THE PUBLISH STEP'S TWO CODES, declared here and not reachable from
-	// this call — the same shape the closed-capacity code already has.
-	// The create cannot receive them: they say a deploy is not in a
+	// TWO OF THE PUBLISH STEP'S CODES, declared here and not reachable
+	// from this call — the same shape the closed-capacity code already
+	// has. The create cannot receive them: they say a deploy is not in a
 	// publishable state, and this call is what brings a deploy into
 	// existence. Stated anyway, because the contract's list is what this
 	// table is keyed to, and a code with no entry would be answered by a
@@ -98,10 +98,14 @@ var createRouting = map[wire.ErrorCode]createRoute{
 	wire.CodeDeployFailed:   createStop,
 	wire.CodeDeployNotReady: createStop,
 	// Not reachable from this call either: two travel only on a build's
-	// event stream, and the third is the publish step's full store.
-	wire.CodeBuildFailed:  createStop,
-	wire.CodeLimitReached: createStop,
-	wire.CodeStoreFull:    createStop,
+	// event stream, and the other two are the publish step's — its full
+	// store, and a site that has been withdrawn, which only a publish can
+	// be told about because only a publish names a deploy whose site
+	// could have gone.
+	wire.CodeBuildFailed:   createStop,
+	wire.CodeLimitReached:  createStop,
+	wire.CodeStoreFull:     createStop,
+	wire.CodeSiteWithdrawn: createStop,
 }
 
 // deployCreator is the slice of the API client this step needs. It is

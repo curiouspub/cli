@@ -222,6 +222,11 @@ var publishRouting = map[wire.ErrorCode]publishRoute{
 	// fix, and trying again will not help until it has.
 	wire.CodeStoreFull: publishStop,
 
+	// The site this deploy belongs to has been withdrawn, and will not be
+	// published again. Terminal: asking again cannot bring it back, so
+	// this stops rather than inviting a retry.
+	wire.CodeSiteWithdrawn: publishStop,
+
 	// Not reachable from this call: both travel only on a build's event
 	// stream.
 	wire.CodeBuildFailed:  publishStop,
@@ -562,6 +567,20 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 			"curious.pub is at capacity and cannot publish sites right now. There is\n"+
 				"nothing to fix at this end and nothing here worth retrying. If it keeps\n"+
 				"happening, please get in touch.").Quoting(apiErr.Message)
+
+	case wire.CodeSiteWithdrawn:
+		// NO "NOTHING WAS DEPLOYED" LINE, and no retry advice. The deploy
+		// may have been live before its site was withdrawn, and this
+		// client cannot know which, so it does not claim either. Publishing
+		// again will not bring the site back; a fresh deploy is the way
+		// forward. It is a failure of this run, so it costs 1, and it is
+		// not the closed door.
+		return ui.NewFailure(
+			ui.IDSiteWithdrawn,
+			ui.StageAddresses,
+			"This deploy's site has been withdrawn.",
+			ui.Written("A withdrawn site is not published again.\n\nThe deploy is %s.", deployID), ui.NextFreshDeploy,
+			"Run `curious deploy` again to make a fresh one.").Quoting(apiErr.Message)
 
 	case wire.CodeInternal:
 		// The server failed, and its own message says to try again, so
