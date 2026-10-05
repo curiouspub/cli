@@ -1081,7 +1081,7 @@ const (
 	// caller passes its own and says why; this value is what a caller
 	// passes when its leg has nothing measured to reason from, and passing
 	// it is a statement about the RECORD rather than about the row.
-	unmeasuredLegFloor = 6 << 20
+	unmeasuredLegFloor = 6 << 20 //nolint:unused // unused by design: the floor for a leg with nothing recorded, which blockPointFloor's refusal tells a caller to pass and TestNoRowInheritsAFloorItDidNotState polices by this name
 
 	// drainTail is how much body is left after the pacing stops, to be
 	// drained at full speed. It matters for the reason the paced phase
