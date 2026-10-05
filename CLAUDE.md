@@ -425,6 +425,14 @@ YAML is a step nobody can run before pushing.
   invites is `--admin`, which would merge past the very queue this
   ruleset exists to enforce.
 
+  **The queue refuses to enqueue a pull request whose head commit carries
+  a failing run of a required check, even when another run of that check
+  on the same commit is green** — observed 2026-10-05: the push-event run
+  and the pull-request run both report `ci (windows-latest)`, and with the
+  first red and the second green the enqueue was refused with *"Pull
+  request has failing required statuses and Pull request Required status
+  check "ci (windows-latest)" is failing"*.
+
   **The seven required checks, spelled exactly as GitHub names them:**
 
   | required check |
