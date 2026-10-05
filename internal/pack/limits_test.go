@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -1547,22 +1546,6 @@ func noise(seed, size int64) []byte {
 // which of the four fields the author put it in.
 func wholeFinding(f check.Finding) string {
 	return strings.Join([]string{f.Message, f.What, f.Why, f.Next}, "\n")
-}
-
-// listedInOrder reports the first pair of names that appear in s out of
-// the order given, or the empty string when they all agree.
-func listedInOrder(s string, want []string) string {
-	positions := make([]int, len(want))
-	for i, w := range want {
-		positions[i] = strings.Index(s, w)
-		if positions[i] < 0 {
-			return fmt.Sprintf("%s is missing", w)
-		}
-	}
-	if !sort.IntsAreSorted(positions) {
-		return fmt.Sprintf("positions %v", positions)
-	}
-	return ""
 }
 
 func rowFor(t *testing.T, res check.Results, id string) check.Status {

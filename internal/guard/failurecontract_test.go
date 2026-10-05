@@ -88,7 +88,6 @@ type obligation struct {
 	where       string
 	field       string
 	expr        string
-	chain       string
 	values      []string // resolved possibilities; empty means unresolved
 	problem     string   // a structurally forbidden write or address-taking
 	binding     string   // reaching definitions for an obligation-ledger expression
@@ -1251,16 +1250,11 @@ func TestBuildTargetsKeepTheirOwnTypeInfoAndIncludeArm64(t *testing.T) {
 	}
 }
 
-// resolve reduces one argument expression to the finite set of values it
-// can carry, or to nothing at all — which is UNRESOLVED and fails.
-func resolve(site, field string, e ast.Expr, text func(parsedFile, ast.Node) string,
-	p parsedFile, kind string) obligation {
-	return resolveIn(site, field, e, text, p, kind, nil, 0)
-}
-
-// resolveIn carries the enclosing function, so a local name can be traced
-// to the statement that defined it, and a depth, so a cycle stops rather
-// than recursing forever. RECURSION FAILS CLOSED: past the bound the
+// resolveIn reduces one argument expression to the finite set of values it
+// can carry, or to nothing at all — which is UNRESOLVED and fails. It
+// carries the enclosing function, so a local name can be traced to the
+// statement that defined it, and a depth, so a cycle stops rather than
+// recursing forever. RECURSION FAILS CLOSED: past the bound the
 // obligation is unresolved, which is a visible failure.
 func resolveIn(site, field string, e ast.Expr, text func(parsedFile, ast.Node) string,
 	p parsedFile, kind string, within *ast.FuncDecl, depth int) obligation {
