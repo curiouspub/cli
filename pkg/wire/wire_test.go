@@ -88,6 +88,17 @@ func goldenCases() []goldenCase {
 			newEmpty: func() any { return &ErrorResponse{} },
 		},
 		{
+			name:    "ErrorResponseSiteWithdrawn",
+			fixture: "error_response_site_withdrawn.json",
+			value: &ErrorResponse{
+				Error: Error{
+					Code:    CodeSiteWithdrawn,
+					Message: "This site has been withdrawn and will not be published again. Deploy again to publish a fresh one.",
+				},
+			},
+			newEmpty: func() any { return &ErrorResponse{} },
+		},
+		{
 			// The deploy event stream's `error` event is a bare wire.Error
 			// (see DoneEvent's doc), so a stream-only code is pinned in the
 			// shape the stream actually carries it.
@@ -397,6 +408,7 @@ func TestAllErrorCodesOrder(t *testing.T) {
 		"rate_limited", "capacity_closed", "maintenance", "internal",
 		"deploy_failed", "deploy_not_ready",
 		"build_failed", "limit_reached", "store_full",
+		"site_withdrawn",
 	}
 	if !reflect.DeepEqual(AllErrorCodes, want) {
 		t.Fatalf("AllErrorCodes = %v, want %v — declaration order, as its doc states", AllErrorCodes, want)
@@ -425,6 +437,7 @@ func TestErrorCodeConstants(t *testing.T) {
 		{CodeBuildFailed, "build_failed"},
 		{CodeLimitReached, "limit_reached"},
 		{CodeStoreFull, "store_full"},
+		{CodeSiteWithdrawn, "site_withdrawn"},
 	}
 
 	if len(cases) != len(AllErrorCodes) {

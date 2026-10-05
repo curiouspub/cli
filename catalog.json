@@ -763,6 +763,20 @@
       ],
       "family": null,
       "headline": {
+        "addresses": "This deploy's site has been withdrawn."
+      },
+      "headline_reason": {},
+      "id": "site-withdrawn",
+      "stages": [
+        "addresses"
+      ]
+    },
+    {
+      "action": [
+        "FreshDeploy"
+      ],
+      "family": null,
+      "headline": {
         "this machine": "curious couldn't make a place to write the archive."
       },
       "headline_reason": {},

@@ -739,6 +739,12 @@ inside it.
 
 > curious.pub isn't taking this right now.
 
+### site-withdrawn
+
+**addresses.** A person is waiting for a finished deploy to be given its public address.
+
+> This deploy's site has been withdrawn.
+
 ### temp-dir-unusable
 
 **this machine.** A person is getting this machine ready before anything is sent: the project directory, where the login is kept, the API address or the temporary directory.

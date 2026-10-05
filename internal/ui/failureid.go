@@ -106,6 +106,7 @@ const (
 	IDPublishedAddressInvalid    FailureID = "published-address-invalid"
 	IDDeployUnknownToServer      FailureID = "deploy-unknown-to-server"
 	IDDeployNotCompletedByServer FailureID = "deploy-not-completed-by-server"
+	IDSiteWithdrawn              FailureID = "site-withdrawn"
 
 	// The waitlist, when the door is closed.
 	IDWaitlistDeclined      FailureID = "waitlist-declined"
@@ -171,7 +172,7 @@ var ActiveFailureIDs = []FailureID{
 	IDBuildFailedUnexplained,
 	IDBuildLogLost, IDBuildOutputRefused, IDPublishNotConfirmed,
 	IDPublishedAddressInvalid, IDDeployUnknownToServer,
-	IDDeployNotCompletedByServer,
+	IDDeployNotCompletedByServer, IDSiteWithdrawn,
 
 	IDWaitlistDeclined, IDWaitlistNeedsTerminal, IDWaitlistSignupFailed,
 

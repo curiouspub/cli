@@ -120,7 +120,7 @@ func TestDeployPublish_IsNeverRetried(t *testing.T) {
 	}
 }
 
-// TestDeployPublish_CarriesTheServersCodeThrough. The two codes this
+// TestDeployPublish_CarriesTheServersCodeThrough. The codes this
 // endpoint answers with are what a client switches on, so an *APIError
 // that lost one would send the caller back to reading prose — which is
 // the thing these codes exist to stop.
@@ -131,6 +131,7 @@ func TestDeployPublish_CarriesTheServersCodeThrough(t *testing.T) {
 	}{
 		{"the build is finished with", wire.CodeDeployFailed},
 		{"the build has not finished", wire.CodeDeployNotReady},
+		{"the site was withdrawn", wire.CodeSiteWithdrawn},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

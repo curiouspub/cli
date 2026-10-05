@@ -197,6 +197,19 @@ const (
 	// code carried opposite advice. A client could only tell them apart by
 	// reading the message, which this contract refuses to make anyone do.
 	CodeStoreFull ErrorCode = "store_full"
+
+	// CodeSiteWithdrawn means the site this deploy belongs to has been
+	// withdrawn — it expired, or its owner or the service took it down —
+	// and it will not be published again. It is terminal: publishing
+	// again will not bring it back, so a client should not advise a
+	// retry; a fresh deploy is the way forward. It carries no
+	// Retry-After, and it is an HTTP refusal, never a stream event.
+	//
+	// It is a code of its own because CodeDeployNotReady and
+	// CodeDeployFailed would each say something false: one would tell a
+	// client to wait, the other would tell a person their build was
+	// refused, and neither is true of a withdrawn site.
+	CodeSiteWithdrawn ErrorCode = "site_withdrawn"
 )
 
 // AllErrorCodes is every ErrorCode this contract defines, in declaration
@@ -226,6 +239,7 @@ var AllErrorCodes = []ErrorCode{
 	CodeBuildFailed,
 	CodeLimitReached,
 	CodeStoreFull,
+	CodeSiteWithdrawn,
 }
 
 // retryAfterCodes is the set behind CarriesRetryAfter. It is unexported

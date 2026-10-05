@@ -639,6 +639,39 @@ func TestEachRefusalHasItsOwnCopyAndItsOwnCost(t *testing.T) {
 			neverSay: []string{"Try again"},
 		},
 		{
+			// A withdrawn site is refused without the "nothing was
+			// deployed" line, and that is deliberate: the deploy may have
+			// been live before the site was withdrawn, and this client
+			// cannot know which. Saying nothing was deployed would be
+			// asserting a thing it has no way to check. The cost is 1, a
+			// failure of this run, and not the closed-door cost: the
+			// capacity and maintenance rows in this same table exit 3
+			// through the same harness, which is what makes the 1 here a
+			// measurement and not a default.
+			//
+			// REQUIRED MUTATION, run 2026-10-05: each of these was made
+			// to this code's copy alone and this row run, and each reds.
+			// Wrapping the failure in the closed-door constructor reds on
+			// "exit code = 3, want 1". Putting the nothing-was-deployed
+			// line into the body reds on neverSay, which names it.
+			// Replacing the fresh-deploy
+			// text with "Try again in a moment." reds on says (the fresh
+			// deploy line never appeared) and on neverSay. Dropping the
+			// quoted server message reds on says. Separately, changing the
+			// next action to a wait leaves THIS row green, because the
+			// terminal output does not print the action; the generated
+			// catalog is what reds for that, and the row does not claim it.
+			name: "the site was withdrawn",
+			outcome: fails(http.StatusGone, wire.CodeSiteWithdrawn,
+				"This site has been withdrawn and will not be published again."),
+			wantCode: 1,
+			says: []string{"This deploy's site has been withdrawn.",
+				"A withdrawn site is not published again.", "deploy-1",
+				"This site has been withdrawn and will not be published again.",
+				"Run `curious deploy` again to make a fresh one."},
+			neverSay: []string{"Try again", nothingDeployed},
+		},
+		{
 			// REQUIRED MUTATION: restore "nothing here worth retrying" on
 			// this code, and this row reds on its neverSay.
 			name: "the server failed, and says to try again",
