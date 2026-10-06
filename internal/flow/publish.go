@@ -186,14 +186,16 @@ const (
 // enumeration rather than to a list typed beside it, so a code added
 // later arrives already needing an answer here.
 //
-// EXACTLY ONE CODE WAITS, and the asymmetry was decided at the server
-// rather than defaulted here. A deploy in a state nobody can name
-// answers the TERMINAL code, not the waitable one — a client told to
-// wait for a state nobody can name waits for ever, and one told to stop
-// loses a retry it might have won and is left with something a person
-// can act on. Only the second is recoverable, so this client needs no
-// ambiguous third branch of its own: inventing one would be a second
-// decision about a fact the contract has already decided.
+// EXACTLY ONE CODE WAITS. TestExactlyOneCodeMakesThePublishAskAgain
+// holds this table to that, and reds the day a second one does, at once
+// rather than by a row waiting out the window. The asymmetry was decided
+// at the server rather than defaulted here. A deploy in a state nobody
+// can name answers the TERMINAL code, not the waitable one — a client
+// told to wait for a state nobody can name waits for ever, and one told
+// to stop loses a retry it might have won and is left with something a
+// person can act on. Only the second is recoverable, so this client
+// needs no ambiguous third branch of its own: inventing one would be a
+// second decision about a fact the contract has already decided.
 var publishRouting = map[wire.ErrorCode]publishRoute{
 	// The race this step exists to resolve: the build log ended, and the
 	// record has not caught up. Not terminal, and the only code here
