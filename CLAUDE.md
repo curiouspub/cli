@@ -331,16 +331,19 @@ YAML is a step nobody can run before pushing.
 - `make fmt` `make vet` `make test` `make build` — `ci` runs them in that
   order, formatting first, so a formatting failure is not discovered
   after a five-minute suite.
-- **`make lint` GATES, over two classes of finding and no others, and
-  that is a ruling rather than a default** (2026-10-05). The workflow
+- **`make lint` GATES, over three classes of finding and a linter over the
+  `//nolint` directives themselves, and no others, and that is a ruling
+  rather than a default** (2026-10-05, widened 2026-10-06). The workflow
   installs golangci-lint at an exact version on every leg, through the Go
   toolchain, and `lint` is a step of `make ci`, so a finding reds every
   leg. On CI an absent linter is a failure, not a skip; on a machine
   without it the target skips and says so. `.golangci.yml` enables
-  `unused` and staticcheck's correctness checks, and nothing else.
+  `unused`, staticcheck's correctness checks, `ineffassign` and a strict
+  `nolintlint`, and nothing else.
 
-  **Why those two.** The linter's default set was run over this tree with
-  every finding printed, and all three legs reported the same 110.
+  **Why those two classes.** The linter's default set was run over this
+  tree with every finding printed, and all three legs reported the same
+  110.
   errcheck gave 93, and every one was false: a write to a terminal or a
   report stream the program cannot act on when it fails, where the exit
   status already carries the verdict, or a Close on something opened only
@@ -352,6 +355,17 @@ YAML is a step nobody can run before pushing.
   one was signal: four dead declarations and a deprecated call, which
   were fixed, and two lines that exist to prove something.
 
+  **The two that joined on 2026-10-06.** With `ineffassign` and
+  `nolintlint` enabled, the tree still reports nothing and both
+  annotations already satisfy `nolintlint`, so neither needed a change to
+  any code. `ineffassign` is a correctness class that costs nothing today.
+  `nolintlint` is what keeps an annotation honest. Every directive must
+  give a reason and must name the linter it silences, whichever linter
+  that is; and a directive naming an enabled linter is a finding when it
+  excuses nothing on its line. Without it, an annotation that stops being
+  needed stays silent for ever and goes on silencing its line. `govet`
+  stays off because `go vet` is already a step of `make ci`.
+
   **Why a gate rather than advice.** `lint` runs inside `make ci`, on
   every leg of every push. A step there whose exit code decides nothing
   is a decoration, by this file's own rule: it spends its runtime on every
@@ -362,7 +376,9 @@ YAML is a step nobody can run before pushing.
   **The two annotations, and what they protect.** Each is a
   `//nolint:<linter> // <reason>` on the line it excuses, so adding a
   third is a reviewable change with its reason beside it, never a quiet
-  widening of the configuration:
+  widening of the configuration, and `nolintlint` now refuses one that
+  gives no reason or names no linter, and one naming an enabled linter
+  that excuses nothing:
 
   - the `%s` of a whole config, through an `any`, in the unknown-fields
     leak test. The verb is wrong for the type on purpose: a debug print
@@ -375,7 +391,14 @@ YAML is a step nobody can run before pushing.
 
   **What it does not see:** an unchecked error is not linted at all.
   errcheck cannot tell a Close that could lose a write from one that
-  cannot by the name it reads, so that class stays with review.
+  cannot by the name it reads, so that class stays with review. A
+  directive naming a disabled linter that excuses nothing passes, as long
+  as it gives a reason; one naming a linter the tool does not know is a
+  warning that leaves the exit status alone. And a directive narrows to a
+  linter, never to one of its checks: at the pinned version a `//nolint`
+  naming a single staticcheck check is not understood, so the narrowest
+  staticcheck directive silences every correctness check on its line. One
+  line in the tree carries one.
 - **`make surface-check` is the one check `ci` cannot carry, and the
   reason is the shape of its subject rather than its cost.** There is no
   push range in a working copy: a checkout is one state, and that check is
