@@ -267,7 +267,8 @@ type deployScript struct {
 	// itself paused past the window under test has measured the runner.
 	eventGaps []time.Duration
 	// eventWidests is the widest gap within EACH connection, one entry
-	// per connection served. See widestPerConnection.
+	// per connection that reached its frames and none for one released or
+	// hung up before its first frame. See widestPerConnection.
 	eventWidests []time.Duration
 
 	// eventTimelines is what the handler did on each connection and
@@ -442,23 +443,64 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 	}
 	mark("headers flushed")
 
+	if !s.writeFrames(w, r, script, release, mark, flusher, canFlush) {
+		return
+	}
+
+	if script.hold {
+		select {
+		case <-release:
+			mark("released")
+		case <-r.Context().Done():
+			mark("client hung up")
+		}
+	}
+}
+
+// writeFrames writes a connection's scripted frames, one pace apart, and
+// reports whether it wrote all of them. A false return means the
+// connection ended inside the loop: released during a pace wait, hung up
+// on during one, or a write that failed.
+//
+// THE FOLD IS DEFERRED, and that is the point of the method. Every way out
+// of the loop files the gaps the connection had COMPLETED, because a
+// connection the client drops is exactly the one a stall row needs to
+// see: a fixture that recorded only connections that ran to the end would
+// quote the survivors and say nothing about the one that stalled. The
+// deferral is a closure so that it reads the final slice; deferring the
+// call itself would evaluate the argument at registration, when it is
+// still empty, and record every connection as one that never paused.
+//
+// ONLY COMPLETED INTERVALS COUNT. The interval since the last flush is
+// still open when a client hangs up, and an interval that ends at a
+// hang-up is not a flush interval: a row that designs a silence for the
+// client to cut would otherwise record its own silence as a fixture
+// pause, and the machine-or-client guard would blame the runner for what
+// the row asked for. A connection cut in its first wait therefore files an
+// entry of exactly zero.
+//
+// The method is also what keeps a connection that never reached its
+// frames out of the record: the pre-loop exits in serveEvents return
+// before this is called, so they register nothing.
+func (s *deployScript) writeFrames(w http.ResponseWriter, r *http.Request, script eventScript, release <-chan struct{}, mark func(string), flusher http.Flusher, canFlush bool) (finished bool) {
 	last := time.Now()
 	var gaps []time.Duration
+	defer func() { s.recordGaps(gaps) }()
 	for _, frame := range script.frames {
 		if script.pace > 0 {
 			select {
 			case <-time.After(script.pace):
 			case <-release:
 				mark("released")
-				return
+				return false
 			case <-r.Context().Done():
 				mark("client hung up")
-				return
+				return false
 			}
 		}
 		if _, err := io.WriteString(w, frame); err != nil {
 			mark("write failed")
-			return
+			return false
 		}
 		if canFlush {
 			flusher.Flush()
@@ -468,13 +510,23 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 		gaps = append(gaps, now.Sub(last))
 		last = now
 	}
+	return true
+}
 
-	// PER CONNECTION AS WELL AS POOLED. eventGaps is every gap this
-	// fixture has ever left, which answers "did this machine pause";
-	// eventWidests is one number per connection, which answers the
-	// different question a probe asks — "did the fixture hold its pace
-	// on THIS run" — and a pooled maximum cannot answer it, because one
-	// starved connection would condemn every other run in the pass.
+// recordGaps folds one connection's completed gaps into the fixture.
+//
+// PER CONNECTION AS WELL AS POOLED. eventGaps is every gap this
+// fixture has ever left, which answers "did this machine pause";
+// eventWidests is one number per connection, which answers the
+// different question a probe asks — "did the fixture hold its pace
+// on THIS run" — and a pooled maximum cannot answer it, because one
+// starved connection would condemn every other run in the pass.
+//
+// It runs BEFORE a held connection's hold, not after it: a guard that
+// reads while a connection is still held open must already see that
+// connection's entry, and a fold that waited for the hold to end would
+// show it only after the row had finished asking.
+func (s *deployScript) recordGaps(gaps []time.Duration) {
 	var widest time.Duration
 	for _, g := range gaps {
 		if g > widest {
@@ -485,15 +537,6 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 	s.eventGaps = append(s.eventGaps, gaps...)
 	s.eventWidests = append(s.eventWidests, widest)
 	s.mu.Unlock()
-
-	if script.hold {
-		select {
-		case <-release:
-			mark("released")
-		case <-r.Context().Done():
-			mark("client hung up")
-		}
-	}
 }
 
 // serverMark is one entry in a connection's server-side timeline.
@@ -1207,9 +1250,9 @@ func (s *deployScript) widestGap() time.Duration {
 }
 
 // widestPerConnection is one widest-gap-between-flushes per connection
-// this fixture has served, in the order it served them. A probe pairs it
-// with its own per-run client gaps to tell a run that measured the
-// client from a run that measured the machine.
+// this fixture has served frames on, in the order the connections finished
+// their frames. A probe pairs it with its own per-run client gaps to tell a
+// run that measured the client from a run that measured the machine.
 func (s *deployScript) widestPerConnection() []time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
