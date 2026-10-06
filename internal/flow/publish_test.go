@@ -468,6 +468,56 @@ func TestEveryContractCodeHasAPublishRoute(t *testing.T) {
 	}
 }
 
+// TestExactlyOneCodeMakesThePublishAskAgain holds the sentence the
+// routing table's comment opens with: exactly one contract code makes
+// the publish wait and ask again, and it is deploy_not_ready — a deploy
+// still queued or building. Every other refusal is terminal.
+//
+// A ROW AND NOT ONLY THE COMMENT, because a stop flipped to a wait is
+// one token: it compiles, and it passes the coverage row above, which
+// asks only that every code has a route. The two other rows that range
+// this table skip the codes that are not stops, so a wait that should
+// have been a stop is invisible to them. It would be caught only by a
+// row waiting out the window on a frozen clock — late, reading as a
+// stall, and naming the wrong thing. This row fails at once, and says
+// which claim moved.
+//
+// The count and the identity are separate checks and independent of
+// each other: moving the wait to another code keeps the count at one
+// and breaks the identity, and adding a second keeps the identity and
+// breaks the count.
+//
+// REQUIRED MUTATION, run 2026-10-06: the site-withdrawn code's route
+// changed from the stop to the wait. The row failed on the count alone
+// ("2 contract codes make the publish wait and ask again
+// ([deploy_not_ready site_withdrawn])") and not on the identity. The
+// not-ready code's route changed to the stop while the deploy-failed
+// code's changed to the wait: the row failed on the identity
+// alone, the count staying at one. The not-ready code's route changed
+// to the stop and nothing else: both checks failed, "0 contract codes"
+// and the identity line. Each run took under a second of test time,
+// the 30 second window never entered, and each restore was
+// checksum-verified.
+func TestExactlyOneCodeMakesThePublishAskAgain(t *testing.T) {
+	var waiting []wire.ErrorCode
+	for _, code := range wire.AllErrorCodes {
+		if publishRouting[code] == publishAskAgain {
+			waiting = append(waiting, code)
+		}
+	}
+	if len(waiting) != 1 {
+		t.Errorf("%d contract codes make the publish wait and ask again (%v); "+
+			"exactly one may — every other refusal is terminal, and a client "+
+			"told to wait on one waits out the whole window for an answer "+
+			"that will not change", len(waiting), waiting)
+	}
+	if route := publishRouting[wire.CodeDeployNotReady]; route != publishAskAgain {
+		t.Errorf("the publish routes %q to %d, not to the wait: it is the one "+
+			"code that means the deploy is still queued or building, and the "+
+			"only one worth asking about again", wire.CodeDeployNotReady, route)
+	}
+}
+
 // -------------------------------------------------------------------
 // When the build outcome arrives late
 // -------------------------------------------------------------------

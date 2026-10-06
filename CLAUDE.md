@@ -328,9 +328,9 @@ in a workflow file. **The rule that matters is not the count of workflows
 but that no check lives outside a `make` target** — a step written only in
 YAML is a step nobody can run before pushing.
 
-- `make fmt` `make vet` `make test` `make build` — `ci` runs them in that
-  order, formatting first, so a formatting failure is not discovered
-  after a five-minute suite.
+- `make fmt` `make vet` `make build` `make leak-scan` `make test`
+  `make lint` — `ci` runs them in that order, formatting first, so a
+  formatting failure is not discovered after a five-minute suite.
 - **`make lint` GATES, over three classes of finding and a linter over the
   `//nolint` directives themselves, and no others, and that is a ruling
   rather than a default** (2026-10-05, widened 2026-10-06). The workflow
@@ -384,7 +384,7 @@ YAML is a step nobody can run before pushing.
     leak test. The verb is wrong for the type on purpose: a debug print
     through an `any` is how a secret would leak, vet cannot see that path,
     and the row exists to prove it does not leak;
-  - the shared floor for a stall-window leg with nothing recorded.
+  - the shared floor for a leg with nothing recorded.
     Nothing uses it today, by design: a refusal tells a caller to pass it,
     and a guard polices that name, so deleting it would leave both naming
     nothing.
