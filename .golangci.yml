@@ -1,8 +1,10 @@
 # golangci-lint configuration, in the version 2 schema.
 #
-# LINT GATES, OVER TWO CLASSES OF FINDING AND NO OTHERS: declarations
-# nothing uses (unused), and staticcheck's correctness checks (its SA
-# family). Every other linter is off, and the reason is a measurement
+# LINT GATES, OVER THREE CLASSES OF FINDING AND A LINTER OVER THE //nolint
+# DIRECTIVES THEMSELVES, AND NO OTHERS: declarations nothing uses
+# (unused), staticcheck's correctness checks (its SA family), an
+# assignment whose value nothing reads (ineffassign), and the directives
+# (nolintlint). Every other linter is off, and the reason is a measurement
 # rather than a preference.
 #
 # Measured 2026-10-05 with golangci-lint 2.14.0: the linter's default set
@@ -28,9 +30,27 @@
 # So the classes that are off produced nothing worth changing and one
 # change that would have weakened a test; the classes that are on produced
 # nothing else. govet and ineffassign, the rest of the default set,
-# reported nothing; vet runs anyway, as its own step of make ci.
+# reported nothing. govet stays off because vet already runs, as its own
+# step of make ci.
 #
-# WHAT THIS DOES NOT SEE: an unchecked error is not linted at all.
+# INEFFASSIGN AND NOLINTLINT joined on 2026-10-06, with the same linter:
+# with both enabled the tree still reports nothing, and the two
+# annotations already satisfy nolintlint, so neither needed a change to
+# any code. ineffassign is a correctness class that costs nothing today.
+# nolintlint is what keeps an annotation honest. Every directive must give
+# a reason and must name the linter it silences, whichever linter that
+# is; and a directive naming a linter enabled here is a finding when it
+# excuses nothing on its line. Without it, an annotation that stops being
+# needed stays silent for ever and goes on silencing its line.
+#
+# WHAT THIS DOES NOT SEE: an unchecked error is not linted at all. A
+# directive naming a disabled linter that excuses nothing passes, as long
+# as it gives a reason; one naming a linter the tool does not know is a
+# warning that leaves the exit status alone. And a directive narrows to a
+# linter, never to one of its checks: at this version a //nolint naming a
+# single staticcheck check is not understood, so the narrowest staticcheck
+# directive silences every correctness check on its line. One line in the
+# tree carries one.
 version: "2"
 
 linters:
@@ -38,8 +58,20 @@ linters:
   enable:
     - staticcheck
     - unused
+    - ineffassign
+    - nolintlint
   settings:
     staticcheck:
       # The correctness checks only, for the reason above.
       checks:
         - "SA*"
+    nolintlint:
+      # A directive naming an enabled linter that excuses nothing is a
+      # finding. This is the linter's default, written down because the
+      # gate relies on it and a later version could move a default without
+      # anyone choosing to.
+      allow-unused: false
+      # A directive says why, after the directive itself.
+      require-explanation: true
+      # A directive names the linter it silences.
+      require-specific: true
