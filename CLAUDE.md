@@ -331,6 +331,11 @@ YAML is a step nobody can run before pushing.
 - `make fmt` `make vet` `make build` `make leak-scan` `make test`
   `make lint` — `ci` runs them in that order, formatting first, so a
   formatting failure is not discovered after a five-minute suite.
+- **Every `make` target runs under the Go release that go.mod's
+  toolchain line names**, read from go.mod and written nowhere else,
+  because that line alone is a floor and a newer local Go would otherwise
+  disagree with CI.
+  A suite run outside make on a different Go is told so by a guard.
 - **`make lint` GATES, over three classes of finding and a linter over the
   `//nolint` directives themselves, and no others, and that is a ruling
   rather than a default** (2026-10-05, widened 2026-10-06). The workflow

@@ -7,6 +7,37 @@
 
 export CGO_ENABLED := 0
 
+# EVERY TARGET RUNS THE GO RELEASE GO.MOD NAMES. The toolchain line in
+# go.mod is a floor under Go's default behaviour and not a pin: a machine
+# whose own Go is newer runs every command as-is, and then disagrees with
+# CI, which installs exactly the release the line names. Rows that pass on
+# the named release have failed on a newer one over nothing in this
+# module: the same source, under two releases. So a local green was
+# evidence about a toolchain CI does not use.
+#
+# Exporting GOTOOLCHAIN makes every target run exactly the module's
+# release. Go fetches it once and checks it against the checksum database;
+# where the local Go already is that release, nothing is fetched. The
+# version is read from go.mod and never written here, so there is one copy
+# to move.
+#
+# A value set this way beats one in the caller's environment. The two ways
+# past it are naming GOTOOLCHAIN on make's own command line and `make -e`,
+# and both are kept on purpose: running the suite under another release is
+# how a move to that release is measured before it is made. If they are
+# ever closed, do it with `override GOTOOLCHAIN := …` and a separate
+# `export GOTOOLCHAIN` line. The one-line `export override` form loses the
+# export under the GNU make that macOS ships, and the pin silently stops.
+#
+# `go mod tidy` drops a toolchain line equal to the go line, which is why
+# the go line stays at a major and minor release and the toolchain line
+# names the exact one.
+GO_TOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod 2>/dev/null)
+ifeq ($(GO_TOOLCHAIN),)
+$(error go.mod names no toolchain line, so make has no Go version to run every target under. Keep the go line at a major and minor release and name the exact release on a toolchain line)
+endif
+export GOTOOLCHAIN := $(GO_TOOLCHAIN)
+
 .PHONY: build test test-go test-npm test-race e2e-npm exit-test vet fmt lint snapshot surface-check leak-scan leak-scan-private hooks release-log ci guard-a-branch-to-work-on
 
 build:
@@ -213,11 +244,15 @@ e2e-npm:
 exit-test:
 	scripts/exit-test.sh
 
+# The first line is the one every log carries, saying which Go this run used.
 vet:
+	go version
 	go vet ./...
 
+# fmt uses the toolchain's own gofmt, built from its source: the gofmt on
+# PATH belongs to whatever Go is installed, not the module's.
 fmt:
-	@unformatted="$$(gofmt -l .)"; \
+	@unformatted="$$(go run cmd/gofmt -l .)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "$$unformatted"; \
 		exit 1; \
