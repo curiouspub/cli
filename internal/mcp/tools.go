@@ -128,8 +128,9 @@ func jsonResult(v any) Result {
 // A failure carries its parts and decides their order; a caller that
 // joined What, Why and Next has rebuilt that order and will drift from it
 // the day a fourth part arrives. So the parts come from the type that
-// owns them, and what this adds is the paragraph separator — the terminal
-// adds colour and a leading blank line, which a client does not want.
+// owns them, and what this adds is the paragraph separator and a label on
+// the next step — the terminal adds colour and a leading blank line,
+// which a client does not want.
 //
 // # The sentinels are mapped HERE because the ACTION is this surface's
 //
@@ -168,23 +169,29 @@ func refusalText(err error) string {
 		// newlines and a sentence would arrive in a model's context as
 		// something curious said. Only the package that owns the parts
 		// knows which one is the quotation.
-		// THE ACTION AS A VALUE, NEVER AS THIS PROGRAM'S SENTENCE ABOUT
-		// A TERMINAL. Every next-step line in this codebase was written
-		// for somebody at a prompt — "run `curious deploy` again", "try
-		// again a little later" — and a model reads those verbatim and
-		// can act on none of them: it has no terminal and does not run
-		// commands, it calls tools. So the most useful paragraph in a
-		// refusal was the one paragraph its second reader had to ignore,
-		// and worse, the one most likely to be repeated to a user as
-		// advice this program gave.
 		//
-		// The action is the same for both readers; only the wording
-		// differs, and the wording belongs to the surface doing the
-		// rendering. The terminal keeps every word it had. This one
-		// takes the value and says nothing a caller cannot act on.
-		parts := failure.EscapedWithoutAction()
-		if failure.Next != "" && failure.Next != ui.NextNone {
-			parts = append(parts, "What to do next: "+string(failure.Next))
+		// THE NEXT STEP IN WORDS, AND THE ACTION LEFT WHERE IT IS A
+		// FIELD. This paragraph is the failure's own next-step sentence,
+		// never the action's value. A value here is an identifier sitting
+		// in prose: a model reads it as words, and the likeliest thing it
+		// does with it is repeat it to a person, who can do nothing with
+		// "GiveUp". The value is not lost — it stays on the failure, and
+		// in the published catalogue under the failure id this refusal prints,
+		// which is the handle a program matches on.
+		//
+		// The cost is known: most of these sentences were written for
+		// somebody at a terminal ("run `curious deploy` again"), and a
+		// model cannot run one. Relayed to its user, it is still advice a
+		// person can follow, which an identifier never was.
+		//
+		// The sentence is the LAST PART of the failure's escaped
+		// rendering whenever it has one, so it is taken from there rather
+		// than escaped here: the rule for which part is somebody else's
+		// words stays decided in one place.
+		parts := failure.Escaped()
+		if failure.NextText != "" && len(parts) > 0 {
+			last := len(parts) - 1
+			parts[last] = "What to do next: " + parts[last]
 		}
 		// THE ID, for the same reason the terminal prints it and with
 		// more force here: this reader is a program. A headline is prose

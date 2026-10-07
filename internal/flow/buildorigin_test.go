@@ -109,8 +109,8 @@ func TestTheCopyBranchesOnWhoseFaultItWas(t *testing.T) {
 					c.origin, failure.ID, c.wantID)
 			}
 			if failure.Next != c.wantNext {
-				t.Errorf("origin %q got next action %q, want %q — this is the field the "+
-					"agent-facing half acts on, and it must not tell anyone to wait for a "+
+				t.Errorf("origin %q got next action %q, want %q — this is the value published "+
+					"under the failure's id, and it must not tell anyone to wait for a "+
 					"broken build to fix itself, or to edit a project that is fine",
 					c.origin, failure.Next, c.wantNext)
 			}

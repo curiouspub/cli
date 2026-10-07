@@ -156,13 +156,13 @@ func TestEveryPublishedFailureNamesAnAction(t *testing.T) {
 				"action, which is the one part of this shape that is the product",
 				name)
 		}
-		// AND THE ACTION AS A VALUE, which is the half the agent surface
-		// reads. A standing failure with no NextAction would render there
-		// as a refusal that suggests nothing, while the terminal beside
-		// it printed a perfectly good sentence.
+		// AND THE ACTION AS A VALUE, which is what the failure catalogue
+		// publishes under this failure's id. A standing failure with no
+		// NextAction would publish an id whose action suggests nothing,
+		// while the sentence beside it named a perfectly good one.
 		if f.Next == "" || f.Next == NextNone {
-			t.Errorf("%s has no NextAction — its words tell a terminal what to do "+
-				"and its value tells every other surface nothing", name)
+			t.Errorf("%s has no NextAction — its words say what to do "+
+				"and the value published under its id says nothing", name)
 		}
 	}
 }

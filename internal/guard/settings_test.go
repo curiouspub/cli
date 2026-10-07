@@ -32,28 +32,29 @@ var settingPattern = regexp.MustCompile(`CURIOUS_[A-Z][A-Z0-9_]*`)
 
 // TestASettingNamedInAFailureIsNamedInItsWhy.
 //
-// # The paragraph an agent never reads is the wrong place for a fact
+// # An instruction is the wrong place for a fact
 //
-// A failure's last paragraph is an instruction written for somebody at a
-// terminal, and the agent surface renders the ACTION as a value instead —
-// so that paragraph's words do not travel. That is the right trade for an
-// instruction. It is the wrong trade for a FACT, and three failures had
-// buried one there: the name of the environment variable holding the bad
-// value, mentioned only in the next-step line.
+// A failure's last paragraph is an instruction, and every one this
+// program writes is worded for somebody at a terminal. A FACT buried in
+// it is read only as part of a step, and three failures had buried one
+// there: the name of the environment variable holding the bad value,
+// mentioned only in the next-step line.
 //
-// Dropped, an agent is told "curious can't use that API address" and not
-// which setting to look at, which is a refusal it cannot act on. The
-// first instance was caught by a row asserting one variable in one
-// failure. This is that row's general form.
+// A reader who cannot take that step — an agent has no terminal — is
+// left with "curious can't use that API address" and has to dig the
+// setting out of an instruction it was never going to follow. The first
+// instance was caught by a row asserting one variable in one failure.
+// This is that row's general form.
 //
 // THE RULE IS PLACEMENT, NOT ABSENCE. A setting may appear in the
 // next-step line as well — "Check CURIOUS_API_URL, or unset it" is good
 // copy for a terminal. What it may not do is appear ONLY there, because
-// the Why is the paragraph both surfaces render.
+// the Why is the paragraph that explains, and every reader reads it as
+// the explanation whatever it does with the step.
 //
 // A failure built with Quoted has no Why at all, so naming a setting in
-// one is always a violation: the fact has nowhere to live that an agent
-// will see. That is a real constraint rather than an accident of this
+// one is always a violation: the fact has no paragraph of its own to
+// live in. That is a real constraint rather than an accident of this
 // guard, and it is why the configuration failure was rebuilt around a
 // Why of its own.
 //
@@ -176,10 +177,10 @@ func TestASettingNamedInAFailureIsNamedInItsWhy(t *testing.T) {
 					}
 					where := fset.Position(n.Pos())
 					t.Errorf("%s:%d builds a failure (%s) naming %s, and its Why does "+
-						"not.\nThe next-step line is rendered for a terminal and "+
-						"replaced by a value on the agent surface, so a setting named "+
-						"only there reaches one reader of two — and the one it misses "+
-						"is the one that cannot look the value up.\n%s",
+						"not.\nThe next-step line is an instruction worded for a terminal, "+
+						"so a setting named only there is a fact read only as part of a "+
+						"step — and the reader who cannot take that step is the one left "+
+						"to dig it out.\n%s",
 						displayPath(root, path), where.Line, kind, name, whole)
 				}
 				return true

@@ -984,21 +984,28 @@ func TestARefusedDeployCarriesTheIdItsFollowUpCallNeeds(t *testing.T) {
 	}
 }
 
-// TestNoResultTellsAnAgentToRunATerminalCommand.
+// TestNoResultTellsAnAgentToRunATerminalCommand, outside the one
+// paragraph that may.
 //
-// # The most useful paragraph was the one this reader had to ignore
+// # A terminal's instruction is carried once, where it is labelled
 //
 // Every next-step line in this codebase was written for somebody at a
 // prompt: "run `curious deploy` again", "try again a little later",
 // "press Ctrl-C". A model reads those verbatim and can act on none of
 // them — it has no terminal and does not run commands, it calls tools.
-// Worse than useless: the likeliest thing it does with the sentence is
-// repeat it to a person as advice this program gave, which turns a
-// refusal an agent could have retried into a hand-off to a human.
 //
-// So the action travels as a VALUE. The terminal keeps every word it had
-// — that is asserted next door, in the sequence package's transcripts —
-// and this surface renders the enum.
+// A refusal here still carries that sentence, in its next-step paragraph
+// and nowhere else. An identifier in its place gave a model nothing it
+// could pass on, and a sentence written for a person is still advice a
+// person can follow when a model relays it. That paragraph is where the
+// cost is paid, and it is paid once: anywhere else, a terminal's
+// instruction reads as this surface's own advice to a reader who cannot
+// take it.
+//
+// So the row removes that one paragraph — from its label to the failure
+// id after it — and sweeps the rest. It fails on a second next-step
+// paragraph, and on one with no id after it, because either would let the
+// removal take more than the one paragraph it is allowed.
 //
 // THIS ROW SWEEPS RESULTS RATHER THAN CHECKING ONE, because the leak is
 // per-path and a row that drove one refusal would be green while five
@@ -1007,9 +1014,9 @@ func TestARefusedDeployCarriesTheIdItsFollowUpCallNeeds(t *testing.T) {
 // carry a Next of their own, written by the same hand for the same
 // terminal.
 //
-// REQUIRED MUTATION, run 2026-09-12: collapse the enum back to prose —
-// render failure.Escaped() instead of EscapedWithoutAction plus the
-// value. Reds here, naming the path and the sentence.
+// REQUIRED MUTATION, run 2026-10-07: append the failure's next-step
+// sentence again after its id line in the refusal renderer. Reds here on
+// the three paths whose sentence names a command, naming the phrase.
 func TestNoResultTellsAnAgentToRunATerminalCommand(t *testing.T) {
 	// THE PHRASES ARE THE INSTRUCTION FORMS, and the list is the row's
 	// whole accuracy.
@@ -1138,18 +1145,46 @@ func TestNoResultTellsAnAgentToRunATerminalCommand(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for i, result := range tc.run(t) {
-				said := text(t, result)
+				whole := text(t, result)
+				said := withoutNextStep(t, i, whole)
 				for _, phrase := range terminalisms {
 					if strings.Contains(said, phrase) {
-						t.Errorf("result %d tells its reader to act at a terminal — it "+
-							"spells %q. This surface has no terminal and its caller "+
-							"does not run commands; the action travels as a value "+
-							"here:\n%s", i, phrase, said)
+						t.Errorf("result %d tells its reader to act at a terminal outside "+
+							"its next-step paragraph — it spells %q. This surface has no "+
+							"terminal and its caller does not run commands, so only that "+
+							"one paragraph may carry the terminal's sentence:\n%s",
+							i, phrase, whole)
 					}
 				}
 			}
 		})
 	}
+}
+
+// withoutNextStep is a result with its one next-step paragraph removed,
+// from the label to the failure id that follows it.
+//
+// IT IS BOUNDED BY THE ID, not by the next blank line, so a sentence with
+// a blank line of its own is still removed whole; and it fails rather
+// than guesses when the boundary is not where it should be, because a
+// removal that took too much would be a sweep that saw too little.
+func withoutNextStep(t *testing.T, i int, said string) string {
+	t.Helper()
+	if n := strings.Count(said, nextStepLabel); n > 1 {
+		t.Errorf("result %d has %d next-step paragraphs, and a refusal has at "+
+			"most one:\n%s", i, n, said)
+	}
+	at := strings.Index(said, nextStepLabel)
+	if at < 0 {
+		return said
+	}
+	end := strings.Index(said[at:], "\n\n"+ui.FailureIDLine(""))
+	if end < 0 {
+		t.Errorf("result %d has a next-step paragraph with no failure id after "+
+			"it, so where the paragraph ends cannot be told:\n%s", i, said)
+		return said
+	}
+	return said[:at] + said[at+end:]
 }
 
 // TestAToolThatNeedsALoginSaysWhichCallsMakeOne.
