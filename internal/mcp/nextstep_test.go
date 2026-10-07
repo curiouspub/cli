@@ -297,7 +297,7 @@ const GiveUp NextAction = prefix + "veUp"
 // paragraph now carries the failure's own next-step sentence, escaped as
 // the paragraphs around it are. The value is unchanged where it is a
 // field: on the failure, and under the failure's id in the published
-// catalogue, which the id line every refusal ends with is the handle to.
+// catalogue, which the failure-id line the refusal prints is the handle to.
 //
 // # Every failure this surface can render is covered, and this is why
 //
@@ -506,8 +506,8 @@ func TestNoRefusalNamesAnActionInItsProse(t *testing.T) {
 				for _, name := range actionNamesIn(said, names) {
 					t.Errorf("result %d names the action %q in its prose. The "+
 						"paragraph says what to do in words; the value stays in the "+
-						"failure's own field, behind the id this refusal ends "+
-						"with:\n%s", i, name, said)
+						"failure's own field, behind the failure id this refusal "+
+						"prints:\n%s", i, name, said)
 				}
 				if tc.check != nil {
 					tc.check(t, said)

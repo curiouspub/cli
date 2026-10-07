@@ -81,8 +81,8 @@ type Failure struct {
 	// — on the terminal and on the agent surface alike.
 	//
 	// IT IS NOT DERIVED FROM THE ENUM, and that is deliberate rather
-	// than lazy. Four values cannot reproduce the forty-odd distinct
-	// sentences this program writes — "a fresh link is issued every
+	// than lazy. Four values cannot reproduce the distinct sentences
+	// this program writes — "a fresh link is issued every
 	// time", "what went wrong is in the build log above", "if it keeps
 	// happening, updating curious may help" — and collapsing them would
 	// be a copy change wearing a refactor's clothes. Every surface shows

@@ -176,7 +176,7 @@ func refusalText(err error) string {
 		// in prose: a model reads it as words, and the likeliest thing it
 		// does with it is repeat it to a person, who can do nothing with
 		// "GiveUp". The value is not lost — it stays on the failure, and
-		// in the published catalogue under the id this refusal ends with,
+		// in the published catalogue under the failure id this refusal prints,
 		// which is the handle a program matches on.
 		//
 		// The cost is known: most of these sentences were written for
