@@ -31,19 +31,14 @@ import (
 // NextAction is what a failure asks its reader to DO, as a value rather
 // than as a sentence.
 //
-// # Why a sentence was not enough
+// # A field, never prose
 //
-// A failure's last paragraph is an instruction, and every instruction
-// this program writes was written for somebody at a terminal: "run
-// `curious deploy` again", "try again a little later". An agent reads
-// those verbatim and cannot act on any of them — it has no terminal and
-// does not run commands; it calls tools. So the most useful paragraph in
-// a refusal was the one paragraph its second audience had to ignore.
-//
-// The ACTION is the same for both readers. Only the wording differs, and
-// wording is a rendering decision that belongs to the surface doing the
-// rendering. This type is the action; NextText below is one surface's
-// words for it.
+// The value is declared at every construction site, held to one of the
+// four below, and published per failure id in the failure catalogue,
+// which is where a program holding an id reads it. No surface renders it
+// as a sentence: every one shows NextText, the words. An identifier in
+// prose is read as a word, and the likeliest thing a model does with it
+// is repeat it to a person, who can do nothing with it.
 //
 // FOUR VALUES, and the fourth is not padding. "None" is a failure with
 // nothing to suggest — it exists so that a surface can tell "this
@@ -82,16 +77,16 @@ type Failure struct {
 	// Next is the ACTION, as a value. See NextAction.
 	Next NextAction
 
-	// NextText is the terminal's words for Next, and it is what
-	// Paragraphs renders.
+	// NextText is the words for Next, and it is what Paragraphs renders
+	// — on the terminal and on the agent surface alike.
 	//
 	// IT IS NOT DERIVED FROM THE ENUM, and that is deliberate rather
 	// than lazy. Four values cannot reproduce the forty-odd distinct
 	// sentences this program writes — "a fresh link is issued every
 	// time", "what went wrong is in the build log above", "if it keeps
 	// happening, updating curious may help" — and collapsing them would
-	// be a copy change wearing a refactor's clothes. The terminal keeps
-	// every word it had; the enum is what the other surface reads.
+	// be a copy change wearing a refactor's clothes. Every surface shows
+	// the sentence; the enum is the value published beside the id.
 	NextText string
 
 	// Detail is what SOMEBODY ELSE said — a server's own sentence, an
@@ -405,17 +400,6 @@ func (f *Failure) Escaped() []string {
 	return f.escaped(f.Paragraphs())
 }
 
-// EscapedWithoutAction is Escaped with the last paragraph left off, for a
-// surface that renders the ACTION as a value.
-//
-// It exists so the quoting rule — which paragraph is somebody else's
-// sentence and therefore escaped WHOLE — is decided in one place for
-// both surfaces. A second copy of that decision is how the two drift,
-// and the one that drifts is the one nobody is reading that day.
-func (f *Failure) EscapedWithoutAction() []string {
-	return f.escaped(f.ParagraphsWithoutAction())
-}
-
 func (f *Failure) escaped(parts []string) []string {
 	if len(parts) == 0 {
 		return nil
@@ -452,30 +436,16 @@ func (f *Failure) escaped(parts []string) []string {
 // about an artefact should come from the artefact — arriving one package
 // over. There is now one place that decides the order, and both the
 // renderer and anybody asking use it.
+//
+// THE NEXT STEP IS ALWAYS THE LAST PART when there is one, and the agent
+// surface relies on it: it labels that part rather than escaping the
+// sentence a second time.
 func (f *Failure) Paragraphs() []string {
 	if f == nil {
 		return nil
 	}
-	return f.paragraphs(true)
-}
-
-// ParagraphsWithoutAction is the prose with the last paragraph left off,
-// for a surface that renders the ACTION as a value instead of as this
-// program's sentence about a terminal.
-func (f *Failure) ParagraphsWithoutAction() []string {
-	if f == nil {
-		return nil
-	}
-	return f.paragraphs(false)
-}
-
-func (f *Failure) paragraphs(withAction bool) []string {
 	parts := make([]string, 0, 4)
-	tail := f.NextText
-	if !withAction {
-		tail = ""
-	}
-	for _, part := range []string{f.What, f.Detail, f.Why, tail} {
+	for _, part := range []string{f.What, f.Detail, f.Why, f.NextText} {
 		if part != "" {
 			parts = append(parts, part)
 		}
