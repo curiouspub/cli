@@ -100,6 +100,14 @@ type obligation struct {
 
 // summary is one verified helper relationship: the parameter index whose
 // value becomes the named field of the failure the helper builds.
+//
+// THE ID, THE ACTION AND THE WORDS MAY INSTEAD BE FIXED in the helper's own
+// body, and then they are read there, once, in the helper's own file. That
+// is the shape of an answer with one home: the helper owns what it says and
+// what it asks for, and every caller still says where the person was. The
+// stage is never fixed — a helper that does not take it builds a failure
+// that cannot say where the person was. A fixed field that reads a
+// parameter is not fixed, and the helper is not summarised.
 type summary struct {
 	fn    string
 	idArg int
@@ -107,6 +115,20 @@ type summary struct {
 	what  int
 	act   int
 	txt   int
+
+	fixedID, fixedAct, fixedTxt ast.Expr
+	home                        parsedFile
+	homeDecl                    *ast.FuncDecl
+}
+
+// fixedOr resolves a field a helper either forwards from argument i or
+// fixes in its own body.
+func (s summary) fixedOr(i int, fixed ast.Expr, at func(int) ast.Expr, site, field, kind string,
+	text func(parsedFile, ast.Node) string, p parsedFile, in *ast.FuncDecl) obligation {
+	if i < 0 && fixed != nil {
+		return resolveIn(site, field, fixed, text, s.home, kind, s.homeDecl, 0)
+	}
+	return resolveIn(site, field, at(i), text, p, kind, in, 0)
 }
 
 func TestTheFailureContractHolds(t *testing.T) {
@@ -178,7 +200,7 @@ func TestTheFailureContractHolds(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"NewFailure", "Quoted", "uploadFailed"} {
+	for _, want := range []string{"NewFailure", "Quoted", "uploadFailed", "unrecognisedAnswer"} {
 		found := false
 		for key := range summaries {
 			found = found || strings.HasSuffix(key, "."+want)
@@ -347,9 +369,9 @@ func TestTheFailureContractHolds(t *testing.T) {
 			}
 			what.constructor = shortFuncName(calledFuncKey(call.Fun, in, p.info))
 			obs = append(obs,
-				resolveIn(site, "ID", at(s.idArg), text, p, "id", in, 0),
-				resolveIn(site, "Next", at(s.act), text, p, "action", in, 0),
-				resolveIn(site, "NextText", at(s.txt), text, p, "text", in, 0),
+				s.fixedOr(s.idArg, s.fixedID, at, site, "ID", "id", text, p, in),
+				s.fixedOr(s.act, s.fixedAct, at, site, "Next", "action", text, p, in),
+				s.fixedOr(s.txt, s.fixedTxt, at, site, "NextText", "text", text, p, in),
 				resolveStage(site, at(s.stage), text, p, in),
 				what)
 			return true
@@ -532,6 +554,7 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 	params := paramNames(fd)
 	var candidates []summary
 	mutated := false
+	fixedRead := false
 
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -539,18 +562,20 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 			if !isFailureExpr(p.info, node) {
 				return true
 			}
-			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, what: -1, act: -1, txt: -1}
+			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, what: -1, act: -1, txt: -1,
+				home: p, homeDecl: fd}
 			for _, elt := range node.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
 					continue
 				}
 				id, ok := kv.Value.(*ast.Ident)
-				if !ok {
-					continue
+				i, isParam := 0, false
+				if ok {
+					i, isParam = params[id.Name]
 				}
-				i, isParam := params[id.Name]
 				if !isParam {
+					fixedRead = fixedRead || s.fix(calleeName(kv.Key), kv.Value, params)
 					continue
 				}
 				switch calleeName(kv.Key) {
@@ -575,14 +600,18 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 				c != modulePath+"/internal/ui.Quoted" {
 				return true
 			}
-			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, what: -1, act: -1, txt: -1}
+			s := summary{fn: fd.Name.Name, idArg: -1, stage: -1, what: -1, act: -1, txt: -1,
+				home: p, homeDecl: fd}
 			for i, arg := range node.Args {
 				id, ok := arg.(*ast.Ident)
-				if !ok {
-					continue
+				j, isParam := 0, false
+				if ok {
+					j, isParam = params[id.Name]
 				}
-				j, isParam := params[id.Name]
 				if !isParam {
+					// Constructor positions: (id, stage, what, why|detail, next, nextText)
+					field := map[int]string{0: "ID", 4: "Next", 5: "NextText"}[i]
+					fixedRead = fixedRead || s.fix(field, arg, params)
 					continue
 				}
 				// Constructor positions: (id, stage, what, why|detail, next, nextText)
@@ -610,22 +639,61 @@ func verifySummary(fd *ast.FuncDecl, text func(parsedFile, ast.Node) string,
 		}
 		return true
 	})
-	if mutated || len(candidates) == 0 {
+	if mutated || fixedRead || len(candidates) == 0 {
 		return summary{}, false
 	}
 	want := candidates[0]
 	// A HELPER THAT DOES NOT FORWARD A STAGE IS NOT SUMMARISED, for the
 	// reason one that does not forward an id is not: every call to it would
-	// build a failure that says nothing about where the person was.
-	if want.idArg < 0 || want.stage < 0 || want.act < 0 || want.txt < 0 {
+	// build a failure that says nothing about where the person was. The id,
+	// the action and the words are each forwarded or fixed; neither is a
+	// failure nobody can read.
+	if (want.idArg < 0 && want.fixedID == nil) || want.stage < 0 ||
+		(want.act < 0 && want.fixedAct == nil) || (want.txt < 0 && want.fixedTxt == nil) {
 		return summary{}, false
 	}
 	for _, got := range candidates[1:] {
-		if got.idArg != want.idArg || got.stage != want.stage || got.what != want.what || got.act != want.act || got.txt != want.txt {
+		if got.idArg != want.idArg || got.stage != want.stage || got.what != want.what || got.act != want.act || got.txt != want.txt ||
+			exprText(got.fixedID) != exprText(want.fixedID) || exprText(got.fixedAct) != exprText(want.fixedAct) ||
+			exprText(got.fixedTxt) != exprText(want.fixedTxt) {
 			return summary{}, false
 		}
 	}
 	return want, true
+}
+
+// fix records a field the helper fixes in its own body, and reports
+// whether the "fixed" value reads one of the helper's parameters — which
+// makes it the caller's value under the helper's name, and refuses the
+// summary. Only the id, the action and the words can be fixed.
+func (s *summary) fix(field string, value ast.Expr, params map[string]int) bool {
+	switch field {
+	case "ID":
+		s.fixedID = value
+	case "Next":
+		s.fixedAct = value
+	case "NextText":
+		s.fixedTxt = value
+	default:
+		return false
+	}
+	reads := false
+	ast.Inspect(value, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			if _, isParam := params[id.Name]; isParam {
+				reads = true
+			}
+		}
+		return true
+	})
+	return reads
+}
+
+func exprText(e ast.Expr) string {
+	if e == nil {
+		return ""
+	}
+	return types.ExprString(e)
 }
 
 type parsedFile = struct {
@@ -1125,6 +1193,56 @@ func TestSummaryRequiresEveryConstructionAndUnmutatedParameters(t *testing.T) {
 		fd := p.file.Decls[1].(*ast.FuncDecl)
 		if _, ok := verifySummary(fd, func(parsedFile, ast.Node) string { return "" }, p); ok {
 			t.Fatalf("unsafe helper was summarised: %s", body)
+		}
+	}
+}
+
+// TestAHelperMayFixItsIdActionAndTextButNotTheStage is the shape the
+// shared answer for an unreadable code takes: the helper owns the id, the
+// action and the words, because one home for them is the point, and every
+// caller says where the person was and what happened. A field the helper
+// fixes is read in the helper's body, once; a field it forwards is read at
+// every caller.
+//
+// A "fixed" field that reads a parameter is not fixed: it is the caller's
+// value wearing the helper's name, and the helper is not summarised.
+//
+// REQUIRED MUTATIONS, run: let a fixed field read a parameter, and the
+// second half of this row reds, naming each body that was summarised. Stop
+// accepting a fixed field at all, and the first half reds, as does the
+// contract row, which no longer finds a summary for the shared answer.
+func TestAHelperMayFixItsIdActionAndTextButNotTheStage(t *testing.T) {
+	summarise := func(body string) (summary, bool) {
+		t.Helper()
+		p := typedFailureFixture(t, `package fixture
+			import ui "github.com/curiouspub/cli/internal/ui"
+			const IDFixed ui.FailureID = "fixed"
+			func build(stage ui.Stage, next ui.NextAction, text string) *ui.Failure {
+				`+body+`
+			}`)
+		var fd *ast.FuncDecl
+		for _, d := range p.file.Decls {
+			if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "build" {
+				fd = f
+			}
+		}
+		return verifySummary(fd, func(parsedFile, ast.Node) string { return "" }, p)
+	}
+
+	fixed := `return &ui.Failure{ID: IDFixed, Stage: stage, Next: ui.NextWait, NextText: "the helper's own words"}`
+	if _, ok := summarise(fixed); !ok {
+		t.Errorf("a helper that fixes its id, action and words and forwards its stage was not "+
+			"summarised, so every call to it is unchecked:\n%s", fixed)
+	}
+
+	for _, body := range []string{
+		`return &ui.Failure{ID: IDFixed, Stage: stage, Next: ui.NextAction(string(next)), NextText: "words"}`,
+		`return &ui.Failure{ID: IDFixed, Stage: stage, Next: ui.NextWait, NextText: "words " + text}`,
+		`return &ui.Failure{ID: IDFixed, Stage: "here", Next: ui.NextWait, NextText: "words"}`,
+	} {
+		if _, ok := summarise(body); ok {
+			t.Errorf("a helper whose fixed field reads a parameter, or which fixes its stage, "+
+				"was summarised:\n%s", body)
 		}
 	}
 }

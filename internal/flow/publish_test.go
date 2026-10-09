@@ -753,7 +753,8 @@ func TestEachRefusalHasItsOwnCopyAndItsOwnCost(t *testing.T) {
 				"something this build has never heard of"),
 			wantCode: 1,
 			says: []string{"something this build has never heard of", "deploy-1",
-				nothingDeployed, "updating curious may"},
+				nothingDeployed, `"a_code_from_a_later_server"`, "Updating curious may help"},
+			neverSay: []string{"Try again"},
 		},
 		{
 			// Both codes for one event: a build the server will not take.

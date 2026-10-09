@@ -69,6 +69,10 @@ func TestTheCheckerVisitsEveryConstruction(t *testing.T) {
 		modulePath + "/internal/ui.NewFailure":     true,
 		modulePath + "/internal/ui.Quoted":         true,
 		modulePath + "/internal/flow.uploadFailed": true,
+		// The shared answer for a code a step has no copy for. It fixes its
+		// own id, action and words, so its callers carry the obligations
+		// and the construction in its body is a definition.
+		modulePath + "/internal/flow.unrecognisedAnswer": true,
 	}
 	for _, p := range files {
 		if p.info == nil {

@@ -69,7 +69,8 @@ func TestAServerFaultSaysTryAgainAndNeverBlamesTheBuild(t *testing.T) {
 }
 
 // The error line on the build log names whose side a stop is on for the
-// three codes that say so, and shows any other code as it was sent.
+// three codes that say so, and shows any other code as it was sent — one
+// this build does not define said to be one.
 //
 // REQUIRED MUTATION: make errorSide return the bare code for build_failed.
 // The first row reds, and the line reads the way the defect did.
@@ -82,7 +83,8 @@ func TestTheErrorLineNamesWhoseSideTheStopIsOn(t *testing.T) {
 		{wire.CodeBuildFailed, "(in the project's build)", "internal"},
 		{wire.CodeLimitReached, "(a platform limit on builds)", "internal"},
 		{wire.CodeInternal, "(on curious.pub's side)", "project"},
-		{"a_code_this_build_predates", "(a_code_this_build_predates)", ""},
+		{"a_code_this_build_predates",
+			"(a_code_this_build_predates, a code this build of curious does not recognise)", "again"},
 	} {
 		got := errorLine(wire.Error{Code: tc.code, Message: "building the site failed"})
 		if !strings.HasSuffix(got, tc.want) {
