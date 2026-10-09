@@ -36,7 +36,12 @@ const updatingMayHelp = "Updating curious may help: this build may be older than
 func unrecognisedAnswer(stage ui.Stage, what string, apiErr *api.APIError, situation string) *ui.Failure {
 	why := ui.Written("The server answered with the code \"%s\",\n"+
 		"which this build of curious does not recognise.", string(apiErr.Code))
-	if slices.Contains(wire.AllErrorCodes, apiErr.Code) {
+	if apiErr.Code == "" {
+		// A body that was not the wire envelope at all — a proxy's own
+		// page, an empty body — carries no code, and quoting an empty one
+		// would put words in the server's mouth.
+		why = "The server's answer carried no code this build could read."
+	} else if slices.Contains(wire.AllErrorCodes, apiErr.Code) {
 		// A code this build declares. Calling it unrecognised would be
 		// false; what is true is that this step has no copy for it.
 		why = ui.Written("The server answered with the code \"%s\",\n"+

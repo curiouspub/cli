@@ -44,6 +44,28 @@ func TestADefinedCodeAStepHasNoCopyForIsNotCalledUnrecognised(t *testing.T) {
 	}
 }
 
+// TestAnAnswerWithNoCodeIsNotSaidToHaveOne. A refusal whose body is not the
+// wire envelope at all — a proxy's own page, an empty body — arrives with
+// no code. Saying the server answered with the code "" would put a
+// quotation in the server's mouth that it never said.
+func TestAnAnswerWithNoCodeIsNotSaidToHaveOne(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	codeless := &api.APIError{Status: http.StatusBadGateway,
+		Message: "the server returned an error this client could not parse"}
+
+	var f *ui.Failure
+	if err := startFailure(codeless, now); !errors.As(err, &f) {
+		t.Fatalf("the stop is a %T", err)
+	}
+	const want = "The server's answer carried no code this build could read."
+	if f.Why != want {
+		t.Errorf("why = %q, want %q", f.Why, want)
+	}
+	if f.Detail != codeless.Message {
+		t.Errorf("the message is %q here, want it verbatim: %q", f.Detail, codeless.Message)
+	}
+}
+
 // TestACodeCarryingALineBreakCannotWriteALineOfOurs. The code is the
 // server's, and it is shown as sent — except a line break, which is shown
 // escaped. The sentence it sits in is this program's prose, laid out line

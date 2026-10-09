@@ -98,6 +98,9 @@ var codeComparisonExceptions = []struct{ file, fn, against, reason string }{
 		"counts consecutive refusals of one kind; returns a count and renders nothing"},
 	{"internal/flow/stream.go", "errorLine", `""`,
 		"an error event with no code renders its message alone; not dispatch on a code"},
+	{"internal/flow/unrecognised.go", "unrecognisedAnswer", `""`,
+		"a refusal whose body was not the wire envelope carries no code, and the shared answer " +
+			"does not quote one it was not sent; not dispatch on a code"},
 }
 
 type codeSite struct {
