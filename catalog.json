@@ -677,7 +677,7 @@
     },
     {
       "action": [
-        "Wait"
+        "GiveUp"
       ],
       "family": null,
       "headline": {

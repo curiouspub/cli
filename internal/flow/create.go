@@ -272,16 +272,13 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 			"Check that you are running a current version — `curious version` says\n"+
 				"which one — and please report this if it keeps happening. "+
 				uploadedNothing).Quoting(apiErr.Message)
-	}
 
-	// Routed to a stop with no copy of its own, or a code this build
-	// predates. The contract is additive-only, so the server is entitled
-	// to introduce one, and the honest answer is to show what it said.
-	return ui.Quoted(
-		ui.IDServerAnswerUnrecognised,
-		ui.StageDeploys,
-		"curious couldn't start the deploy.",
-		apiErr.Message, ui.NextWait,
-		"Try again in a moment. If it keeps happening, updating curious may\n"+
-			"help — this build may be older than the server. "+uploadedNothing)
+	default:
+		// Routed to a stop with no copy of its own, or a code this build
+		// predates. The contract is additive-only, so the server is
+		// entitled to introduce one, and the honest answer is to show
+		// what it said.
+		return unrecognisedAnswer(ui.StageDeploys, "curious couldn't start the deploy.",
+			apiErr, uploadedNothing)
+	}
 }

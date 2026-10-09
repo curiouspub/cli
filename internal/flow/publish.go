@@ -594,18 +594,15 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 			"The server hit a problem finishing the deploy.",
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 			"Try again in a moment: run `curious deploy` again.").Quoting(apiErr.Message)
-	}
 
-	// Routed to a stop with no copy of its own, or a code this build
-	// predates. The contract is additive-only, so the server is entitled
-	// to introduce one, and the honest answer is to show what it said.
-	return ui.NewFailure(
-		ui.IDServerAnswerUnrecognised,
-		ui.StageAddresses,
-		"The server wouldn't give this deploy an address.",
-		ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
-		"Try again in a moment. If it keeps happening, updating curious may\n"+
-			"help — this build may be older than the server.").Quoting(apiErr.Message)
+	default:
+		// Routed to a stop with no copy of its own, or a code this build
+		// predates. The contract is additive-only, so the server is
+		// entitled to introduce one, and the honest answer is to show
+		// what it said.
+		return unrecognisedAnswer(ui.StageAddresses, "The server wouldn't give this deploy an address.",
+			apiErr, ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID))
+	}
 }
 
 // buildRefusedFailure is what a deploy the server will not take ends the

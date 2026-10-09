@@ -677,8 +677,10 @@ func classify(ctx context.Context, err error, deps LoginDeps, email string, now 
 		// A code this binary predates. The contract is additive-only, so
 		// the server is entitled to introduce one — and the honest
 		// answer is to stop and show what the server said, because that
-		// message is the only thing here that knows what happened.
-		return routeStop, "", unknownCodeFailure(apiErr)
+		// message is the only thing here that knows what happened. It
+		// stops through stopFailure, so it meets the same default every
+		// other code with no copy of its own meets.
+		return routeStop, "", stopFailure(ctx, apiErr, deps, email, now)
 	}
 	if route == routeRecover {
 		return routeRecover, apiErr.Message, nil
@@ -764,26 +766,16 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 				"The address comes from CURIOUS_API_URL.",
 				deps.Endpoint), ui.NextGiveUp,
 			"Check CURIOUS_API_URL, or unset it to use the default.")
+
+	default:
+		// Routed to a stop by the table above without copy of its own, or
+		// a code this binary predates. It is deliberately the same shape
+		// as every other stop rather than the program's unexpected-failure
+		// copy: nothing is broken here, the server simply said something
+		// this build has no answer for.
+		return unrecognisedAnswer(ui.StageLogins, "curious couldn't finish logging you in.",
+			apiErr, "")
 	}
-
-	// Routed to a stop by the table above without copy of its own. The
-	// server's message is the only thing that knows what happened.
-	return unknownCodeFailure(apiErr)
-}
-
-// unknownCodeFailure shows what the server said and stops. It is what a
-// code this binary predates gets, and it is deliberately the same shape
-// as every other stop rather than the program's unexpected-failure copy:
-// nothing is broken here, the server simply said something newer than
-// this build.
-func unknownCodeFailure(apiErr *api.APIError) error {
-	return ui.Quoted(
-		ui.IDServerAnswerUnrecognised,
-		ui.StageLogins,
-		"curious couldn't finish logging you in.",
-		apiErr.Message, ui.NextWait,
-		"Try again in a moment. If it keeps happening, updating curious may\n"+
-			"help — this build may be older than the server.")
 }
 
 // retryAdvice renders a time of day to come back at, THROUGH THE SHARED

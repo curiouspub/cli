@@ -261,39 +261,59 @@ func TestRateLimitingWaitsEverywhere(t *testing.T) {
 	}
 }
 
-// TestAnAnswerThisBuildCannotReadWaits is adjudicated correction #3.
+// TestAnAnswerThisBuildCannotReadGivesUp is adjudicated correction #3, and
+// its verdict has since been reversed.
 //
 // A code this binary predates is the additive contract meeting an older
-// client. Three of the five sites told the reader to run the deploy
-// again; the other two told them to wait. **A fresh run cannot fix an
-// answer the client cannot read** — the same server will send the same
-// unrecognised code to the same build — so the action is Wait and the
-// copy names the likely cause, which is that this build is older than
-// the server.
+// client. The correction made the five sites that met one agree on an
+// action, and the action it chose was Wait, with copy that began "Try
+// again in a moment". The client does not retry such a code: it stops. So
+// the words contradicted the program's own behaviour, and they did so for
+// every code the server would ever add. The action is now GiveUp — retrying
+// cannot help, and the one thing that may, a newer curious, is outside the
+// run — and the copy suggests no retry at all.
 //
-// One family across five sites, because the stage that met the answer is
-// not a family: the diagnosis and the remedy are identical at all five.
-func TestAnAnswerThisBuildCannotReadWaits(t *testing.T) {
+// One family across SIX sites now, because the capacity check met the same
+// condition under another id, and the stage that met the answer is still
+// not a family. Every authored part is asserted, because the shared answer
+// is the whole of what each of these sites says.
+//
+// REQUIRED MUTATION, run: make the shared answer's action Wait. Every
+// site of this row reds on the action, and so does the login's own row.
+func TestAnAnswerThisBuildCannotReadGivesUp(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	// A code no routing table states. The contract is additive, so the
-	// server is entitled to introduce one, and that is exactly the
-	// condition this family is about.
-	unknown := &api.APIError{Code: wire.ErrorCode("teapot"), Message: "I am a teapot"}
+	// A code no routing table states and the contract does not define.
+	unknown := &api.APIError{Status: http.StatusTeapot, Code: wire.ErrorCode("teapot"), Message: "I am a teapot"}
+	const sentence = "The server answered with the code \"teapot\",\n" +
+		"which this build of curious does not recognise."
+	const updating = "Updating curious may help: this build may be older than the server."
 
 	for _, tc := range []struct {
 		name     string
 		err      error
-		wantNext string
+		wantWhat string
+		stage    ui.Stage
+		wantWhy  string
 	}{
+		{"at the capacity check", capacityCheckFailure(unknown),
+			"curious couldn't start the deploy.", ui.StageDeploys,
+			sentence + "\n\n" + uploadedNothing},
+		{"at the create", createStopFailure(unknown, now),
+			"curious couldn't start the deploy.", ui.StageDeploys,
+			sentence + "\n\n" + uploadedNothing},
+		{"at the login", stopFailure(t.Context(), unknown,
+			LoginDeps{Endpoint: "https://api.example"}, "someone@example.com", now),
+			"curious couldn't finish logging you in.", ui.StageLogins,
+			sentence},
 		{"at the publish", publishStopFailure(unknown, "dpl-abc", now),
-			"Try again in a moment. If it keeps happening, updating curious may\n" +
-				"help — this build may be older than the server."},
+			"The server wouldn't give this deploy an address.", ui.StageAddresses,
+			sentence + "\n\n" + nothingDeployed + "\n\nThe deploy is dpl-abc."},
 		{"at the start", startFailure(unknown, now),
-			"Try again in a moment. If it keeps happening, updating curious may\n" +
-				"help — this build may be older than the server."},
+			"The server wouldn't start the build.", ui.StageBuilding,
+			sentence},
 		{"at the stream", streamRefusedFailure(unknown),
-			"Try again in a moment. If it keeps happening, updating curious may\n" +
-				"help — this build may be older than the server."},
+			"The server wouldn't send the build log.", ui.StageBuildLog,
+			sentence},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var f *ui.Failure
@@ -304,16 +324,33 @@ func TestAnAnswerThisBuildCannotReadWaits(t *testing.T) {
 				t.Errorf("id = %q, want %q — one family, because the stage that met "+
 					"the answer is not a diagnosis", f.ID, ui.IDServerAnswerUnrecognised)
 			}
-			if f.Next != ui.NextWait {
-				t.Errorf("action = %q, want %q. A fresh run sends the same request "+
-					"from the same build to the same server, and gets the same "+
-					"answer it could not read", f.Next, ui.NextWait)
+			// THE NO-RETRY ROW, on the structured field rather than on a
+			// list of phrases: a list of phrases misses the next way of
+			// saying it.
+			if f.Next == ui.NextWait {
+				t.Errorf("action = %q: the client does not retry a code it cannot read, "+
+					"so telling the reader it will work later contradicts the program", f.Next)
 			}
-			// AND THE COPY CARRIES THE LIKELY CAUSE, because "try again"
-			// with no reason is advice a reader cannot act on twice.
-			if f.NextText != tc.wantNext {
-				t.Errorf("next-step copy = %q, want the complete approved instruction %q",
-					f.NextText, tc.wantNext)
+			if f.Next != ui.NextGiveUp {
+				t.Errorf("action = %q, want %q", f.Next, ui.NextGiveUp)
+			}
+			if f.Stage != tc.stage || f.What != tc.wantWhat {
+				t.Errorf("stage and headline = %q, %q; want %q, %q", f.Stage, f.What, tc.stage, tc.wantWhat)
+			}
+			if f.Why != tc.wantWhy {
+				t.Errorf("why = %q, want %q", f.Why, tc.wantWhy)
+			}
+			if f.Detail != unknown.Message {
+				t.Errorf("the server's message is %q here, want it verbatim: %q", f.Detail, unknown.Message)
+			}
+			if f.NextText != updating {
+				t.Errorf("next-step copy = %q, want %q", f.NextText, updating)
+			}
+			if out := rendered(tc.err); !strings.Contains(out, `"teapot"`) {
+				t.Errorf("the code the server sent is nowhere in what a person reads:\n%s", out)
+			}
+			if code := exitCodeFor(t, tc.err); code != 1 {
+				t.Errorf("exit code %d, want 1: this is a failure of the run, not a closed door", code)
 			}
 		})
 	}

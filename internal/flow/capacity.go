@@ -155,7 +155,8 @@ func capacityCheckFailure(err error) error {
 			"Check your connection and run `curious deploy` again. "+uploadedNothing).Quoting(err.Error())
 	}
 
-	if apiErr.Code == wire.CodeMaintenance {
+	switch apiErr.Code {
+	case wire.CodeMaintenance:
 		// The server's message, verbatim, and NO retry time — the kill
 		// switch has no reset anybody can honestly name.
 		return ui.ServerClosed(ui.Quoted(
@@ -164,12 +165,22 @@ func capacityCheckFailure(err error) error {
 			"curious.pub is not taking deploys right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later. "+uploadedNothing))
-	}
 
-	return ui.Quoted(
-		ui.IDCapacityCheckFailed,
-		ui.StageDeploys,
-		"curious couldn't ask whether there is room today.",
-		apiErr.Message, ui.NextWait,
-		"Try again in a moment. "+uploadedNothing)
+	case wire.CodeInternal:
+		// The server failed answering, and its advice is right.
+		return ui.Quoted(
+			ui.IDCapacityCheckFailed,
+			ui.StageDeploys,
+			"curious couldn't ask whether there is room today.",
+			apiErr.Message, ui.NextWait,
+			"Try again in a moment. "+uploadedNothing)
+
+	default:
+		// The endpoint answers with the two codes above and no other, so
+		// anything else is a code this step has no copy for. Its headline
+		// is the create's, because a failure id carries one headline per
+		// stage and both are the start of a deploy.
+		return unrecognisedAnswer(ui.StageDeploys, "curious couldn't start the deploy.",
+			apiErr, uploadedNothing)
+	}
 }

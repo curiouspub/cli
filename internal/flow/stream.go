@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -713,7 +714,8 @@ func errorLine(ev wire.Error) string {
 // because the bare code for a project's own failure used to read as the
 // service's. Every other code is shown as it was sent: it is the half a
 // bug report can be searched for, and a code this build predates is shown
-// rather than guessed at.
+// rather than guessed at — and said to be one, with no advice, because
+// this build knows nothing else about it.
 func errorSide(code wire.ErrorCode) string {
 	switch code {
 	case wire.CodeBuildFailed:
@@ -722,8 +724,12 @@ func errorSide(code wire.ErrorCode) string {
 		return "a platform limit on builds"
 	case wire.CodeInternal:
 		return "on curious.pub's side"
+	default:
+		if slices.Contains(wire.AllErrorCodes, code) {
+			return string(code)
+		}
+		return string(code) + ", a code this build of curious does not recognise"
 	}
-	return string(code)
 }
 
 // startFailure is what a start that did not succeed ends the run as.
@@ -758,7 +764,8 @@ func startFailure(err error, now time.Time) error {
 			"Run `curious deploy` again when the connection is back.").Quoting(err.Error())
 	}
 
-	if apiErr.Code == wire.CodeMaintenance {
+	switch apiErr.Code {
+	case wire.CodeMaintenance:
 		// The kill switch. The service declined; the project is fine, and
 		// the archive is already where it was going.
 		return ui.ServerClosed(ui.Quoted(
@@ -767,9 +774,8 @@ func startFailure(err error, now time.Time) error {
 			"curious.pub is not building right now.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
-	}
 
-	if apiErr.Code == wire.CodeRateLimited {
+	case wire.CodeRateLimited:
 		return ui.Quoted(
 			ui.IDRateLimited,
 			ui.StageBuilding,
@@ -777,9 +783,8 @@ func startFailure(err error, now time.Time) error {
 			apiErr.Message, ui.NextWait,
 			"Run `curious deploy` again "+afterTheReset(now.Add(apiErr.RetryAfter), now)+". "+
 				"The archive was uploaded,\nand nothing has been built or deployed.")
-	}
 
-	if apiErr.Code == wire.CodeInternal {
+	case wire.CodeInternal:
 		// The server failed while starting the build, and its own message
 		// says to try again. The archive is still where it was uploaded.
 		return ui.Quoted(
@@ -789,40 +794,33 @@ func startFailure(err error, now time.Time) error {
 			apiErr.Message, ui.NextWait,
 			"Try again in a moment. The archive was uploaded, and nothing has\n"+
 				"been built or deployed.")
-	}
 
-	// EVERY OTHER CODE ENDS THE RUN THE SAME WAY, so there is no routing
-	// table here: one would have a single column. What the reader needs
-	// is what the server said, and the contract is additive-only, so this
-	// build may be older than the code it is being shown.
-	return ui.Quoted(
-		ui.IDServerAnswerUnrecognised,
-		ui.StageBuilding,
-		"The server wouldn't start the build.",
-		apiErr.Message, ui.NextWait,
-		"Try again in a moment. If it keeps happening, updating curious may\n"+
-			"help — this build may be older than the server.")
+	default:
+		// EVERY OTHER CODE ENDS THE RUN THE SAME WAY, so there is no
+		// routing table here: one would have a single column. What the
+		// reader needs is what the server said, and the contract is
+		// additive-only, so this build may be older than the code it is
+		// being shown.
+		return unrecognisedAnswer(ui.StageBuilding, "The server wouldn't start the build.", apiErr, "")
+	}
 }
 
 // streamRefusedFailure is what a stream the server REFUSED ends the run
 // as. It is deliberately not a reconnection: the answer arrived, it was
 // decoded, and it will say the same thing next time.
 func streamRefusedFailure(apiErr *api.APIError) error {
-	if apiErr.Code == wire.CodeMaintenance {
+	switch apiErr.Code {
+	case wire.CodeMaintenance:
 		return ui.ServerClosed(ui.Quoted(
 			ui.IDServiceUnavailable,
 			ui.StageBuildLog,
 			"curious.pub stopped sending the build log.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
+
+	default:
+		return unrecognisedAnswer(ui.StageBuildLog, "The server wouldn't send the build log.", apiErr, "")
 	}
-	return ui.Quoted(
-		ui.IDServerAnswerUnrecognised,
-		ui.StageBuildLog,
-		"The server wouldn't send the build log.",
-		apiErr.Message, ui.NextWait,
-		"Try again in a moment. If it keeps happening, updating curious may\n"+
-			"help — this build may be older than the server.")
 }
 
 // streamLostFailure is what a build log that could not be picked up again
