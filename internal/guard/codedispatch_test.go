@@ -74,6 +74,8 @@ import (
 const (
 	wireErrorCodeKey   = modulePath + "/pkg/wire.ErrorCode"
 	unrecognisedAnswer = modulePath + "/internal/flow.unrecognisedAnswer"
+	errorUnexplained   = modulePath + "/internal/flow.errorUnexplained"
+	requestUnserved    = modulePath + "/internal/flow.requestUnserved"
 )
 
 // codeSwitchExceptions are the switches over a code whose default: clause
@@ -98,9 +100,6 @@ var codeComparisonExceptions = []struct{ file, fn, against, reason string }{
 		"counts consecutive refusals of one kind; returns a count and renders nothing"},
 	{"internal/flow/stream.go", "errorLine", `""`,
 		"an error event with no code renders its message alone; not dispatch on a code"},
-	{"internal/flow/unrecognised.go", "unrecognisedAnswer", `""`,
-		"a refusal whose body was not the wire envelope carries no code, and the shared answer " +
-			"does not quote one it was not sent; not dispatch on a code"},
 }
 
 type codeSite struct {
@@ -109,6 +108,9 @@ type codeSite struct {
 	fn      string
 	against string // comparisons only
 	problem string // switches only; empty when the switch is sound
+	// emptyProblem is what is wrong with a switch's answer to the empty
+	// code, or nothing. Switches only.
+	emptyProblem string
 }
 
 func TestEveryCodeDispatchEndsInTheSharedUnknownAnswer(t *testing.T) {
@@ -187,6 +189,50 @@ func TestEveryCodeDispatchEndsInTheSharedUnknownAnswer(t *testing.T) {
 	}
 }
 
+// A REFUSAL WITH NO CODE GETS ITS OWN ANSWER AT EVERY HANDLER, AND THE
+// STATUS DECIDES WHICH.
+//
+// A body that is not the wire envelope carries no code. Answered by the
+// default: clause, it would be described as a code the server sent and
+// would quote the client's own sentence as the server's. So every handler
+// switch over wire.ErrorCode, outside the keyed switch exceptions, has a
+// `case "":` clause whose every return is one of the two code-less
+// answers in internal/flow, and which reaches both: errorUnexplained for a
+// status that passes on its own, requestUnserved for one that does not.
+//
+// WHAT THIS CANNOT SEE: whether the condition choosing between the two is
+// the status, and whether the situation each site passes is true. The
+// rows beside the handlers drive a code-less answer through each one.
+//
+// REQUIRED MUTATION, made, run and reverted: delete one handler's
+// `case "":` clause. Reds: that switch has no case "": clause.
+func TestEveryCodeSwitchAnswersAnAnswerWithNoCode(t *testing.T) {
+	switches, _ := codeDispatchSites(t)
+	checked := 0
+	for _, s := range switches {
+		excepted := false
+		for _, e := range codeSwitchExceptions {
+			excepted = excepted || (s.file == e.file && s.fn == e.fn)
+		}
+		if excepted {
+			continue
+		}
+		checked++
+		if s.emptyProblem != "" {
+			t.Errorf("%s: the switch over wire.ErrorCode in %s %s.\n"+
+				"A refusal with no code is not a code this build has no copy for: it gets "+
+				"`case \"\": if clearsOnItsOwn(apiErr) { return errorUnexplained(...) }; "+
+				"return requestUnserved(...)`.", s.where, s.fn, s.emptyProblem)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no handler switch over wire.ErrorCode was checked, so this rule checked nothing")
+	}
+	if !t.Failed() {
+		t.Logf("%d handler switches answer an answer with no code", checked)
+	}
+}
+
 // codeDispatchSites is every switch whose tag is a wire.ErrorCode and every
 // comparison with one, across every platform the release builds. A file
 // that builds on several platforms is reported once.
@@ -229,7 +275,8 @@ func codeDispatchSites(t *testing.T) (switches, comparisons []codeSite) {
 				site := codeSite{
 					where: fmt.Sprintf("%s:%d:%d", rel, pos.Line, pos.Column),
 					file:  rel, fn: enclosingFuncName(p.file, node.Pos()),
-					problem: defaultProblem(p.info, node),
+					problem:      defaultProblem(p.info, node),
+					emptyProblem: emptyCodeProblem(p.info, node),
 				}
 				if !seen["switch "+site.where] {
 					seen["switch "+site.where] = true
@@ -298,6 +345,62 @@ func defaultProblem(info *types.Info, sw *ast.SwitchStmt) string {
 	call, ok := unparen(ret.Results[len(ret.Results)-1]).(*ast.CallExpr)
 	if !ok || calledObject(info, call.Fun) != unrecognisedAnswer {
 		return "has a default: clause that does not return unrecognisedAnswer's result"
+	}
+	return ""
+}
+
+// emptyCodeProblem says what is wrong with a switch's answer to the empty
+// code, or nothing. The clause names the empty code alone, and every return
+// in it is a direct call to one of the two code-less answers, both of which
+// it reaches: the status decides between them, so a clause that can reach
+// only one has dropped the decision.
+func emptyCodeProblem(info *types.Info, sw *ast.SwitchStmt) string {
+	var clause *ast.CaseClause
+	for _, stmt := range sw.Body.List {
+		cc, ok := stmt.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, e := range cc.List {
+			if lit, ok := unparen(e).(*ast.BasicLit); ok && lit.Kind == token.STRING &&
+				(lit.Value == `""` || lit.Value == "``") {
+				clause = cc
+			}
+		}
+	}
+	if clause == nil {
+		return `has no case "": clause`
+	}
+	if len(clause.List) != 1 {
+		return `answers the empty code in a clause shared with other codes`
+	}
+	called := map[string]bool{}
+	problem := ""
+	ast.Inspect(&ast.BlockStmt{List: clause.Body}, func(n ast.Node) bool {
+		if _, nested := n.(*ast.FuncLit); nested {
+			return false
+		}
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		callee := ""
+		if len(ret.Results) > 0 {
+			if call, ok := unparen(ret.Results[len(ret.Results)-1]).(*ast.CallExpr); ok {
+				callee = calledObject(info, call.Fun)
+			}
+		}
+		if callee != errorUnexplained && callee != requestUnserved {
+			problem = `has a case "": clause with a return that is neither code-less answer`
+		}
+		called[callee] = true
+		return true
+	})
+	if problem != "" {
+		return problem
+	}
+	if !called[errorUnexplained] || !called[requestUnserved] {
+		return `has a case "": clause that does not reach both code-less answers`
 	}
 	return ""
 }

@@ -200,7 +200,8 @@ func TestTheFailureContractHolds(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"NewFailure", "Quoted", "uploadFailed", "unrecognisedAnswer"} {
+	for _, want := range []string{"NewFailure", "Quoted", "uploadFailed", "unrecognisedAnswer",
+		"errorUnexplained", "requestUnserved"} {
 		found := false
 		for key := range summaries {
 			found = found || strings.HasSuffix(key, "."+want)

@@ -688,6 +688,13 @@ func classify(ctx context.Context, err error, deps LoginDeps, email string, now 
 	return routeStop, "", stopFailure(ctx, apiErr, deps, email, now)
 }
 
+// loginMayHaveActed is what a login answered without a code can and cannot
+// tell. It names no command, because the fresh login is a fresh run at a
+// terminal and a call to ask for a code elsewhere.
+const loginMayHaveActed = "The server may have acted before this answer arrived, so a code already\n" +
+	"entered may be spent. Start the login again for a new code; sending this\n" +
+	"code again may count as a wrong attempt."
+
 // stopFailure is the copy for each code that ends the run.
 func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, email string, now time.Time) error {
 	switch apiErr.Code {
@@ -766,6 +773,20 @@ func stopFailure(ctx context.Context, apiErr *api.APIError, deps LoginDeps, emai
 				"The address comes from CURIOUS_API_URL.",
 				deps.Endpoint), ui.NextGiveUp,
 			"Check CURIOUS_API_URL, or unset it to use the default.")
+
+	case "":
+		// No code: something in front of the service answered. Neither
+		// login call is repeated, and either may have been acted on before
+		// the answer came back: a verify that was has spent its code, and
+		// sending it again counts against the person as a wrong one. So
+		// the answer that passes says to start again; the one that does
+		// not means the request was never served, and says nothing of it.
+		if clearsOnItsOwn(apiErr) {
+			return errorUnexplained(ui.StageLogins, "curious couldn't finish logging you in.",
+				apiErr, loginMayHaveActed)
+		}
+		return requestUnserved(ui.StageLogins, "curious couldn't finish logging you in.",
+			apiErr, "")
 
 	default:
 		// Routed to a stop by the table above without copy of its own, or

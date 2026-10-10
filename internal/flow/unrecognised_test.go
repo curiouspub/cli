@@ -47,22 +47,27 @@ func TestADefinedCodeAStepHasNoCopyForIsNotCalledUnrecognised(t *testing.T) {
 // TestAnAnswerWithNoCodeIsNotSaidToHaveOne. A refusal whose body is not the
 // wire envelope at all — a proxy's own page, an empty body — arrives with
 // no code. Saying the server answered with the code "" would put a
-// quotation in the server's mouth that it never said.
+// quotation in the server's mouth that it never said, and so would quoting
+// the sentence the client writes for itself when it cannot read an answer.
+// The answer such a refusal does get is asserted in full beside it.
 func TestAnAnswerWithNoCodeIsNotSaidToHaveOne(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	codeless := &api.APIError{Status: http.StatusBadGateway,
 		Message: "the server returned an error this client could not parse"}
 
 	var f *ui.Failure
-	if err := startFailure(codeless, now); !errors.As(err, &f) {
+	err := startFailure(codeless, now)
+	if !errors.As(err, &f) {
 		t.Fatalf("the stop is a %T", err)
 	}
-	const want = "The server's answer carried no code this build could read."
-	if f.Why != want {
-		t.Errorf("why = %q, want %q", f.Why, want)
+	if strings.Contains(f.Why, "code") {
+		t.Errorf("why = %q: a refusal with no code is described by its code", f.Why)
 	}
-	if f.Detail != codeless.Message {
-		t.Errorf("the message is %q here, want it verbatim: %q", f.Detail, codeless.Message)
+	if f.Detail != "" {
+		t.Errorf("the failure quotes %q as the server's words; the server sent none", f.Detail)
+	}
+	if out := rendered(err); strings.Contains(out, codeless.Message) {
+		t.Errorf("the client's own sentence reaches the reader as the server's:\n%s", out)
 	}
 }
 

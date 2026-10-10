@@ -685,11 +685,45 @@ inside it.
 
 > curious couldn't finish logging you in.
 
+### server-error-unexplained
+
+**addresses.** A person is waiting for a finished deploy to be given its public address.
+
+> The server wouldn't give this deploy an address.
+
+**build log.** A person is watching the build log stream in while the build runs.
+
+> The server wouldn't send the build log.
+
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> The server wouldn't start the build.
+
+**deploys.** A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.
+
+> curious couldn't start the deploy.
+
+**logins.** A person is logging in, or curious is saving the login they just completed.
+
+> curious couldn't finish logging you in.
+
+The answer carried no error code, so something in front of the service
+wrote it rather than the service itself, and curious cannot tell what is
+behind it: that is what "unexplained" means here. The message shows the
+HTTP status, which is a 5xx, a 408, a 425 or a 429, and answers like these
+usually pass on their own, for example while the service restarts. Try
+again in a moment. Where the step may already have happened, the message
+says what curious cannot tell.
+
 ### server-fault
 
 **addresses.** A person is waiting for a finished deploy to be given its public address.
 
 > The server hit a problem finishing the deploy.
+
+**build log.** A person is watching the build log stream in while the build runs.
+
+> The server hit a problem sending the build log.
 
 **building.** A person is waiting while the server builds the project and decides whether to take the result.
 
@@ -698,6 +732,36 @@ inside it.
 **deploys.** A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.
 
 > The server hit a problem starting the deploy.
+
+### server-request-unserved
+
+**addresses.** A person is waiting for a finished deploy to be given its public address.
+
+> The server wouldn't give this deploy an address.
+
+**build log.** A person is watching the build log stream in while the build runs.
+
+> The server wouldn't send the build log.
+
+**building.** A person is waiting while the server builds the project and decides whether to take the result.
+
+> The server wouldn't start the build.
+
+**deploys.** A person is starting a deploy: curious is asking whether there is room today and for somewhere to upload the project.
+
+> curious couldn't start the deploy.
+
+**logins.** A person is logging in, or curious is saving the login they just completed.
+
+> curious couldn't finish logging you in.
+
+The answer carried no error code, and its HTTP status is one that does
+not change by waiting: a 404 or a 405 for a request the address does not
+serve, or a redirect, which curious never follows. Something other than
+the service may be answering for the address. Check `CURIOUS_API_URL`, or
+unset it to use the default, and anything between this machine and the
+service, such as a proxy. If both are right, please report it with the
+output of `curious version`.
 
 ### server-unanswered
 

@@ -595,6 +595,20 @@ func publishStopFailure(apiErr *api.APIError, deployID string, now time.Time) er
 			ui.Written(nothingDeployed+"\n\nThe deploy is %s.", deployID), ui.NextWait,
 			"Try again in a moment: run `curious deploy` again.").Quoting(apiErr.Message)
 
+	case "":
+		// No code: something in front of the service answered, and it
+		// says nothing about whether the service acted first. The publish
+		// is not repeated, so this claims neither outcome, whichever the
+		// status.
+		cannotTell := ui.Written("The deploy may or may not have got an address; curious cannot tell\n"+
+			"from this answer.\n\nThe deploy is %s.", deployID)
+		if clearsOnItsOwn(apiErr) {
+			return errorUnexplained(ui.StageAddresses, "The server wouldn't give this deploy an address.",
+				apiErr, cannotTell)
+		}
+		return requestUnserved(ui.StageAddresses, "The server wouldn't give this deploy an address.",
+			apiErr, cannotTell)
+
 	default:
 		// Routed to a stop with no copy of its own, or a code this build
 		// predates. The contract is additive-only, so the server is

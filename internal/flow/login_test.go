@@ -218,16 +218,50 @@ func (s *scriptedPrompt) asked(question string) int {
 	return n
 }
 
-// outcome is one scripted HTTP answer. A zero Code means success.
+// outcome is one scripted HTTP answer. A zero outcome means success.
 type outcome struct {
 	status     int
 	code       wire.ErrorCode
 	message    string
 	retryAfter string
+
+	// bareStatus answers with this status and a body that is NOT the wire
+	// envelope: bareBody under bareType, or nothing at all. It is what a
+	// proxy in front of the service, or a router answering for a route it
+	// does not serve, sends. It wins over code everywhere an outcome is
+	// rendered or tested, because a refusal with no code would otherwise
+	// read as success and answer 200.
+	bareStatus int
+	bareType   string
+	bareBody   string
 }
 
 func fails(status int, code wire.ErrorCode, message string) outcome {
 	return outcome{status: status, code: code, message: message}
+}
+
+// bare is a refusal that carries no envelope and so no code.
+func bare(status int, contentType, body string) outcome {
+	return outcome{bareStatus: status, bareType: contentType, bareBody: body}
+}
+
+// refuses reports whether the outcome is a refusal of either kind.
+func (o outcome) refuses() bool {
+	return o.bareStatus != 0 || o.code != ""
+}
+
+// writeBare writes a bare outcome and reports whether it did. Every
+// renderer of an outcome calls it first.
+func writeBare(w http.ResponseWriter, o outcome) bool {
+	if o.bareStatus == 0 {
+		return false
+	}
+	if o.bareType != "" {
+		w.Header().Set("Content-Type", o.bareType)
+	}
+	w.WriteHeader(o.bareStatus)
+	_, _ = w.Write([]byte(o.bareBody))
+	return true
 }
 
 func (o outcome) after(retryAfter string) outcome {
@@ -277,6 +311,9 @@ func (s *apiScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiScript) reply(w http.ResponseWriter, o outcome, success any) {
+	if writeBare(w, o) {
+		return
+	}
 	if o.code == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
