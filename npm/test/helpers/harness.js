@@ -18,6 +18,7 @@ const https = require('node:https');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { performance } = require('node:perf_hooks');
 const zlib = require('node:zlib');
 const { spawn } = require('node:child_process');
 
@@ -30,6 +31,10 @@ const PRELOAD = path.join(__dirname, 'fake-platform.js');
 // name so it is visible at the call site rather than switched on by a
 // flag somewhere else.
 const LOCKED_FILES = path.join(__dirname, 'locked-files.js');
+// The preload that writes down every wait the script asks the timer for,
+// and when each one fires, while still letting it run. Asked for by name
+// for the same reason.
+const RECORDED_WAITS = path.join(__dirname, 'recorded-waits.js');
 
 // The version the copied package declares, read from the real
 // package.json rather than chosen here: a row asserting the constructed
@@ -374,10 +379,14 @@ function serveProxy(t, {
 // A listener that answers nothing and counts who arrived. It stands at
 // the address a proxy row's URL names, so "no direct request was made"
 // is an observation rather than an absence of evidence.
+//
+// Each arrival is stamped on a clock that never steps backwards, because
+// a row measures the pause between two of them, and a wall clock that is
+// corrected mid-row could make a correct pause look short.
 function watchPort(t) {
   const arrivals = [];
   const server = net.createServer((socket) => {
-    arrivals.push(Date.now());
+    arrivals.push(performance.now());
     socket.destroy();
   });
   t.after(() => shutdown(server));
@@ -436,6 +445,7 @@ module.exports = {
   BINARY_GZ,
   BINARY_DIGEST,
   PACKAGE_ROOT,
+  RECORDED_WAITS,
   VERSION,
   assetPath,
   assertNoSecretIn,
