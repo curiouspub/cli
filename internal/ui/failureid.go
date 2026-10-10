@@ -54,6 +54,12 @@ const (
 	// One family at every stage that meets it: the diagnosis (theirs, and
 	// transient) and the remedy (try again in a moment) are the same.
 	IDServerFault FailureID = "server-fault"
+	// A refusal that carried no code, so nothing the service wrote: an
+	// answer from something in front of it. "Unexplained" because curious
+	// cannot tell what is behind it. The status splits it in two, because
+	// the remedies differ: one passes on its own, the other does not.
+	IDServerErrorUnexplained FailureID = "server-error-unexplained"
+	IDServerRequestUnserved  FailureID = "server-request-unserved"
 
 	// This machine, before anything is sent.
 	IDProjectDirUnknown        FailureID = "project-dir-unknown"
@@ -155,7 +161,7 @@ var ActiveFailureIDs = []FailureID{
 	IDServerUnanswered, IDServiceUnavailable, IDCapacityCheckUnreachable,
 	IDCapacityCheckFailed, IDDailyCapacityClosed, IDRateLimited,
 	IDClientRequestRejected, IDFreshLoginRefused, IDServerAnswerUnrecognised,
-	IDServerFault,
+	IDServerFault, IDServerErrorUnexplained, IDServerRequestUnserved,
 
 	IDProjectDirUnknown, IDProjectDirMissing, IDProjectDirUnreadable,
 	IDProjectPathNotADirectory, IDProjectUnreadable, IDConfigLocationUnusable,

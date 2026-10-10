@@ -73,6 +73,11 @@ func TestTheCheckerVisitsEveryConstruction(t *testing.T) {
 		// own id, action and words, so its callers carry the obligations
 		// and the construction in its body is a definition.
 		modulePath + "/internal/flow.unrecognisedAnswer": true,
+		// The two answers to a refusal with no code, one for a status that
+		// passes on its own and one for a status that does not. Each fixes its
+		// own id, action and words in the same way.
+		modulePath + "/internal/flow.errorUnexplained": true,
+		modulePath + "/internal/flow.requestUnserved":  true,
 	}
 	for _, p := range files {
 		if p.info == nil {

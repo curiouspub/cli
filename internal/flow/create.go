@@ -273,6 +273,18 @@ func createStopFailure(apiErr *api.APIError, now time.Time) error {
 				"which one — and please report this if it keeps happening. "+
 				uploadedNothing).Quoting(apiErr.Message)
 
+	case "":
+		// No code: something in front of the service answered. The server
+		// may have created a deploy before it did, but the upload starts
+		// only after a create succeeds, so nothing was uploaded either way,
+		// and an unused deploy is discarded on its own.
+		if clearsOnItsOwn(apiErr) {
+			return errorUnexplained(ui.StageDeploys, "curious couldn't start the deploy.",
+				apiErr, uploadedNothing)
+		}
+		return requestUnserved(ui.StageDeploys, "curious couldn't start the deploy.",
+			apiErr, uploadedNothing)
+
 	default:
 		// Routed to a stop with no copy of its own, or a code this build
 		// predates. The contract is additive-only, so the server is

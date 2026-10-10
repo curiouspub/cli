@@ -703,7 +703,30 @@
       ],
       "family": null,
       "headline": {
+        "addresses": "The server wouldn't give this deploy an address.",
+        "build log": "The server wouldn't send the build log.",
+        "building": "The server wouldn't start the build.",
+        "deploys": "curious couldn't start the deploy.",
+        "logins": "curious couldn't finish logging you in."
+      },
+      "headline_reason": {},
+      "id": "server-error-unexplained",
+      "stages": [
+        "addresses",
+        "build log",
+        "building",
+        "deploys",
+        "logins"
+      ]
+    },
+    {
+      "action": [
+        "Wait"
+      ],
+      "family": null,
+      "headline": {
         "addresses": "The server hit a problem finishing the deploy.",
+        "build log": "The server hit a problem sending the build log.",
         "building": "The server hit a problem starting the build.",
         "deploys": "The server hit a problem starting the deploy."
       },
@@ -711,8 +734,31 @@
       "id": "server-fault",
       "stages": [
         "addresses",
+        "build log",
         "building",
         "deploys"
+      ]
+    },
+    {
+      "action": [
+        "GiveUp"
+      ],
+      "family": null,
+      "headline": {
+        "addresses": "The server wouldn't give this deploy an address.",
+        "build log": "The server wouldn't send the build log.",
+        "building": "The server wouldn't start the build.",
+        "deploys": "curious couldn't start the deploy.",
+        "logins": "curious couldn't finish logging you in."
+      },
+      "headline_reason": {},
+      "id": "server-request-unserved",
+      "stages": [
+        "addresses",
+        "build log",
+        "building",
+        "deploys",
+        "logins"
       ]
     },
     {

@@ -141,6 +141,12 @@ const (
 	// answered. A failure after the request left this process is
 	// indistinguishable from one before it.
 	buildMayBeRunning = "The build may be running anyway"
+
+	// buildNotAffected is said only where the service itself answered the
+	// build log and refused it, so the process running the build is known
+	// to be up.
+	buildNotAffected = "The build itself is not affected: it runs on the server, and this was\n" +
+		"only the window onto it."
 )
 
 // errStreamStalled is the cause the watchdog cancels with, so the branch
@@ -334,9 +340,10 @@ func streamBuild(ctx context.Context, deps streamDeps) (wire.DoneEvent, error) {
 		lastErr = err
 
 		// A REFUSAL THE SERVER ANSWERED IS NOT A DROPPED CONNECTION.
-		// It arrived, it was decoded, and it will say the same thing next
-		// time — so it stops the run rather than spending the budget a
-		// broken connection needs.
+		// It arrived and it was decoded, so it stops the run rather than
+		// spending the budget a broken connection needs. Whether a
+		// refusal with no code, which something in front of the service
+		// sent, should reconnect instead is a separate decision.
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) {
 			return wire.DoneEvent{}, streamRefusedFailure(apiErr)
@@ -795,6 +802,16 @@ func startFailure(err error, now time.Time) error {
 			"Try again in a moment. The archive was uploaded, and nothing has\n"+
 				"been built or deployed.")
 
+	case "":
+		// No code: something in front of the service answered. One that
+		// passes may have come after the service started the build; one
+		// that does not means the request was never served.
+		if clearsOnItsOwn(apiErr) {
+			return errorUnexplained(ui.StageBuilding, "The server wouldn't start the build.", apiErr,
+				buildMayBeRunning+" — an answer like this can arrive after\nthe server acted.")
+		}
+		return requestUnserved(ui.StageBuilding, "The server wouldn't start the build.", apiErr, "")
+
 	default:
 		// EVERY OTHER CODE ENDS THE RUN THE SAME WAY, so there is no
 		// routing table here: one would have a single column. What the
@@ -806,8 +823,9 @@ func startFailure(err error, now time.Time) error {
 }
 
 // streamRefusedFailure is what a stream the server REFUSED ends the run
-// as. It is deliberately not a reconnection: the answer arrived, it was
-// decoded, and it will say the same thing next time.
+// as. A refusal stops the run rather than reconnecting: the answer
+// arrived and it was decoded. Whether a refusal with no code should
+// reconnect instead is a separate decision.
 func streamRefusedFailure(apiErr *api.APIError) error {
 	switch apiErr.Code {
 	case wire.CodeMaintenance:
@@ -817,6 +835,31 @@ func streamRefusedFailure(apiErr *api.APIError) error {
 			"curious.pub stopped sending the build log.",
 			apiErr.Message, ui.NextWait,
 			"Try again a little later."))
+
+	case wire.CodeInternal:
+		// The events route answers this when the server fails while
+		// reading the deploy, and its own message says to try again. The
+		// service answered, so the build it runs is unaffected.
+		return ui.Quoted(
+			ui.IDServerFault,
+			ui.StageBuildLog,
+			"The server hit a problem sending the build log.",
+			apiErr.Message, ui.NextWait,
+			"Try again in a moment: run `curious deploy` again.\n"+buildNotAffected)
+
+	case "":
+		// No code: something in front of the service answered. Here that
+		// usually means the service restarted, and the build may have
+		// ended with it, so the answer that passes claims nothing about
+		// the build. The one that does not is a request that was not
+		// served, by an answerer that is up, and says nothing against the
+		// build.
+		if clearsOnItsOwn(apiErr) {
+			return errorUnexplained(ui.StageBuildLog, "The server wouldn't send the build log.", apiErr,
+				"curious cannot tell from this answer whether the build is still running.")
+		}
+		return requestUnserved(ui.StageBuildLog, "The server wouldn't send the build log.", apiErr,
+			buildNotAffected)
 
 	default:
 		return unrecognisedAnswer(ui.StageBuildLog, "The server wouldn't send the build log.", apiErr, "")

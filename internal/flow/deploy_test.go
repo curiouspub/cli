@@ -352,6 +352,12 @@ type eventScript struct {
 	// the test ends or the client goes away: the server the transport's
 	// bound on answering exists for.
 	neverAnswer bool
+
+	// refuse answers this connection with a refusal instead of the
+	// stream: the status and body are written before any event-stream
+	// header, which is the only point at which the route can still say
+	// no with a status.
+	refuse outcome
 }
 
 // eventsPathSuffix and startPathSuffix name the two per-deploy endpoints
@@ -433,6 +439,12 @@ func (s *deployScript) serveEvents(w http.ResponseWriter, r *http.Request, scrip
 			mark("client hung up")
 			return
 		}
+	}
+
+	if script.refuse.refuses() {
+		s.reply(w, script.refuse, nil)
+		mark("refused")
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -693,7 +705,7 @@ func (s *deployScript) servePublish(w http.ResponseWriter, r *http.Request) {
 			`this deploy is "building" and cannot be given an address yet`), nil)
 		return
 	}
-	if s.publishOutcome.code != "" {
+	if s.publishOutcome.refuses() {
 		s.reply(w, s.publishOutcome, nil)
 		return
 	}
@@ -761,7 +773,7 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic("this server cannot drop a connection, so the row that needs one " +
 				"would silently be measuring something else")
 		}
-		if s.startOutcome.code != "" {
+		if s.startOutcome.refuses() {
 			s.reply(w, s.startOutcome, nil)
 			return
 		}
@@ -800,7 +812,7 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"this request was not authenticated"), nil)
 			return
 		}
-		if s.deployOutcome.code != "" {
+		if s.deployOutcome.refuses() {
 			s.reply(w, s.deployOutcome, nil)
 			return
 		}
@@ -815,6 +827,9 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *deployScript) reply(w http.ResponseWriter, o outcome, success any) {
+	if writeBare(w, o) {
+		return
+	}
 	if o.code == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

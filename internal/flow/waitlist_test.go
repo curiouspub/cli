@@ -78,6 +78,9 @@ func (s *capacityScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // writeOutcome renders one scripted answer. A zero outcome is success.
 func writeOutcome(w http.ResponseWriter, o outcome, success any) {
+	if writeBare(w, o) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if o.code == "" {
 		w.WriteHeader(http.StatusOK)

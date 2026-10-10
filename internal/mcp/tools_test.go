@@ -98,6 +98,13 @@ func (s *deployScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// written.
 	case s.refuseAuth != nil && strings.Contains(path, "/auth/"):
 		s.note("auth refused")
+		if s.refuseAuth.code == "" {
+			// NO CODE, NO ENVELOPE: the status alone, with an empty body,
+			// which is what a proxy in front of the service sends while
+			// the service is down.
+			w.WriteHeader(s.refuseAuth.status)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if wire.CarriesRetryAfter(s.refuseAuth.code) {
 			// THE CONTRACT PROMISES A TIME FOR THESE CODES, so the

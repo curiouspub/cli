@@ -175,6 +175,18 @@ func capacityCheckFailure(err error) error {
 			apiErr.Message, ui.NextWait,
 			"Try again in a moment. "+uploadedNothing)
 
+	case "":
+		// No code: something in front of the service answered, after the
+		// client had already asked three times if the status was a 5xx.
+		// The check is a read, so nothing has happened either way. The
+		// headline is the create's, for the reason given below.
+		if clearsOnItsOwn(apiErr) {
+			return errorUnexplained(ui.StageDeploys, "curious couldn't start the deploy.",
+				apiErr, uploadedNothing)
+		}
+		return requestUnserved(ui.StageDeploys, "curious couldn't start the deploy.",
+			apiErr, uploadedNothing)
+
 	default:
 		// The endpoint answers with the two codes above and no other, so
 		// anything else is a code this step has no copy for. Its headline
