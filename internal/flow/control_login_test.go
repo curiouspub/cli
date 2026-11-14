@@ -1161,19 +1161,34 @@ func TestControlLoginConcurrentAccountProcesses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var proofDigest string
 		if err = config.ControlWithLock(origin, func(store *config.ControlStore) error {
 			st, e := store.Load()
 			if e != nil {
 				return e
 			}
 			p := st.Pending[req.Handle]
+			raw, err := base64.RawURLEncoding.DecodeString(string(p.Proof))
+			if err != nil {
+				return err
+			}
+			sum := sha256.Sum256(raw)
+			proofDigest = base64.RawURLEncoding.EncodeToString(sum[:])
 			p.NextPollAt = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
 			st.Pending[req.Handle] = p
 			return store.Save(st)
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = VerifyControlLogin(context.Background(), origin, req.Handle, true); err != nil {
+		account, err := VerifyControlLogin(context.Background(), origin, req.Handle, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(struct{ Handle, Digest, UserID, CredentialID string }{req.Handle, proofDigest, account.UserID, account.CredentialID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(os.Getenv("CURIOUS_LOGIN_ACCOUNT_RESULT"), data, 0600); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -1233,18 +1248,19 @@ func TestControlLoginConcurrentAccountProcesses(t *testing.T) {
 	defer srv.Close()
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
-	for range 2 {
+	resultDir := t.TempDir()
+	for index := range 2 {
 		wg.Add(1)
-		go func() {
+		go func(index int) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestControlLoginConcurrentAccountProcesses$", "-test.count=1")
-			cmd.Env = append(os.Environ(), "CURIOUS_LOGIN_ACCOUNT_ORIGIN="+srv.URL)
+			cmd.Env = append(os.Environ(), "CURIOUS_LOGIN_ACCOUNT_ORIGIN="+srv.URL, "CURIOUS_LOGIN_ACCOUNT_RESULT="+filepath.Join(resultDir, fmt.Sprint(index)))
 			if out, err := cmd.CombinedOutput(); err != nil {
 				errs <- fmt.Errorf("child: %v: %s", err, out)
 			}
-		}()
+		}(index)
 	}
 	wg.Wait()
 	close(errs)
@@ -1264,6 +1280,25 @@ func TestControlLoginConcurrentAccountProcesses(t *testing.T) {
 		}
 		if len(st.Credentials) != 2 || len(st.Completed) != 2 || len(st.Pending) != 0 {
 			return errors.New("accounts were not durably preserved")
+		}
+		for index := range 2 {
+			data, err := os.ReadFile(filepath.Join(resultDir, fmt.Sprint(index)))
+			if err != nil {
+				return err
+			}
+			var result struct{ Handle, Digest, UserID, CredentialID string }
+			if err = json.Unmarshal(data, &result); err != nil {
+				return err
+			}
+			credential, ok := st.Credentials[result.CredentialID]
+			if !ok || st.Completed[result.Handle] != result.CredentialID || credential.RequestHandle != result.Handle || credential.UserID != result.UserID || byID[credential.RequestID] != result.Digest {
+				return errors.New("child returned an account for a different request")
+			}
+			n := digests[result.Digest]
+			expectedID := "clcred_" + base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(string(rune('K'+n)), 16)))
+			if result.UserID != fmt.Sprintf("account-%d", n) || result.CredentialID != expectedID {
+				return errors.New("returned identity does not match its proof")
+			}
 		}
 		users := map[string]bool{}
 		for _, c := range st.Credentials {
