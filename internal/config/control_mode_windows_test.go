@@ -139,6 +139,8 @@ func diagnosticControlFailure(err error) string {
 	switch err.Error() {
 	case "unsafe Control parent owner":
 		return "parent-owner"
+	case "cannot verify Control volume root":
+		return "volume-root-unverified"
 	case "unsafe Control parent":
 		return "parent-path"
 	case "cannot verify Control parent":
@@ -358,4 +360,343 @@ func logControlParentDiagnostics(t *testing.T, parent string) {
 		return
 	}
 	t.Log("diagnostic no-parent-rejected-on-readback")
+}
+
+func TestControlWindowsRootIdentity(t *testing.T) {
+	const volume = `\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\`
+	for _, tc := range []struct {
+		name, path string
+		want       bool
+	}{
+		{"ordinary root", `C:\`, true}, {"lowercase root", `d:\`, true}, {"directory", `C:\child`, false},
+		{"relative", `C:`, false}, {"unc", `\\server\share\`, false}, {"device", `\\.\C:\`, false}, {"extended", `\\?\C:\`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if controlDriveRoot(tc.path) != tc.want {
+				t.Fatal("wrong drive-root classification")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, actual, expected string
+		drive, fixed           uint32
+		want                   bool
+	}{
+		{"native root", volume, volume, windows.DRIVE_FIXED, windows.DRIVE_FIXED, true},
+		{"case insensitive", strings.ToUpper(volume), volume, windows.DRIVE_FIXED, windows.DRIVE_FIXED, true},
+		{"directory alias", volume + `child`, volume, windows.DRIVE_FIXED, windows.DRIVE_FIXED, false},
+		{"different volume", volume, strings.Replace(volume, "01234567", "11234567", 1), windows.DRIVE_FIXED, windows.DRIVE_FIXED, false},
+		{"mapped network", volume, volume, windows.DRIVE_REMOTE, windows.DRIVE_FIXED, false},
+		{"unknown drive", volume, volume, windows.DRIVE_UNKNOWN, windows.DRIVE_FIXED, false},
+		{"unknown volume", volume, volume, windows.DRIVE_FIXED, windows.DRIVE_UNKNOWN, false},
+		{"malformed guid", strings.Replace(volume, "-", "x", 1), volume, windows.DRIVE_FIXED, windows.DRIVE_FIXED, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if controlRootNamesAgree(tc.actual, tc.expected, tc.drive, tc.fixed) != tc.want {
+				t.Fatal("wrong volume identity decision")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, drive, volume, handle string
+		want                        bool
+	}{
+		{"same native device root", `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1\`, true},
+		{"case insensitive device", `\device\harddiskvolume1`, `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1\`, true},
+		{"subst to directory", `\??\C:\child`, `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1\child`, false},
+		{"subst to root", `\??\C:\`, `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1\`, false},
+		{"different device", `\Device\HarddiskVolume2`, `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1\`, false},
+		{"different handle object", `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1`, `\Device\HarddiskVolume1\child`, false},
+		{"missing device", "", "", `\`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if controlDeviceNamesAgree(tc.drive, tc.volume, tc.handle) != tc.want {
+				t.Fatal("wrong device mapping decision")
+			}
+		})
+	}
+	root := filepath.VolumeName(t.TempDir()) + `\`
+	if !controlDriveRoot(root) {
+		t.Fatal("test root is not an ordinary drive root")
+	}
+	name, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		t.Fatal("invalid native root")
+	}
+	h, err := windows.CreateFile(name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatalf("cannot open native root: %s", diagnosticErr(err))
+	}
+	defer windows.CloseHandle(h)
+	if !controlNativeFixedRoot(root, h) {
+		t.Fatal("actual local fixed root was not proven")
+	}
+	if controlNativeFixedRoot(root, windows.InvalidHandle) {
+		t.Fatal("invalid handle was accepted")
+	}
+	child := t.TempDir()
+	childName, err := windows.UTF16PtrFromString(child)
+	if err != nil {
+		t.Fatal("invalid child")
+	}
+	childHandle, err := windows.CreateFile(childName, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatalf("cannot open child: %s", diagnosticErr(err))
+	}
+	defer windows.CloseHandle(childHandle)
+	if controlNativeFixedRoot(root, childHandle) {
+		t.Fatal("directory alias or mismatched handle was accepted as root")
+	}
+	if controlNativeFixedRoot(`\\server\share\`, h) || controlNativeFixedRoot(`\\?\C:\`, h) || controlNativeFixedRoot(`\\.\C:\`, h) {
+		t.Fatal("nonordinary path was accepted")
+	}
+}
+
+// controlTestUnusedDOSDevice preserves the native absence result privately;
+// the production helper intentionally redacts all lookup errors.
+func controlTestUnusedDOSDevice(name string) (bool, error) {
+	ptr, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return false, err
+	}
+	var target [1024]uint16
+	_, err = windows.QueryDosDevice(ptr, &target[0], uint32(len(target)))
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return true, nil
+	}
+	return false, err
+}
+
+// TestControlWindowsDeviceAliases uses only unused drive letters in the
+// current logon namespace. It does not create or write through the aliases.
+func TestControlWindowsDeviceAliases(t *testing.T) {
+	processUser, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil || processUser.User.Sid == nil || processUser.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
+		t.Fatal("cannot establish a non-system process token")
+	}
+	effectiveUser, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()
+	if err != nil || effectiveUser.User.Sid == nil || !effectiveUser.User.Sid.Equals(processUser.User.Sid) {
+		t.Fatal("cannot establish the current logon token")
+	}
+	dir := t.TempDir()
+	root := filepath.VolumeName(dir) + `\`
+	for _, tc := range []struct{ name, path string }{{"volume root", root}, {"directory", dir}} {
+		t.Run(tc.name, func(t *testing.T) {
+			drives, err := windows.GetLogicalDrives()
+			if err != nil {
+				t.Fatal("cannot inspect drive availability")
+			}
+			var letter string
+			for i := 25; i >= 2; i-- {
+				if drives&(1<<uint(i)) != 0 {
+					continue
+				}
+				candidate := string(rune('A'+i)) + ":"
+				unused, err := controlTestUnusedDOSDevice(candidate)
+				if err != nil {
+					t.Fatal("cannot establish unused drive mapping")
+				}
+				if unused {
+					letter = candidate
+					break
+				}
+			}
+			if letter == "" {
+				t.Fatal("no unused drive letter available")
+			}
+			device, err := windows.UTF16PtrFromString(letter)
+			if err != nil {
+				t.Fatal("invalid fixture device")
+			}
+			targetText := `\??\` + tc.path
+			target, err := windows.UTF16PtrFromString(targetText)
+			if err != nil {
+				t.Fatal("invalid fixture target")
+			}
+			// Recheck both views immediately before adding the local definition.
+			drives, err = windows.GetLogicalDrives()
+			if err != nil || drives&(1<<uint(letter[0]-'A')) != 0 {
+				t.Fatal("drive no longer unused")
+			}
+			unused, err := controlTestUnusedDOSDevice(letter)
+			if err != nil || !unused {
+				t.Fatal("mapping no longer unused")
+			}
+			const create = windows.DDD_RAW_TARGET_PATH | windows.DDD_NO_BROADCAST_SYSTEM
+			if err = windows.DefineDosDevice(create, device, target); err != nil {
+				t.Fatal("cannot create local fixture mapping")
+			}
+			t.Cleanup(func() {
+				actual, err := controlDOSDevice(letter)
+				if err != nil || !strings.EqualFold(actual, targetText) {
+					t.Error("fixture mapping changed before cleanup")
+				}
+				const remove = windows.DDD_REMOVE_DEFINITION | windows.DDD_EXACT_MATCH_ON_REMOVE | windows.DDD_RAW_TARGET_PATH | windows.DDD_NO_BROADCAST_SYSTEM
+				if err = windows.DefineDosDevice(remove, device, target); err != nil {
+					t.Error("cannot remove exact fixture mapping")
+				}
+				var mappings [1024]uint16
+				n, queryErr := windows.QueryDosDevice(device, &mappings[0], uint32(len(mappings)))
+				if errors.Is(queryErr, windows.ERROR_FILE_NOT_FOUND) {
+					return
+				}
+				if queryErr != nil || n == 0 || n >= uint32(len(mappings)) {
+					t.Error("cannot verify fixture cleanup")
+					return
+				}
+				for offset := 0; offset < int(n) && mappings[offset] != 0; {
+					end := offset
+					for end < int(n) && mappings[end] != 0 {
+						end++
+					}
+					if strings.EqualFold(windows.UTF16ToString(mappings[offset:end]), targetText) {
+						t.Error("fixture mapping remains after cleanup")
+					}
+					offset = end + 1
+				}
+			})
+			actual, err := controlDOSDevice(letter)
+			if err != nil || !strings.EqualFold(actual, targetText) {
+				t.Fatal("fixture mapping did not match target")
+			}
+			alias := letter + `\`
+			name, err := windows.UTF16PtrFromString(alias)
+			if err != nil {
+				t.Fatal("invalid fixture alias")
+			}
+			h, err := windows.CreateFile(name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+			if err != nil {
+				t.Fatal("cannot open fixture alias")
+			}
+			defer windows.CloseHandle(h)
+			if controlNativeFixedRoot(alias, h) {
+				t.Fatal("local alias received root exception")
+			}
+		})
+	}
+}
+
+func TestControlWindowsRootPolicy(t *testing.T) {
+	_, current, err := controlSecurity()
+	if err != nil {
+		t.Fatal("cannot identify current user")
+	}
+	service, err := controlInstallerSID()
+	if err != nil {
+		t.Fatal("cannot construct service SID")
+	}
+	var wrong *windows.SID
+	err = windows.AllocateAndInitializeSid(&windows.SECURITY_NT_AUTHORITY, 6, 80, 956008885, 3418522649, 1831038044, 1853292631, 2271478465, 0, 0, &wrong)
+	if err != nil || wrong == nil {
+		t.Fatal("cannot construct wrong SID")
+	}
+	defer windows.FreeSid(wrong)
+	if service.IdentifierAuthority() != windows.SECURITY_NT_AUTHORITY || service.SubAuthorityCount() != 6 {
+		t.Fatal("wrong service SID authority")
+	}
+	for i, want := range [...]uint32{80, 956008885, 3418522649, 1831038044, 1853292631, 2271478464} {
+		if service.SubAuthority(uint32(i)) != want {
+			t.Fatal("wrong service SID subauthority")
+		}
+	}
+	auth, err := windows.CreateWellKnownSid(windows.WinAuthenticatedUserSid)
+	if err != nil {
+		t.Fatal("cannot construct authenticated-users SID")
+	}
+	other, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	if err != nil {
+		t.Fatal("cannot construct other SID")
+	}
+	if !controlParentOwnerAllowed(service, current, true) || controlParentOwnerAllowed(service, current, false) || controlParentOwnerAllowed(wrong, current, true) || controlTrustedParent(service, current) {
+		t.Fatal("root-only owner distinction failed")
+	}
+	if !controlRootCreateACE(auth, 0, 0x4, true) {
+		t.Fatal("exact root create-only ACE was refused")
+	}
+	for _, tc := range []struct {
+		name  string
+		who   *windows.SID
+		flags byte
+		mask  uint32
+		root  bool
+	}{
+		{"other principal", other, 0, 0x4, true}, {"nonroot", auth, 0, 0x4, false}, {"flags", auth, 1, 0x4, true}, {"inherit only", auth, 8, 0x4, true},
+		{"extra create", auth, 0, 0x6, true}, {"delete child", auth, 0, 0x40, true}, {"delete", auth, 0, 0x10000, true},
+		{"change acl", auth, 0, 0x40000, true}, {"take ownership", auth, 0, 0x80000, true}, {"generic all", auth, 0, 0x10000000, true}, {"generic write", auth, 0, 0x40000000, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if controlRootCreateACE(tc.who, tc.flags, tc.mask, tc.root) {
+				t.Fatal("broader ACE exception accepted")
+			}
+		})
+	}
+	// Exercise the production descriptor validator using native descriptors,
+	// with the current user retained as owner and a full-access principal.
+	for _, tc := range []struct {
+		name, owner, ace, want string
+		root                   bool
+	}{
+		{"ordinary secure nonroot", current.String(), "", "", false},
+		{"ordinary secure root", current.String(), "", "", true},
+		{"exact root", current.String(), "(A;;0x4;;;AU)", "", true},
+		{"same nonroot", current.String(), "(A;;0x4;;;AU)", "unsafe Control parent permissions", false},
+		{"other principal", current.String(), "(A;;0x4;;;WD)", "unsafe Control parent permissions", true},
+		{"service writer", current.String(), "(A;;0x4;;;" + service.String() + ")", "unsafe Control parent permissions", true},
+		{"flags", current.String(), "(A;OI;0x4;;;AU)", "unsafe Control parent permissions", true},
+		{"extra create", current.String(), "(A;;0x6;;;AU)", "unsafe Control parent permissions", true},
+		{"delete child", current.String(), "(A;;0x40;;;AU)", "unsafe Control parent permissions", true},
+		{"delete", current.String(), "(A;;0x10000;;;AU)", "unsafe Control parent permissions", true},
+		{"change acl", current.String(), "(A;;0x40000;;;AU)", "unsafe Control parent permissions", true},
+		{"take ownership", current.String(), "(A;;0x80000;;;AU)", "unsafe Control parent permissions", true},
+		{"generic all", current.String(), "(A;;0x10000000;;;AU)", "unsafe Control parent permissions", true},
+		{"generic write", current.String(), "(A;;0x40000000;;;AU)", "unsafe Control parent permissions", true},
+		{"service owner root", service.String(), "", "", true},
+		{"service owner nonroot", service.String(), "", "unsafe Control parent owner", false},
+		{"wrong service owner", wrong.String(), "", "unsafe Control parent owner", true},
+	} {
+		t.Run("descriptor/"+tc.name, func(t *testing.T) {
+			sd, err := windows.SecurityDescriptorFromString("O:" + tc.owner + "D:P(A;;FA;;;" + current.String() + ")" + tc.ace)
+			if err != nil {
+				t.Fatal("cannot construct descriptor")
+			}
+			err = controlParentDescriptor(sd, current, tc.root)
+			if tc.want == "" && err != nil {
+				t.Fatal("expected descriptor to pass")
+			}
+			if tc.want != "" && (err == nil || err.Error() != tc.want) {
+				t.Fatal("descriptor did not reach expected refusal")
+			}
+		})
+	}
+	// An untrusted create-child ACE in a newly created ordinary parent is
+	// never covered by the root exception, even when the owner is current.
+	sa, _, err := controlSecurity()
+	if err != nil {
+		t.Fatal("cannot construct descriptor")
+	}
+	path := filepath.Join(t.TempDir(), "competing-child")
+	ptr, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal("invalid test child")
+	}
+	if err = windows.CreateDirectory(ptr, sa); err != nil {
+		t.Fatalf("create test child: %s", diagnosticErr(err))
+	}
+	if err = controlParent(path, current); err != nil {
+		t.Fatalf("secure ordinary child refused: %s", diagnosticControlFailure(err))
+	}
+	bad, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + current.String() + ")(A;;0x4;;;AU)")
+	if err != nil {
+		t.Fatal("cannot construct test ACL")
+	}
+	acl, _, err := bad.DACL()
+	if err != nil {
+		t.Fatal("cannot read test ACL")
+	}
+	if err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil); err != nil {
+		t.Fatalf("set test ACL: %s", diagnosticErr(err))
+	}
+	if err = controlParent(path, current); err == nil || err.Error() != "unsafe Control parent permissions" {
+		t.Fatal("untrusted ordinary child did not reach DACL refusal")
+	}
 }

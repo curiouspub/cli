@@ -78,34 +78,163 @@ func controlWindowsOpen(path string, access, creation, flags uint32) (*os.File, 
 	return os.NewFile(uintptr(h), path), nil
 }
 
-// controlParent verifies that another ordinary account cannot replace a
-// child directory. Privileged system principals remain part of the host's
-// trust boundary, as they can change the current user's token itself.
-func controlParent(path string, sid *windows.SID) error {
-	fi, e := os.Lstat(path)
-	if e != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
-		return errors.New("unsafe Control parent")
+// controlDriveRoot admits only an ordinary drive-letter root spelling.
+func controlDriveRoot(path string) bool {
+	return len(path) == 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && path[2] == '\\'
+}
+
+// controlNativeFixedRoot binds the root identity to the opened directory.
+// A volume GUID path must name the root itself, not a directory behind a
+// substituted drive, and both the mount and that same volume must be fixed.
+func controlNativeFixedRoot(path string, handle windows.Handle) bool {
+	if !controlDriveRoot(path) {
+		return false
 	}
+	root, err := windows.UTF16PtrFromString(path)
+	if err != nil || windows.GetDriveType(root) != windows.DRIVE_FIXED {
+		return false
+	}
+	var mount [1024]uint16
+	if err = windows.GetVolumeNameForVolumeMountPoint(root, &mount[0], uint32(len(mount))); err != nil {
+		return false
+	}
+	var final [1024]uint16
+	const volumeNameGUID = 1
+	n, err := windows.GetFinalPathNameByHandle(handle, &final[0], uint32(len(final)), volumeNameGUID)
+	if err != nil || n == 0 || n >= uint32(len(final)) {
+		return false
+	}
+	actual, expected := windows.UTF16ToString(final[:n]), windows.UTF16ToString(mount[:])
+	guid, err := windows.UTF16PtrFromString(actual)
+	if err != nil || !controlRootNamesAgree(actual, expected, windows.GetDriveType(root), windows.GetDriveType(guid)) {
+		return false
+	}
+	// Compare the current DOS-device targets for the drive and the volume
+	// with this same handle's native device-root path. Redirected drive
+	// aliases (including an alias to a volume root) do not qualify.
+	driveTarget, err := controlDOSDevice(path[:2])
+	if err != nil {
+		return false
+	}
+	volumeTarget, err := controlDOSDevice(actual[4 : len(actual)-1])
+	if err != nil {
+		return false
+	}
+	var native [1024]uint16
+	const volumeNameNT = 2
+	n, err = windows.GetFinalPathNameByHandle(handle, &native[0], uint32(len(native)), volumeNameNT)
+	if err != nil || n == 0 || n >= uint32(len(native)) {
+		return false
+	}
+	return controlDeviceNamesAgree(driveTarget, volumeTarget, windows.UTF16ToString(native[:n]))
+}
+func controlDOSDevice(name string) (string, error) {
+	ptr, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return "", err
+	}
+	var target [1024]uint16
+	n, err := windows.QueryDosDevice(ptr, &target[0], uint32(len(target)))
+	if err != nil || n == 0 || n >= uint32(len(target)) {
+		return "", errors.New("cannot verify Control volume")
+	}
+	first := windows.UTF16ToString(target[:n])
+	if first == "" {
+		return "", errors.New("cannot verify Control volume")
+	}
+	return first, nil
+}
+func controlDeviceNamesAgree(drive, volume, handle string) bool {
+	return drive != "" && !strings.HasSuffix(drive, `\`) && strings.EqualFold(drive, volume) && strings.EqualFold(handle, drive+`\`)
+}
+func controlRootNamesAgree(actual, expected string, pathType, volumeType uint32) bool {
+	return pathType == windows.DRIVE_FIXED && volumeType == windows.DRIVE_FIXED && controlGUIDRoot(actual) && strings.EqualFold(actual, expected)
+}
+func controlGUIDRoot(value string) bool {
+	const prefix = `\\?\Volume{`
+	if len(value) != len(prefix)+36+2 || !strings.EqualFold(value[:len(prefix)], prefix) || value[len(value)-2:] != `}\` {
+		return false
+	}
+	for i, ch := range value[len(prefix) : len(prefix)+36] {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if ch != '-' {
+				return false
+			}
+			continue
+		}
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+func controlTrustedParent(s, current *windows.SID) bool {
+	return s != nil && ((current != nil && s.Equals(current)) || s.IsWellKnown(windows.WinLocalSystemSid) || s.IsWellKnown(windows.WinBuiltinAdministratorsSid))
+}
+
+// controlInstallerSID constructs the service identity using native SID fields.
+// Copy it before releasing the Windows allocation so callers own its bytes.
+func controlInstallerSID() (*windows.SID, error) {
+	var native *windows.SID
+	if err := windows.AllocateAndInitializeSid(&windows.SECURITY_NT_AUTHORITY, 6, 80, 956008885, 3418522649, 1831038044, 1853292631, 2271478464, 0, 0, &native); err != nil {
+		return nil, err
+	}
+	if native == nil {
+		return nil, errors.New("cannot identify Control parent")
+	}
+	defer windows.FreeSid(native)
+	return native.Copy()
+}
+func controlParentOwnerAllowed(owner, current *windows.SID, fixedRoot bool) bool {
+	if controlTrustedParent(owner, current) {
+		return true
+	}
+	if !fixedRoot || owner == nil {
+		return false
+	}
+	service, err := controlInstallerSID()
+	return err == nil && owner.Equals(service)
+}
+func controlRootCreateACE(who *windows.SID, flags byte, mask uint32, fixedRoot bool) bool {
+	return fixedRoot && who != nil && who.IsWellKnown(windows.WinAuthenticatedUserSid) && flags == 0 && mask == 0x4
+}
+
+// controlParent obtains path attributes, owner and DACL from the same opened
+// directory object. This prevents a competing child creation from mixing a
+// safe name's attributes with a different object's security descriptor.
+func controlParent(path string, sid *windows.SID) error {
 	name, e := windows.UTF16PtrFromString(path)
 	if e != nil {
 		return errors.New("unsafe Control parent")
 	}
-	attributes, e := windows.GetFileAttributes(name)
-	if e != nil || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+	h, e := windows.CreateFile(name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if e != nil {
 		return errors.New("unsafe Control parent")
 	}
-	sd, e := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	defer windows.CloseHandle(h)
+	var info windows.ByHandleFileInformation
+	if e = windows.GetFileInformationByHandle(h, &info); e != nil || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return errors.New("unsafe Control parent")
+	}
+	fixedRoot := false
+	if controlDriveRoot(path) {
+		fixedRoot = controlNativeFixedRoot(path, h)
+	}
+	sd, e := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if e != nil || sd == nil {
 		return errors.New("cannot verify Control parent")
 	}
-	trusted := func(s *windows.SID) bool {
-		if s == nil {
-			return false
-		}
-		return s.Equals(sid) || s.IsWellKnown(windows.WinLocalSystemSid) || s.IsWellKnown(windows.WinBuiltinAdministratorsSid)
+	return controlParentDescriptor(sd, sid, fixedRoot)
+}
+
+// controlParentDescriptor applies the same policy to the descriptor read
+// from the opened parent. The root fact is derived from that same handle.
+func controlParentDescriptor(sd *windows.SECURITY_DESCRIPTOR, sid *windows.SID, fixedRoot bool) error {
+	if sd == nil {
+		return errors.New("cannot verify Control parent")
 	}
 	owner, _, e := sd.Owner()
-	if e != nil || !trusted(owner) {
+	if e != nil || !controlParentOwnerAllowed(owner, sid, fixedRoot) {
 		return errors.New("unsafe Control parent owner")
 	}
 	acl, _, e := sd.DACL()
@@ -129,7 +258,8 @@ func controlParent(path string, sid *windows.SID) error {
 			return errors.New("unsupported Control parent permissions")
 		}
 		who := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if !trusted(who) && uint32(ace.Mask)&modify != 0 {
+		mask := uint32(ace.Mask)
+		if !controlTrustedParent(who, sid) && !controlRootCreateACE(who, ace.Header.AceFlags, mask, fixedRoot) && mask&modify != 0 {
 			return errors.New("unsafe Control parent permissions")
 		}
 	}
