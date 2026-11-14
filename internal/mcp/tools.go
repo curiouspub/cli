@@ -23,32 +23,18 @@ const (
 	toolDeployStatus = "deploy_status"
 )
 
-// RegisterTools adds the four callables this binary exposes to an agent,
-// in the order a client will list them.
-//
-// # Four, and the fifth is named here because its absence is a decision
-//
-// There is no whoami. It would have to wrap a route the API does not
-// serve, and a tool that wrapped a call that does not exist would answer
-// an agent with a transport failure for every invocation — so it appears
-// in no list, no description and no usage text until that route exists.
-// Saying so here is cheaper than the next reader re-deriving it from an
-// endpoint table.
-//
-// # They take no dependencies, and that is the point
-//
-// Every one of these resolves its endpoint with the resolver the command
-// uses, reads the configuration the command reads, and drives the
-// sequence the command drives. There is no seam to point somewhere else,
-// because a seam a test supplies is a seam production can differ from:
-// the failure this split exists to prevent is a second implementation of
-// the deploy path, and the cheapest way not to have one is to have
-// nowhere to put it.
+// RegisterTools exposes the existing deploy tools and the separate Control
+// login tools in a stable order. The deploy tools use the deploy endpoint;
+// Control calls require an explicit origin and share the command's flow.
+// Neither interface exposes a general whoami or list-sites tool.
 func RegisterTools(s *Server) {
 	s.Register(loginStartTool())
 	s.Register(loginVerifyTool())
 	s.Register(deploySiteTool())
 	s.Register(deployStatusTool())
+	s.Register(controlStartTool())
+	s.Register(controlVerifyTool())
+	s.Register(controlLogoutTool())
 }
 
 // endpoint is the API address this run talks to.

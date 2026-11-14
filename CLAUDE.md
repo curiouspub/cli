@@ -173,19 +173,21 @@ The finished product is one binary with two faces:
 **What exists in the tree right now is smaller than that, and this
 section says so on purpose.** Today `curious` dispatches `version`, a
 `deploy` that runs the whole sequence and ends with the site's address,
-and an `mcp` server that serves **four tools** — `login_start`,
-`login_verify`, `deploy_site` and `deploy_status` — over the same
-sequence the command runs. A repository describing unbuilt features in
+and an `mcp` server that serves the existing deploy tools and three
+separate Control login tools: `control_login_start`,
+`control_login_verify` and `control_logout`. The `login` and `logout`
+commands require an explicit Control origin; the existing deploy login
+remains separate. A repository describing unbuilt features in
 the present tense has told its reader something false, and this one is
 read by strangers deciding whether to trust it. **The reverse is no
 smaller an error**: a line still saying the tools are unbuilt, the day
 after they ship, is the same defect running backwards, so this paragraph
 moves in the commit that moves the code.
 
-**There is no `whoami`, and its absence is a decision rather than a
-gap.** It would have to wrap a route the API does not serve, so every
-call to it would answer an agent with a transport failure — and a model
-that can see a tool keeps trying it. There is no endpoint that answers a
+**There is no general `whoami` tool.** The Control login identifies its
+own credential; the deploy service does not provide a general account
+lookup, and a tool that wraps a missing route would only invite repeated
+transport failures. There is no endpoint that answers a
 deploy's current state either, which is why `deploy_status` reads the
 build log and reports `"not yet reported"` until that log says how the
 deploy ended: **a live tail is not a state read**, and the honest shape

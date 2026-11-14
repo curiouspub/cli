@@ -47,12 +47,14 @@ What exists here today:
 - **`pkg/wire`** — the `/v1` wire contract (types only, stdlib-only,
   importable as `github.com/curiouspub/cli/pkg/wire`).
 - **`curious mcp`** — the stdio MCP server, so an agent deploys the same
-  way a person does. It serves four tools: `login_start` and
-  `login_verify` get a login onto the machine, `deploy_site` runs the
-  whole deploy and answers with the address, and `deploy_status` reports
-  what a deploy's build log said. They drive the same sequence
-  `curious deploy` drives rather than a copy of it, and a client that
-  asks to watch a call is sent progress as the build goes. Written
+  way a person does. The deploy tools `login_start`, `login_verify`,
+  `deploy_site`, and `deploy_status` preserve the existing deploy flow.
+  The Control tools `control_login_start`, `control_login_verify`, and
+  `control_logout` manage a separate browser login for an explicitly
+  supplied Control origin. Start first returns a recovery handle; call
+  start again with that handle to obtain the browser address and code.
+  The deploy tools drive the same sequence as `curious deploy`, and a
+  client watching a deploy receives build progress. Written
   against the standard library alone — no SDK, no new dependency.
 - **`curious deploy`** — it checks your project, logs you in if it has
   to, packs the archive, uploads it, starts the build, streams the build
@@ -67,6 +69,18 @@ What exists here today:
   The last line does not tell you the site is live: an address takes a
   little while to start answering everywhere, so the tool says the
   deploy was published and tells you what to do if you get there first.
+
+The current source also supports `curious login --control-url <origin>`
+and `curious logout --control-url <origin>` for a Control service that
+supports browser login. The origin must be HTTPS. The login prints a code
+and verification address; approve only a request you started. If a
+request is interrupted, use `--resume <handle>` to continue it. If the
+login was already saved, resuming reports that stored result without
+revalidating it. Logout revokes the selected credential; `--local-only` removes it from this
+machine without claiming remote revocation. When more than one account
+is stored, select the credential with `--credential-id`. Control state is
+kept separately from the existing deploy login. These source changes are
+not a claim that a released binary already contains them.
 
 Capacity opens in small daily batches. If today's is full, the tool says
 so and offers the waitlist; you can also write to support at curious.pub.

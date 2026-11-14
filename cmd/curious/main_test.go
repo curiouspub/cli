@@ -106,9 +106,13 @@ func TestRunUnknownCommand(t *testing.T) {
 	// text advertising a command that is not built yet is a promise with
 	// no date on it.
 	//
-	// REQUIRED MUTATION, run 2026-09-08: add a login line to printUsage.
-	// Reds here.
-	for _, absent := range []string{"login", "whoami"} {
+	// Login and logout are public commands; whoami remains absent.
+	for _, present := range []string{"login", "logout"} {
+		if !strings.Contains(usage, present) {
+			t.Errorf("usage text does not mention %s", present)
+		}
+	}
+	for _, absent := range []string{"whoami"} {
 		if strings.Contains(usage, absent) {
 			t.Errorf("usage text mentions %s, which is not public surface yet: %q", absent, errOut.String())
 		}

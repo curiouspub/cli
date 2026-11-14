@@ -320,7 +320,7 @@ func project(t *testing.T, name string) string {
 // The surface
 // ---------------------------------------------------------------------
 
-// TestTheServedToolsAreExactlyTheFour, and the negative names the absent
+// TestTheServedToolsAreExactlyTheSeven, and the negative names the absent
 // one rather than leaving it to be inferred.
 //
 // A ROW THAT ONLY CHECKED THE FOUR ARE PRESENT CANNOT SEE A FIFTH. The
@@ -333,7 +333,7 @@ func project(t *testing.T, name string) string {
 // THE LIST COMES OFF THE PROTOCOL rather than out of the registry, so it
 // is what a client would actually be told. A registry a listing does not
 // render is a tool nobody can call.
-func TestTheServedToolsAreExactlyTheFour(t *testing.T) {
+func TestTheServedToolsAreExactlyTheSeven(t *testing.T) {
 	s := testServer()
 	RegisterTools(s)
 
@@ -349,7 +349,7 @@ func TestTheServedToolsAreExactlyTheFour(t *testing.T) {
 	for _, tool := range listed.Tools {
 		got = append(got, tool.Name)
 	}
-	want := []string{toolLoginStart, toolLoginVerify, toolDeploySite, toolDeployStatus}
+	want := []string{toolLoginStart, toolLoginVerify, toolDeploySite, toolDeployStatus, toolControlLoginStart, toolControlLoginVerify, toolControlLogout}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("the served tools are %v, want exactly %v", got, want)
 	}
@@ -367,11 +367,10 @@ func TestTheServedToolsAreExactlyTheFour(t *testing.T) {
 
 // TestEveryToolAnswersItsOwnName is the acceptance half of the row
 // above, and it is what stops that one passing against a registry of
-// four names with nothing behind them.
+// names with nothing behind them.
 //
-// Each is called with no arguments at all, which every one of them
-// refuses — three for a missing required field and the deploy for a
-// project that is not there. THE REFUSAL IS THE EVIDENCE: it is the
+// Each listed tool is called with no arguments and refuses with the
+// name of its own required field. THE REFUSAL IS THE EVIDENCE: it is the
 // tool's own words, so it can only have come from that tool's handler,
 // where an unknown name would have come back as a protocol error and a
 // registry of empty shells would have come back as something generic.
@@ -383,9 +382,12 @@ func TestEveryToolAnswersItsOwnName(t *testing.T) {
 	t.Setenv("CURIOUS_CONFIG", filepath.Join(t.TempDir(), "curious.json"))
 
 	for name, wantSays := range map[string]string{
-		toolLoginStart:   "email is required",
-		toolLoginVerify:  "email is required",
-		toolDeployStatus: "deploy_id is required",
+		toolLoginStart:         "email is required",
+		toolLoginVerify:        "email is required",
+		toolDeployStatus:       "deploy_id is required",
+		toolControlLoginStart:  "control_url is required",
+		toolControlLoginVerify: "control_url is required",
+		toolControlLogout:      "control_url is required",
 	} {
 		t.Run(name, func(t *testing.T) {
 			result := resultOf(t, onlyReply(t, runCall(t, s, callMessage("1", name, `{}`))))

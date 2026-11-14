@@ -1061,10 +1061,10 @@ func (c *Config) Save(token ui.Secret, issuedAgainst string) error {
 	if err := chmodFile(f, fileModeFor(c.Path)); err != nil {
 		return fmt.Errorf("could not restrict %s to its owner: %w", tmp, err)
 	}
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("could not write %s: %w", tmp, err)
-	}
-	if err := f.Sync(); err != nil {
+	if stage, err := writeAndSync(f, data); err != nil {
+		if stage == "write" {
+			return fmt.Errorf("could not write %s: %w", tmp, err)
+		}
 		return fmt.Errorf("could not flush %s to disk: %w", tmp, err)
 	}
 	if err := f.Close(); err != nil {
