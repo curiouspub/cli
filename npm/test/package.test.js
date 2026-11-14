@@ -132,10 +132,47 @@ test('the only script that runs during an install is the postinstall', () => {
   assert.strictEqual(manifest.scripts.postinstall, 'node install.js');
 });
 
+// npm has emitted both a one-item array and an object keyed by package
+// name. Accept only one report for this package, then apply the same file
+// census and executable-mode assertions to either form.
+function onePackReport(value) {
+  let report;
+  if (Array.isArray(value)) {
+    assert.strictEqual(value.length, 1, 'expected exactly one pack report');
+    [report] = value;
+  } else {
+    assert.ok(value && typeof value === 'object', 'invalid pack report root');
+    assert.deepStrictEqual(Object.keys(value), [manifest.name], 'expected exactly this package');
+    report = value[manifest.name];
+  }
+  assert.ok(report && typeof report === 'object' && !Array.isArray(report), 'invalid pack report');
+  assert.strictEqual(report.name, manifest.name, 'pack report names a different package');
+  assert.ok(Array.isArray(report.files), 'pack report has no files array');
+  for (const file of report.files) {
+    assert.ok(file && typeof file === 'object' && !Array.isArray(file) &&
+      typeof file.path === 'string', 'invalid pack file entry');
+  }
+  return report;
+}
+
+test('pack report accepts only one report for this package', () => {
+  const report = { name: manifest.name, files: [{ path: 'package.json' }] };
+  assert.strictEqual(onePackReport([report]), report);
+  assert.strictEqual(onePackReport({ [manifest.name]: report }), report);
+  for (const bad of [null, 1, 'value', [], [report, report], {},
+    { other: report }, { [manifest.name]: report, other: report },
+    [null], [{ name: 'other', files: [] }],
+    [{ name: manifest.name, files: null }],
+    [{ name: manifest.name, files: [null] }],
+    [{ name: manifest.name, files: [{}] }]]) {
+    assert.throws(() => onePackReport(bad));
+  }
+});
+
 test('the tarball carries the intended files and nothing else', async () => {
   const packed = await npm(['pack', '--dry-run', '--json'], { cwd: h.PACKAGE_ROOT });
   assert.strictEqual(packed.code, 0, packed.output);
-  const [report] = JSON.parse(packed.stdout);
+  const report = onePackReport(JSON.parse(packed.stdout));
   const paths = report.files.map((f) => f.path).sort();
 
   assert.deepStrictEqual(paths, [
