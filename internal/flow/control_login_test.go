@@ -723,7 +723,7 @@ func TestControlLoginMissingCapabilityNoCreate(t *testing.T) {
 }
 
 func TestControlLoginRejectsSecretInAccountLabel(t *testing.T) {
-	for _, kind := range []string{"proof", "credential"} {
+	for _, kind := range []string{"proof", "credential", "credential-secret"} {
 		t.Run(kind, func(t *testing.T) {
 			controlFlowTestConfig(t)
 			const token = "ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
@@ -735,6 +735,9 @@ func TestControlLoginRejectsSecretInAccountLabel(t *testing.T) {
 				label := request.Proof
 				if kind == "credential" {
 					label = token
+				}
+				if kind == "credential-secret" {
+					label = strings.Split(token, ".")[2]
 				}
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -1014,5 +1017,417 @@ func TestControlLoginMarkerSaveFailureSendsNoCreate(t *testing.T) {
 		return nil
 	}); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func controlExpiryCapabilities(w http.ResponseWriter) {
+	json.NewEncoder(w).Encode(controlwire.Capabilities{Version: 1, ClientKinds: []string{"cli", "mcp"}, IntervalSeconds: 5, Endpoints: controlwire.Endpoints{Capabilities: controlwire.CapabilitiesPath, Requests: controlwire.RequestsPath, Verification: controlwire.VerificationPath, Decision: controlwire.DecisionPath, Poll: controlwire.PollPath, Session: controlwire.SessionPath, Revoke: controlwire.RevokePath}})
+}
+func TestControlLoginExpiryDuringCapabilities(t *testing.T) {
+	controlFlowTestConfig(t)
+	deadline := time.Now().UTC().Add(2 * time.Second).Truncate(time.Second)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if r.URL.Path == controlwire.CapabilitiesPath {
+			time.Sleep(time.Until(deadline.Add(20 * time.Millisecond)))
+			controlExpiryCapabilities(w)
+			return
+		}
+		if r.URL.Path == controlwire.RequestsPath {
+			calls.Add(1)
+			json.NewEncoder(w).Encode(controlwire.CreateResponse{RequestID: "clreq_QUFBQUFBQUFBQUFBQUFBQQ", UserCode: "ABCD-EFGH", VerificationURI: "http://" + r.Host + controlwire.VerificationPath, VerificationURIComplete: "http://" + r.Host + controlwire.VerificationPath + "?code=ABCD-EFGH", ExpiresAt: time.Now().UTC().Add(9 * time.Minute).Format(time.RFC3339), IntervalSeconds: 5})
+			return
+		}
+		t.Error("unexpected route")
+	}))
+	defer srv.Close()
+	p, e := PrepareControlLogin(srv.URL, "cli", true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+		st, e := s.Load()
+		if e != nil {
+			return e
+		}
+		x := st.Pending[p.Handle]
+		x.ExpiresAt = deadline.Format(time.RFC3339)
+		st.Pending[p.Handle] = x
+		return s.Save(st)
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = ResumeControlLogin(context.Background(), srv.URL, p.Handle, true)
+	t.Logf("create_calls_after_deadline=%d outcome=%v", calls.Load(), e)
+	if calls.Load() != 0 {
+		t.Fatal("create reused proof after original stored deadline")
+	}
+}
+func TestControlLoginTruncatedThrottleRetainsDelay(t *testing.T) {
+	controlFlowTestConfig(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Retry-After", "600")
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(429)
+		fmt.Fprint(w, `{"error":"slow_down","retry_after_seconds":600}`)
+	}))
+	defer srv.Close()
+	p, e := PrepareControlLogin(srv.URL, "cli", true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+		st, e := s.Load()
+		if e != nil {
+			return e
+		}
+		x := st.Pending[p.Handle]
+		x.RequestID = "clreq_QUFBQUFBQUFBQUFBQUFBQQ"
+		x.UserCode = "ABCD-EFGH"
+		x.VerificationURI = srv.URL + controlwire.VerificationPath + "?code=ABCD-EFGH"
+		x.NextPollAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+		st.Pending[p.Handle] = x
+		return s.Save(st)
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = VerifyControlLogin(context.Background(), srv.URL, p.Handle, true)
+	t.Logf("calls=%d outcome=%v", calls.Load(), e)
+	e = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+		st, e := s.Load()
+		if e != nil {
+			return e
+		}
+		x := st.Pending[p.Handle]
+		next, _ := time.Parse(time.RFC3339Nano, x.NextPollAt)
+		t.Logf("unresolved=%t persisted_wait_seconds=%.3f", x.Unresolved, time.Until(next).Seconds())
+		if !x.Unresolved && time.Until(next) < 590*time.Second {
+			t.Error("known429/600 became resolved ordinary5second retry after body read error")
+		}
+		return nil
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestIndependentCredentialSecretLabel(t *testing.T) {
+	controlFlowTestConfig(t)
+	const secret = "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+	const id = "clcred_QkJCQkJCQkJCQkJCQkJCQg"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(controlwire.IssuanceResponse{Credential: "ccl1." + id + "." + secret, CredentialID: id, UserID: secret, ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339)})
+	}))
+	defer srv.Close()
+	p, e := PrepareControlLogin(srv.URL, "cli", true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+		st, e := s.Load()
+		if e != nil {
+			return e
+		}
+		x := st.Pending[p.Handle]
+		x.RequestID = "clreq_QUFBQUFBQUFBQUFBQUFBQQ"
+		x.UserCode = "ABCD-EFGH"
+		x.VerificationURI = srv.URL + controlwire.VerificationPath + "?code=ABCD-EFGH"
+		x.NextPollAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+		st.Pending[p.Handle] = x
+		return s.Save(st)
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	a, e := VerifyControlLogin(context.Background(), srv.URL, p.Handle, true)
+	if e == nil && a.UserID == secret && a.CredentialID == id {
+		t.Fatal("accepted secret component as displayable UserID: output has everything needed to reconstruct full credential")
+	}
+}
+
+func TestControlLoginConcurrentAccountProcesses(t *testing.T) {
+	if origin := os.Getenv("CURIOUS_LOGIN_ACCOUNT_ORIGIN"); origin != "" {
+		req, err := StartControlLogin(context.Background(), origin, "cli", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = config.ControlWithLock(origin, func(store *config.ControlStore) error {
+			st, e := store.Load()
+			if e != nil {
+				return e
+			}
+			p := st.Pending[req.Handle]
+			p.NextPollAt = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+			st.Pending[req.Handle] = p
+			return store.Save(st)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = VerifyControlLogin(context.Background(), origin, req.Handle, true); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	controlFlowTestConfig(t)
+	var mu sync.Mutex
+	digests := map[string]int{}
+	byID := map[string]string{}
+	var mismatches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		switch r.URL.Path {
+		case controlwire.CapabilitiesPath:
+			controlExpiryCapabilities(w)
+		case controlwire.RequestsPath:
+			var q controlwire.CreateRequest
+			_ = json.NewDecoder(r.Body).Decode(&q)
+			mu.Lock()
+			n, exists := digests[q.ProofSHA256]
+			if !exists {
+				n = len(digests) + 1
+				digests[q.ProofSHA256] = n
+			}
+			id := "clreq_" + base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(string(rune('A'+n)), 16)))
+			byID[id] = q.ProofSHA256
+			mu.Unlock()
+			code := "ABCD-EFGH"
+			if n == 2 {
+				code = "JKLM-NPQR"
+			}
+			_ = json.NewEncoder(w).Encode(controlwire.CreateResponse{RequestID: id, UserCode: code, VerificationURI: "http://" + r.Host + controlwire.VerificationPath, VerificationURIComplete: "http://" + r.Host + controlwire.VerificationPath + "?code=" + code, ExpiresAt: time.Now().UTC().Add(9 * time.Minute).Format(time.RFC3339), IntervalSeconds: 5})
+		case controlwire.PollPath:
+			var q controlwire.PollRequest
+			_ = json.NewDecoder(r.Body).Decode(&q)
+			raw, err := base64.RawURLEncoding.DecodeString(q.Proof)
+			if err != nil {
+				mismatches.Add(1)
+				return
+			}
+			digest := sha256.Sum256(raw)
+			mu.Lock()
+			expected := byID[q.RequestID]
+			n := digests[expected]
+			mu.Unlock()
+			if expected != base64.RawURLEncoding.EncodeToString(digest[:]) || n < 1 || n > 2 {
+				mismatches.Add(1)
+				return
+			}
+			id := "clcred_" + base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(string(rune('K'+n)), 16)))
+			secret := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(string(rune('Q'+n)), 32)))
+			_ = json.NewEncoder(w).Encode(controlwire.IssuanceResponse{Credential: "ccl1." + id + "." + secret, CredentialID: id, UserID: fmt.Sprintf("account-%d", n), ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339)})
+		default:
+			t.Errorf("unexpected route %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestControlLoginConcurrentAccountProcesses$", "-test.count=1")
+			cmd.Env = append(os.Environ(), "CURIOUS_LOGIN_ACCOUNT_ORIGIN="+srv.URL)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				errs <- fmt.Errorf("child: %v: %s", err, out)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if t.Failed() {
+		return
+	}
+	if mismatches.Load() != 0 || len(digests) != 2 {
+		t.Fatal("proofs were not bound to separate requests")
+	}
+	if err := config.ControlWithLock(srv.URL, func(store *config.ControlStore) error {
+		st, e := store.Load()
+		if e != nil {
+			return e
+		}
+		if len(st.Credentials) != 2 || len(st.Completed) != 2 || len(st.Pending) != 0 {
+			return errors.New("accounts were not durably preserved")
+		}
+		users := map[string]bool{}
+		for _, c := range st.Credentials {
+			users[c.UserID] = true
+		}
+		if !users["account-1"] || !users["account-2"] {
+			return errors.New("account identities changed")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestControlLoginCrashDuringPoll(t *testing.T) {
+	if origin := os.Getenv("CURIOUS_CRASH_POLL_ORIGIN"); origin != "" {
+		_, _ = VerifyControlLogin(context.Background(), origin, os.Getenv("CURIOUS_CRASH_POLL_HANDLE"), true)
+		return
+	}
+	for _, outcome := range []string{"throttle", "issuance"} {
+		t.Run(outcome, func(t *testing.T) {
+			controlFlowTestConfig(t)
+			reached := make(chan struct{}, 1)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			finish := func() { releaseOnce.Do(func() { close(release) }) }
+			defer finish()
+			var polls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				switch r.URL.Path {
+				case controlwire.CapabilitiesPath:
+					controlExpiryCapabilities(w)
+				case controlwire.RequestsPath:
+					_ = json.NewEncoder(w).Encode(controlwire.CreateResponse{RequestID: "clreq_QUFBQUFBQUFBQUFBQUFBQQ", UserCode: "ABCD-EFGH", VerificationURI: "http://" + r.Host + controlwire.VerificationPath, VerificationURIComplete: "http://" + r.Host + controlwire.VerificationPath + "?code=ABCD-EFGH", ExpiresAt: time.Now().UTC().Add(9 * time.Minute).Format(time.RFC3339), IntervalSeconds: 5})
+				case controlwire.PollPath:
+					polls.Add(1)
+					w.Header().Set("Content-Length", "1000")
+					if outcome == "throttle" {
+						w.Header().Set("Retry-After", "600")
+						w.WriteHeader(429)
+						_, _ = w.Write([]byte(`{"error":"slow_down","retry_after_seconds":600}`))
+					} else {
+						_ = json.NewEncoder(w).Encode(controlwire.IssuanceResponse{Credential: "ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8", CredentialID: "clcred_QkJCQkJCQkJCQkJCQkJCQg", UserID: "user-one", ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339)})
+					}
+					w.(http.Flusher).Flush()
+					reached <- struct{}{}
+					<-release
+				default:
+					t.Errorf("unexpected route %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			req, err := StartControlLogin(context.Background(), srv.URL, "cli", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+				st, e := s.Load()
+				if e != nil {
+					return e
+				}
+				p := st.Pending[req.Handle]
+				p.NextPollAt = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+				st.Pending[req.Handle] = p
+				return s.Save(st)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestControlLoginCrashDuringPoll$", "-test.count=1")
+			cmd.Env = append(os.Environ(), "CURIOUS_CRASH_POLL_ORIGIN="+srv.URL, "CURIOUS_CRASH_POLL_HANDLE="+req.Handle)
+			if err = cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+			select {
+			case <-reached:
+			case <-time.After(10 * time.Second):
+				finish()
+				t.Fatal("poll did not reach response barrier")
+			}
+			if err = cmd.Process.Kill(); err != nil {
+				finish()
+				t.Fatal(err)
+			}
+			_ = cmd.Wait()
+			finish()
+			if _, err = VerifyControlLogin(context.Background(), srv.URL, req.Handle, true); !errors.Is(err, errControlUncertain) {
+				t.Fatalf("crash outcome not safely refused: %v", err)
+			}
+			if polls.Load() != 1 {
+				t.Fatal("sent another poll after uncertain crash")
+			}
+			if err = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+				st, e := s.Load()
+				if e != nil {
+					return e
+				}
+				p := st.Pending[req.Handle]
+				if !p.Unresolved || p.Proof == "" || len(st.Credentials) != 0 {
+					return errors.New("uncertain proof not preserved")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestControlLoginCrashAfterSaveBeforeOutput(t *testing.T) {
+	if origin := os.Getenv("CURIOUS_SAVED_ORIGIN"); origin != "" {
+		if _, err := VerifyControlLogin(context.Background(), origin, os.Getenv("CURIOUS_SAVED_HANDLE"), true); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv("CURIOUS_SAVED_MARKER"), []byte("saved"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Second)
+		return
+	}
+	controlFlowTestConfig(t)
+	srv, _, polls := controlFixture(t, false, false, nil)
+	defer srv.Close()
+	req, err := StartControlLogin(context.Background(), srv.URL, "cli", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = config.ControlWithLock(srv.URL, func(s *config.ControlStore) error {
+		st, e := s.Load()
+		if e != nil {
+			return e
+		}
+		p := st.Pending[req.Handle]
+		p.NextPollAt = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+		st.Pending[req.Handle] = p
+		return s.Save(st)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "saved")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestControlLoginCrashAfterSaveBeforeOutput$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "CURIOUS_SAVED_ORIGIN="+srv.URL, "CURIOUS_SAVED_HANDLE="+req.Handle, "CURIOUS_SAVED_MARKER="+marker)
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err = os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("credential was not saved")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err = cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	account, err := VerifyControlLogin(context.Background(), srv.URL, req.Handle, true)
+	if err != nil || !account.RecoveredFromStorage || account.UserID != "user-one" || len(*polls) != 1 {
+		t.Fatalf("durable result was not recovered: %+v %v", account, err)
 	}
 }

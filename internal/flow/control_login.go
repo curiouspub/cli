@@ -90,8 +90,24 @@ func newControl(origin string, allowLoopback bool) (string, *api.ControlClient, 
 
 // Account labels are untrusted response data. Never render one that embeds
 // any proof or credential currently held by this origin.
+func secretInLabel(value string, secret ui.Secret) bool {
+	if secret == "" {
+		return false
+	}
+	token := string(secret)
+	if strings.Contains(value, token) {
+		return true
+	}
+	if strings.HasPrefix(token, "ccl1.") {
+		parts := strings.Split(token, ".")
+		if len(parts) == 3 && len(parts[2]) == 43 && strings.Contains(value, parts[2]) {
+			return true
+		}
+	}
+	return false
+}
 func safeControlUserID(value string, state config.ControlState, incoming ui.Secret) bool {
-	if incoming != "" && strings.Contains(value, string(incoming)) {
+	if secretInLabel(value, incoming) {
 		return false
 	}
 	for _, pending := range state.Pending {
@@ -100,7 +116,7 @@ func safeControlUserID(value string, state config.ControlState, incoming ui.Secr
 		}
 	}
 	for _, credential := range state.Credentials {
-		if credential.Token != "" && strings.Contains(value, string(credential.Token)) {
+		if secretInLabel(value, credential.Token) {
 			return false
 		}
 	}
@@ -226,6 +242,9 @@ func controlCreate(ctx context.Context, c *api.ControlClient, s *config.ControlS
 	if e = c.Capabilities(ctx); e != nil {
 		return out, e
 	}
+	if !time.Now().Before(deadline) {
+		return out, errControlExpired
+	}
 	raw, e := base64.RawURLEncoding.DecodeString(string(p.Proof))
 	if e != nil || len(raw) != 32 || base64.RawURLEncoding.EncodeToString(raw) != string(p.Proof) {
 		return out, errors.New("invalid stored login request")
@@ -236,11 +255,21 @@ func controlCreate(ctx context.Context, c *api.ControlClient, s *config.ControlS
 	if e = s.Save(st); e != nil {
 		return out, e
 	}
-	response, e := c.Create(ctx, base64.RawURLEncoding.EncodeToString(sum[:]), p.Kind)
+	if !time.Now().Before(deadline) {
+		p.Unresolved = false
+		st.Pending[p.Handle] = p
+		if e = s.Save(st); e != nil {
+			return out, errControlUncertain
+		}
+		return out, errControlExpired
+	}
+	requestCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	response, e := c.Create(requestCtx, base64.RawURLEncoding.EncodeToString(sum[:]), p.Kind)
 	if e != nil {
 		var problem *api.ControlError
 		delay := 5 * time.Second
-		if errors.As(e, &problem) && problem.Code == "slow_down" && problem.RetryAfter > delay {
+		if errors.As(e, &problem) && problem.RetryAfter > delay {
 			delay = problem.RetryAfter
 		}
 		p.NextCreateAt = time.Now().UTC().Add(delay).Format(time.RFC3339Nano)
@@ -445,11 +474,21 @@ func VerifyControlLogin(ctx context.Context, origin, handle string, allowLoopbac
 		if e = s.Save(st); e != nil {
 			return e
 		}
-		issued, e := c.Poll(ctx, p.RequestID, p.Proof)
+		if !time.Now().Before(deadline) {
+			p.Unresolved = false
+			st.Pending[handle] = p
+			if e = s.Save(st); e != nil {
+				return errControlUncertain
+			}
+			return errControlExpired
+		}
+		requestCtx, cancel := context.WithDeadline(ctx, deadline)
+		defer cancel()
+		issued, e := c.Poll(requestCtx, p.RequestID, p.Proof)
 		if e != nil {
 			var ce *api.ControlError
 			delay := 5 * time.Second
-			if errors.As(e, &ce) && ce.Code == "slow_down" && ce.RetryAfter > delay {
+			if errors.As(e, &ce) && ce.RetryAfter > delay {
 				delay = ce.RetryAfter
 			}
 			p.NextPollAt = time.Now().UTC().Add(delay).Format(time.RFC3339Nano)

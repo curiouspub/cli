@@ -109,6 +109,9 @@ func strictObject(data []byte, dst any) error {
 	if _, err := d.Token(); err != io.EOF {
 		return errors.New("invalid response")
 	}
+	if err := controlwire.ExactFields(data, dst); err != nil {
+		return err
+	}
 	d = json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if err := d.Decode(dst); err != nil {
@@ -116,6 +119,7 @@ func strictObject(data []byte, dst any) error {
 	}
 	return nil
 }
+
 func uniqueValue(d *json.Decoder, depth int) error {
 	if depth > 32 {
 		return errors.New("JSON nesting limit exceeded")
@@ -183,59 +187,90 @@ func (c *ControlClient) call(ctx context.Context, method, path string, body any,
 		return errors.New("control request failed")
 	}
 	defer res.Body.Close()
-	if len(res.Header.Values("Cache-Control")) != 1 || strings.ToLower(strings.TrimSpace(res.Header.Get("Cache-Control"))) != "no-store" {
+	// A syntactically valid throttle header is a conservative lower bound
+	// even when framing, body decoding, or other validation later fails.
+	var knownRetry time.Duration
+	if res.StatusCode == http.StatusTooManyRequests && len(res.Header.Values("Retry-After")) == 1 {
+		raw := res.Header.Get("Retry-After")
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 600 && raw == strconv.Itoa(n) {
+			knownRetry = time.Duration(n) * time.Second
+		}
+	}
+	invalidResponse := func() error {
+		if knownRetry > 0 {
+			return &ControlError{Code: "invalid_response", RetryAfter: knownRetry}
+		}
 		return errors.New("invalid control response")
+	}
+	if len(res.Header.Values("Cache-Control")) != 1 || strings.ToLower(strings.TrimSpace(res.Header.Get("Cache-Control"))) != "no-store" {
+		return invalidResponse()
+	}
+	if res.StatusCode == http.StatusNoContent && len(res.Header.Values("Content-Type")) != 0 {
+		return invalidResponse()
+	}
+	if res.StatusCode == http.StatusMethodNotAllowed && (len(res.Header.Values("Allow")) != 1 || res.Header.Get("Allow") != method) {
+		return invalidResponse()
 	}
 	if res.StatusCode != http.StatusNoContent {
 		if len(res.Header.Values("Content-Type")) != 1 {
-			return errors.New("invalid control response")
+			return invalidResponse()
 		}
 		media, params, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
 		if err != nil || media != "application/json" || strings.ToLower(params["charset"]) != "utf-8" || len(params) != 1 {
-			return errors.New("invalid control response")
+			return invalidResponse()
 		}
 	}
 	b, e := io.ReadAll(io.LimitReader(res.Body, controlwire.MaxResponseBytes+1))
 	if e != nil || len(b) > controlwire.MaxResponseBytes {
-		return errors.New("invalid control response")
+		return invalidResponse()
 	}
 	for _, s := range statuses {
 		if res.StatusCode == s {
 			if out == nil {
 				if len(b) != 0 {
-					return errors.New("invalid control response")
+					return invalidResponse()
 				}
 				return nil
 			}
 			if strictObject(b, out) != nil {
-				return errors.New("invalid control response")
+				return invalidResponse()
 			}
 			return nil
 		}
 	}
 	var er controlwire.ErrorResponse
 	if strictObject(b, &er) != nil || er.Error == "" {
-		return errors.New("invalid control response")
+		return invalidResponse()
 	}
 	allowed := map[string]bool{"authorization_pending": true, "access_denied": true, "request_expired": true, "invalid_credential": true, "slow_down": true, "restart_required": true, "invalid_request": true, "request_conflict": true, "authority_unavailable": true}
 	if !allowed[er.Error] {
-		return errors.New("invalid control response")
+		return invalidResponse()
+	}
+	perEndpoint := map[string]map[string]bool{
+		controlwire.CapabilitiesPath: {"invalid_request": true, "authority_unavailable": true},
+		controlwire.RequestsPath:     {"invalid_request": true, "access_denied": true, "request_conflict": true, "request_expired": true, "slow_down": true, "authority_unavailable": true},
+		controlwire.PollPath:         {"invalid_request": true, "invalid_credential": true, "access_denied": true, "request_conflict": true, "restart_required": true, "request_expired": true, "slow_down": true, "authority_unavailable": true, "authorization_pending": true},
+		controlwire.SessionPath:      {"invalid_request": true, "invalid_credential": true, "authority_unavailable": true},
+		controlwire.RevokePath:       {"invalid_request": true, "invalid_credential": true, "authority_unavailable": true},
+	}
+	if !perEndpoint[path][er.Error] {
+		return invalidResponse()
 	}
 	expectedStatus := map[string]int{"authorization_pending": 202, "access_denied": 403, "request_expired": 410, "invalid_credential": 401, "slow_down": 429, "restart_required": 409, "invalid_request": 400, "request_conflict": 409, "authority_unavailable": 503}
 	if expectedStatus[er.Error] != res.StatusCode && !(er.Error == "invalid_request" && res.StatusCode == http.StatusMethodNotAllowed) {
-		return errors.New("invalid control response")
+		return invalidResponse()
 	}
 	var retry time.Duration
 	if er.Error == "slow_down" {
 		if er.RetryAfterSeconds == nil || *er.RetryAfterSeconds < 1 || *er.RetryAfterSeconds > 600 {
-			return errors.New("invalid control response")
+			return invalidResponse()
 		}
 		if len(res.Header.Values("Retry-After")) != 1 || res.Header.Get("Retry-After") != strconv.Itoa(*er.RetryAfterSeconds) {
-			return errors.New("invalid control response")
+			return invalidResponse()
 		}
 		retry = time.Duration(*er.RetryAfterSeconds) * time.Second
 	} else if er.RetryAfterSeconds != nil {
-		return errors.New("invalid control response")
+		return invalidResponse()
 	}
 	return &ControlError{Code: er.Error, RetryAfter: retry}
 }

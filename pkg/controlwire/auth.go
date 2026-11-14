@@ -1,6 +1,14 @@
 // Package controlwire describes the public browser-login exchange.
 package controlwire
 
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
+)
+
 const (
 	CapabilitiesPath = "/v1/auth/client/capabilities"
 	RequestsPath     = "/v1/auth/client/requests"
@@ -58,4 +66,62 @@ type SessionResponse struct {
 type ErrorResponse struct {
 	Error             string `json:"error"`
 	RetryAfterSeconds *int   `json:"retry_after_seconds,omitempty"`
+}
+
+// ExactFields enforces JSON field spelling and rejects explicit nulls before
+// Go's case-insensitive struct decoder can coalesce aliases.
+func ExactFields(data []byte, dst any) error { return exactFields(data, reflect.TypeOf(dst)) }
+
+func exactFields(data []byte, typ reflect.Type) error {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errors.New("invalid response")
+	}
+	switch typ.Kind() {
+	case reflect.Struct:
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) != nil || fields == nil {
+			return errors.New("invalid response")
+		}
+		allowed := make(map[string]reflect.Type)
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			name := strings.Split(field.Tag.Get("json"), ",")[0]
+			if name != "" && name != "-" {
+				allowed[name] = field.Type
+			}
+		}
+		for name, raw := range fields {
+			fieldType, ok := allowed[name]
+			if !ok {
+				return errors.New("invalid response")
+			}
+			if err := exactFields(raw, fieldType); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) != nil || fields == nil {
+			return errors.New("invalid response")
+		}
+		for _, raw := range fields {
+			if err := exactFields(raw, typ.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		var items []json.RawMessage
+		if json.Unmarshal(data, &items) != nil || items == nil {
+			return errors.New("invalid response")
+		}
+		for _, item := range items {
+			if err := exactFields(item, typ.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

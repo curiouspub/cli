@@ -107,6 +107,7 @@ func TestControlLoginMCPFraming(t *testing.T) {
 			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ccl1.") {
 				t.Error("missing credential")
 			}
+			w.Header().Del("Content-Type")
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Errorf("unexpected route %s", r.URL.Path)
@@ -314,4 +315,17 @@ func TestControlLoginMCPResumeAfterLostCreate(t *testing.T) {
 
 func argsForControlHandle(origin, handle string) string {
 	return fmt.Sprintf(`{"control_url":%q,"handle":%q}`, origin, handle)
+}
+
+func TestControlLoginMCPRejectsFieldAliases(t *testing.T) {
+	for _, raw := range []string{
+		`{"control_url":"https://first.example.test","CONTROL_URL":"https://second.example.test","local_only":true}`,
+		`{"control_url":"https://first.example.test","local_only":true,"LOCAL_ONLY":false}`,
+		`{"control_url":"https://first.example.test","local_only":null}`,
+	} {
+		var args controlLogoutArgs
+		if decodeControlArgs(json.RawMessage(raw), &args) == nil {
+			t.Fatal("accepted ambiguous or null arguments")
+		}
+	}
 }

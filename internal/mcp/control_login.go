@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/curiouspub/cli/internal/flow"
+	"github.com/curiouspub/cli/pkg/controlwire"
 )
 
 const (
@@ -68,6 +69,10 @@ func decodeControlArgs(raw json.RawMessage, args any) *Result {
 			r := ErrorResult("The arguments could not be read.")
 			return &r
 		}
+	}
+	if controlwire.ExactFields(raw, args) != nil {
+		r := ErrorResult("The arguments could not be read.")
+		return &r
 	}
 	dec = json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

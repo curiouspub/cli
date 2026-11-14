@@ -104,7 +104,7 @@ func TestControlLoginProtocol(t *testing.T) {
 		t.Fatal("accepted excessive response nesting")
 	}
 	var cbody controlwire.Capabilities
-	b, _ := json.Marshal(controlwire.Capabilities{Version: 1})
+	b, _ := json.Marshal(controlwire.Capabilities{Version: 1, ClientKinds: []string{"cli", "mcp"}})
 	if strictObject(b, &cbody) != nil {
 		t.Fatal("valid JSON rejected")
 	}
@@ -182,6 +182,7 @@ func testControlExchange(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer synthetic-token" {
 				t.Error("missing bearer credential")
 			}
+			w.Header().Del("Content-Type")
 			w.WriteHeader(204)
 		default:
 			t.Error("unexpected path")
@@ -226,5 +227,142 @@ func testControlExchange(t *testing.T) {
 	}
 	if err = c.Revoke(ctx, ui.Secret("synthetic-token")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestControlLoginProtocolExactSchema(t *testing.T) {
+	cases := []struct {
+		name, body string
+		dst        func() any
+	}{
+		{"capabilities", `{"version":1,"client_kinds":["cli","mcp"],"endpoints":{"capabilities":"a","requests":"b","verification":"c","decision":"d","poll":"e","session":"f","revoke":"g"},"interval_seconds":5}`, func() any { return &controlwire.Capabilities{} }},
+		{"create", `{"request_id":"id","user_code":"code","verification_uri":"uri","verification_uri_complete":"full","expires_at":"expiry","interval_seconds":5}`, func() any { return &controlwire.CreateResponse{} }},
+		{"issuance", `{"credential":"secret","credential_id":"id","user_id":"user","expires_at":"expiry"}`, func() any { return &controlwire.IssuanceResponse{} }},
+		{"session", `{"credential_id":"id","user_id":"user","expires_at":"expiry"}`, func() any { return &controlwire.SessionResponse{} }},
+		{"error", `{"error":"slow_down","retry_after_seconds":5}`, func() any { return &controlwire.ErrorResponse{} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if e := strictObject([]byte(tc.body), tc.dst()); e != nil {
+				t.Fatalf("valid schema rejected: %v", e)
+			}
+			var root map[string]any
+			if e := json.Unmarshal([]byte(tc.body), &root); e != nil {
+				t.Fatal(e)
+			}
+			var visit func(map[string]any, []string)
+			visit = func(fields map[string]any, path []string) {
+				for key, value := range fields {
+					current := append(append([]string{}, path...), key)
+					for _, mutation := range []string{"alias", "duplicate_alias", "null"} {
+						var copyRoot map[string]any
+						_ = json.Unmarshal([]byte(tc.body), &copyRoot)
+						parent := copyRoot
+						for _, component := range current[:len(current)-1] {
+							parent = parent[component].(map[string]any)
+						}
+						old := parent[key]
+						switch mutation {
+						case "alias":
+							delete(parent, key)
+							parent[strings.ToUpper(key)] = old
+						case "duplicate_alias":
+							parent[strings.ToUpper(key)] = old
+						case "null":
+							parent[key] = nil
+						}
+						data, _ := json.Marshal(copyRoot)
+						if strictObject(data, tc.dst()) == nil {
+							t.Errorf("accepted %s %s", strings.Join(current, "."), mutation)
+						}
+					}
+					if nested, ok := value.(map[string]any); ok {
+						visit(nested, current)
+					}
+				}
+			}
+			visit(root, nil)
+		})
+	}
+	if strictObject([]byte(`{"error":"access_denied","retry_after_seconds":null}`), &controlwire.ErrorResponse{}) == nil {
+		t.Fatal("accepted null optional field")
+	}
+}
+
+func TestControlLoginProtocolEndpointErrors(t *testing.T) {
+	cases := []struct {
+		path, code string
+		status     int
+		allowed    bool
+	}{
+		{controlwire.RequestsPath, "restart_required", 409, false},
+		{controlwire.PollPath, "restart_required", 409, true},
+		{controlwire.CapabilitiesPath, "slow_down", 429, false},
+		{controlwire.RequestsPath, "request_conflict", 409, true},
+		{controlwire.RevokePath, "access_denied", 403, false},
+		{controlwire.RevokePath, "invalid_credential", 401, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path+"/"+tc.code, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				if tc.code == "slow_down" {
+					w.Header().Set("Retry-After", "5")
+				}
+				w.WriteHeader(tc.status)
+				if tc.code == "slow_down" {
+					_, _ = w.Write([]byte(`{"error":"slow_down","retry_after_seconds":5}`))
+				} else {
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": tc.code})
+				}
+			}))
+			defer srv.Close()
+			client, err := NewControlClient(srv.URL, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.call(context.Background(), http.MethodPost, tc.path, nil, "", nil, 200)
+			var problem *ControlError
+			trusted := errors.As(err, &problem) && problem.Code == tc.code
+			if trusted != tc.allowed {
+				t.Fatalf("endpoint error trusted=%t error=%v", trusted, err)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		status             int
+		contentType, allow string
+		valid              bool
+	}{{204, "", "", true}, {204, "application/json; charset=utf-8", "", false}, {405, "application/json; charset=utf-8", "POST", true}, {405, "application/json; charset=utf-8", "GET", false}, {405, "application/json; charset=utf-8", "", false}} {
+		t.Run(fmt.Sprintf("%d-%s-%s", tc.status, tc.contentType, tc.allow), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Cache-Control", "no-store")
+				if tc.contentType != "" {
+					w.Header().Set("Content-Type", tc.contentType)
+				}
+				if tc.allow != "" {
+					w.Header().Set("Allow", tc.allow)
+				}
+				w.WriteHeader(tc.status)
+				if tc.status == 405 {
+					_, _ = w.Write([]byte(`{"error":"invalid_request"}`))
+				}
+			}))
+			defer srv.Close()
+			client, err := NewControlClient(srv.URL, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.Revoke(context.Background(), "credential")
+			valid := err == nil
+			var problem *ControlError
+			if errors.As(err, &problem) && problem.Code == "invalid_request" {
+				valid = true
+			}
+			if valid != tc.valid {
+				t.Fatalf("header acceptance=%t error=%v", valid, err)
+			}
+		})
 	}
 }

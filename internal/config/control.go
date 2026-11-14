@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/curiouspub/cli/internal/ui"
+	"github.com/curiouspub/cli/pkg/controlwire"
 )
 
 // ControlPending is a recoverable request; Proof must never be rendered.
@@ -185,6 +186,9 @@ func controlDecode(data []byte, dst any) error {
 	}
 	if _, e := d.Token(); e != io.EOF {
 		return errors.New("invalid Control state")
+	}
+	if e := controlwire.ExactFields(data, dst); e != nil {
+		return e
 	}
 	d = json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()

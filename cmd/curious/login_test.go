@@ -155,6 +155,7 @@ func TestControlLoginCommand(t *testing.T) {
 			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ccl1.") {
 				t.Error("missing logout credential")
 			}
+			w.Header().Del("Content-Type")
 			w.WriteHeader(http.StatusNoContent)
 		case controlwire.PollPath:
 			_ = json.NewEncoder(w).Encode(controlwire.IssuanceResponse{Credential: "ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8", CredentialID: "clcred_QkJCQkJCQkJCQkJCQkJCQg", UserID: "user-one", ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339)})

@@ -224,3 +224,16 @@ func TestControlLoginOriginIsolation(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestControlLoginStateRejectsFieldAliases(t *testing.T) {
+	for _, body := range []string{
+		`{"origin":"https://first.example.test","ORIGIN":"https://second.example.test","pending":{},"credentials":{},"completed":{}}`,
+		`{"origin":"https://first.example.test","pending":{"x":{"handle":"x","HANDLE":"other","proof":"p"}},"credentials":{},"completed":{}}`,
+		`{"origin":"https://first.example.test","pending":null,"credentials":{},"completed":{}}`,
+	} {
+		var state controlDiskState
+		if controlDecode([]byte(body), &state) == nil {
+			t.Fatal("accepted ambiguous or null state")
+		}
+	}
+}
