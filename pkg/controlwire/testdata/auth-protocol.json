@@ -1,0 +1,2034 @@
+{
+  "version": 1,
+  "purpose": "Public protocol fixture; every identifier, proof, credential, cookie and account is synthetic.",
+  "encoding": {
+    "json": "UTF-8 object, no duplicate or unknown keys, one value and no trailing data; an example body value null means no HTTP body bytes, not a JSON null literal",
+    "binary": "unpadded canonical base64url. A malformed proof, digest or nonce in JSON is invalid_request; malformed, missing, noncanonical or unrecognized Bearer credentials are uniformly invalid_credential. Duplicate Authorization header fields are invalid_request.",
+    "timestamp": "UTC RFC3339 exactly YYYY-MM-DDTHH:MM:SSZ; creation and issuance instants are captured from PostgreSQL and truncated to whole seconds before deadlines are calculated; enforcement compares current PostgreSQL time against those stored instants",
+    "request_id": "clreq_ plus 22 unpadded base64url characters encoding 16 random bytes",
+    "credential_id": "clcred_ plus 22 unpadded base64url characters encoding 16 random bytes",
+    "credential": "ccl1.<credential_id>.<base64url 32-byte secret>",
+    "consent_nonce": "unpadded base64url encoding 32 random bytes",
+    "user_code": "eight symbols from ABCDEFGHJKLMNPQRSTUVWXYZ23456789 rendered XXXX-XXXX"
+  },
+  "limits": {
+    "request_lifetime_seconds": 600,
+    "terminal_retention_seconds": 86400,
+    "credential_association_retention_seconds": 86400,
+    "poll_interval_seconds": 5,
+    "credential_lifetime_seconds": 2592000,
+    "issuance_replay_seconds": 600,
+    "start_per_address_per_600_seconds": 10,
+    "lookup_decision_per_user_per_600_seconds": 20,
+    "lookup_decision_per_address_per_60_seconds": 60,
+    "max_json_body_bytes": 4096,
+    "max_user_id_utf8_bytes": 256,
+    "max_json_response_bytes": 4096
+  },
+  "header_rules": {
+    "all_responses": {
+      "Cache-Control": "no-store"
+    },
+    "json_responses": {
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "no_content": "204 responses have empty body and no Content-Type",
+    "method_not_allowed": "405 uses Allow with the exact permitted method",
+    "slow_down": "429 has Retry-After decimal seconds matching retry_after_seconds",
+    "other_headers": "Transport headers such as Date and Content-Length may be added; Location never contains proof or credential. A HEAD response carries no body bytes under HTTP semantics, including on 405."
+  },
+  "response_matrix": {
+    "capabilities": [
+      "200 capabilities",
+      "400 invalid_request",
+      "405 invalid_request",
+      "503 authority_unavailable"
+    ],
+    "requests": [
+      "201 created",
+      "200 exact_retry",
+      "400 invalid_request",
+      "403 access_denied",
+      "405 invalid_request",
+      "409 request_conflict",
+      "410 request_expired",
+      "429 slow_down",
+      "503 authority_unavailable"
+    ],
+    "verification": [
+      "200 html_page",
+      "400 invalid_request",
+      "405 invalid_request",
+      "429 slow_down",
+      "503 authority_unavailable"
+    ],
+    "decision": [
+      "204 empty",
+      "400 invalid_request",
+      "401 authentication_required",
+      "403 origin_forbidden or invalid_consent",
+      "405 invalid_request",
+      "409 request_conflict",
+      "410 request_expired",
+      "429 slow_down",
+      "503 authority_unavailable"
+    ],
+    "poll": [
+      "200 issuance",
+      "202 authorization_pending",
+      "400 invalid_request",
+      "401 invalid_credential",
+      "403 access_denied",
+      "405 invalid_request",
+      "409 request_conflict or restart_required",
+      "410 request_expired",
+      "429 slow_down",
+      "503 authority_unavailable"
+    ],
+    "session": [
+      "200 session",
+      "400 invalid_request",
+      "401 invalid_credential",
+      "405 invalid_request",
+      "503 authority_unavailable"
+    ],
+    "revoke": [
+      "204 empty",
+      "400 invalid_request",
+      "401 invalid_credential",
+      "405 invalid_request",
+      "503 authority_unavailable"
+    ]
+  },
+  "schemas": {
+    "capabilities_response": {
+      "version": "integer exactly 1",
+      "client_kinds": "array exactly [cli,mcp]",
+      "endpoints": "object of the seven fixed paths shown in capabilities example",
+      "interval_seconds": "integer exactly 5"
+    },
+    "create_request": {
+      "proof_sha256": "canonical base64url string of 32 digest bytes",
+      "client_kind": "string exactly cli or mcp"
+    },
+    "create_response": {
+      "request_id": "request ID string",
+      "user_code": "display code string",
+      "verification_uri": "absolute configured Control-origin verification URL without query",
+      "verification_uri_complete": "same URL with only code query",
+      "expires_at": "UTC RFC3339 timestamp string",
+      "interval_seconds": "integer exactly 5"
+    },
+    "decision_request": {
+      "request_id": "request ID string",
+      "user_code": "display code string",
+      "nonce": "canonical base64url string of 32 bytes",
+      "decision": "string exactly approve or deny"
+    },
+    "poll_request": {
+      "request_id": "request ID string",
+      "proof": "canonical base64url string of 32 bytes"
+    },
+    "issuance_response": {
+      "credential": "credential string",
+      "credential_id": "credential ID string",
+      "user_id": "nonempty User ID string of at most 256 UTF-8 bytes",
+      "expires_at": "UTC RFC3339 timestamp string"
+    },
+    "session_response": {
+      "credential_id": "credential ID string",
+      "user_id": "nonempty User ID string of at most 256 UTF-8 bytes",
+      "expires_at": "UTC RFC3339 timestamp string"
+    },
+    "error_response": {
+      "error": "stable error code string",
+      "retry_after_seconds": "integer 1..600, required only for slow_down; all other error objects contain only error"
+    },
+    "object_policy": "Every object has exactly the listed fields; fields are required except as explicitly marked. JSON responses are at most 4096 UTF-8 bytes; if the current User ID exceeds 256 UTF-8 bytes or cannot be represented within that bound, fail closed with authority_unavailable without truncation."
+  },
+  "verification_origin": "Configured origin is canonical HTTPS scheme and authority without credentials, path, query or fragment; loopback HTTP is permitted only in controlled tests. No cross-origin verification URL or redirect is emitted.",
+  "request_rules": {
+    "native": "Native capabilities, create, poll, session and revoke reject any Origin header or Cookie header. Create and poll require application/json. Session and revoke require exactly one Authorization header containing one Bearer credential; revoke requires empty body and query.",
+    "browser": "Verification GET permits at most one code query and never decides or issues a credential; permitted bookkeeping includes durable rate charging and creating or replacing the bound single-use consent nonce. Decision requires exactly one real browser session cookie, exactly one Origin header equal to the configured origin, JSON and no Authorization header; the nonce binds request, code, current User and session. The server never accepts a User ID from a decision. Exact Origin is checked before effects, then the current real session and enabled User are revalidated. A valid but switched account or session, or a refreshed confirmation using its prior nonce, returns invalid_consent with no effect; a disabled User returns authentication_required with no effect.",
+    "strict": "Except the optional verification code, query strings are forbidden. GET and revoke bodies must be empty. JSON media type is application/json with an optional UTF-8 charset. All unspecified query parameters, duplicate or unknown JSON fields, wrong types, duplicate authentication or Origin headers, noncanonical proof/digest/nonce JSON strings and oversized bodies are invalid_request. No redirects to caller-supplied destinations."
+  },
+  "browser_page": {
+    "path": "/client-login",
+    "methods": [
+      "GET"
+    ],
+    "query": {
+      "code": "optional string in displayed code format"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": "default-src 'none'; script-src 'nonce-UFBQUFBQUFBQUFBQUFBQUFBQ'; connect-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "same-origin"
+      },
+      "body_contract": "The unauthenticated sign-in page uses the existing /sites CSP without form-action so the OAuth redirect chain remains supported. An unauthenticated page offers only same-origin sign-in with fixed /sites return and explicit return to verification; it does not look up a supplied code. An authenticated page without a code offers manual code entry by GET. An authenticated valid-code confirmation displays current User, client kind, intended client-session access and code, and binds a single-use consent nonce to that User, session and request. Unknown, denied or expired codes show a generic unavailable page with no account or request details. GET issues no decision or credential; authenticated lookup may charge rate budgets and creating or refreshing confirmation replaces the bound nonce. The confirmation script has a fresh per-response CSP nonce distinct from the consent nonce, and sends the exact decision JSON to the same origin; untrusted display values are HTML-escaped."
+    },
+    "examples": [
+      {
+        "name": "anonymous_sign_in",
+        "precondition": "No valid session; supplied code is not looked up.",
+        "request": {
+          "method": "GET",
+          "path": "/client-login",
+          "headers": {},
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Cache-Control": "no-store",
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "same-origin"
+          },
+          "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Client login</title></head><body><h1>Client login</h1><p>Sign in, then return to the verification page.</p><form method=\"post\" action=\"/v1/auth/github/start\"><input type=\"hidden\" name=\"return_to\" value=\"/sites\"><button type=\"submit\">Sign in with GitHub</button></form></body></html>"
+        }
+      },
+      {
+        "name": "manual_entry",
+        "precondition": "The real session belongs to enabled user_example.",
+        "request": {
+          "method": "GET",
+          "path": "/client-login",
+          "headers": {
+            "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+          },
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Cache-Control": "no-store",
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; script-src 'nonce-UFBQUFBQUFBQUFBQUFBQUFBQ'; connect-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "same-origin"
+          },
+          "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Client login</title></head><body><h1>Client login</h1><p>Signed in as user_example.</p><form method=\"get\" action=\"/client-login\"><label>Code <input name=\"code\" autocomplete=\"off\" required></label><button type=\"submit\">Continue</button></form></body></html>"
+        }
+      },
+      {
+        "name": "confirmation",
+        "precondition": "The real session belongs to enabled user_example and the code locates an unexpired pending cli request; the consent nonce is freshly bound to this session, User and request.",
+        "request": {
+          "method": "GET",
+          "path": "/client-login",
+          "query": {
+            "code": "ABCD-EFGH"
+          },
+          "headers": {
+            "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+          },
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Cache-Control": "no-store",
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; script-src 'nonce-UFBQUFBQUFBQUFBQUFBQUFBQ'; connect-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "same-origin"
+          },
+          "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Client login</title></head><body><h1>Approve client login</h1><p>Signed in as user_example.</p><p>Client: cli. Access: Curious client session only; no product operations.</p><p>Code: ABCD-EFGH</p><button type=\"button\" data-decision=\"approve\">Approve</button><button type=\"button\" data-decision=\"deny\">Deny</button><p id=\"result\"></p><script nonce=\"UFBQUFBQUFBQUFBQUFBQUFBQ\">const payload={request_id:'clreq_QUFBQUFBQUFBQUFBQUFBQQ',user_code:'ABCD-EFGH',nonce:'Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4'};for(const b of document.querySelectorAll('[data-decision]'))b.addEventListener('click',async()=>{const r=await fetch('/v1/auth/client/decision',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,decision:b.dataset.decision})});document.getElementById('result').textContent=r.ok?'Decision recorded.':'Decision unavailable.';});</script></body></html>"
+        }
+      },
+      {
+        "name": "unavailable_code",
+        "precondition": "The signed-in session is valid but the code is unknown, denied or expired.",
+        "request": {
+          "method": "GET",
+          "path": "/client-login",
+          "query": {
+            "code": "ABCD-EFGH"
+          },
+          "headers": {
+            "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+          },
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Cache-Control": "no-store",
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; script-src 'nonce-UFBQUFBQUFBQUFBQUFBQUFBQ'; connect-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "same-origin"
+          },
+          "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Client login</title></head><body><h1>Client login</h1><p>This code is unavailable.</p><form method=\"get\" action=\"/client-login\"><label>Code <input name=\"code\" autocomplete=\"off\" required></label><button type=\"submit\">Continue</button></form></body></html>"
+        }
+      }
+    ]
+  },
+  "state_contract": {
+    "create_retry": "Same proof digest and kind returns the retained identity without extending expiry, including after issuance even if the original request deadline has passed. Changed kind returns request_conflict; unissued denial and expiry return their terminal errors. New requests need fresh proof.",
+    "poll": "A disabled User prevents issuance and returns access_denied without creating a credential. A revoked, expired or disabled-account credential returns invalid_credential on session validation and issuance replay. Correct proof sees pending, denial, expiry or the one issued credential. Invalid proof or unknown request share invalid_credential. First issuance occurs strictly before request expiry. Correct-proof replay within 600 seconds returns the exact credential without extending expiry after checking current revocation, account and credential expiry.",
+    "binding_conflict": "Only after correct proof authenticates this exact retained request and complete authoritative reads under User, request, credential locks establish a definite immutable request/User/credential association disagreement, or a valid-window reconstructed-secret verifier mismatch, return redacted request_conflict. Missing or incomplete authority, uncertain commit, or required replay material unavailable returns authority_unavailable. Wrong proof, proof for another request and unknown request remain uniformly invalid_credential. Expected salt removal at or after replay expiry is not a conflict. Never repair an association, revoke another User credential, mint or replace a credential, or infer restart_required from a conflict. The consumer stops automatic retry/new grant, reports the error and retains its pending proof for recovery.",
+    "late_retry": "At now >= replay expiry, a correct-proof poll never returns the secret. If the credential is active, atomically revoke it with a durable replay-expired reason before returning restart_required. A correct-proof repeat against that retained reason returns the same restart_required, including after cleanup removed the salt. A previously independently revoked or expired credential, or disabled User before this late-retry revocation, returns invalid_credential. If durable revocation cannot be established, return authority_unavailable; never claim restart_required on an unknown commit until authoritative readback establishes revocation.",
+    "retention": "Unissued denied or expired requests and rate records are retained for 24 hours after their terminal time. An issued association and proof digest remain while the credential is active and for 24 hours after credential expiry or revocation; revoked credential verifiers remain for that same 24-hour idempotent-revoke window. The replay salt is logically unusable at the replay deadline and removed by cleanup; delayed cleanup never extends authority. After safe purge there is no unbounded proof-digest tombstone or promise that an old retry resolves, and a client must generate a fresh proof for a new request.",
+    "disabled": "When client login is disabled, every recognized route with its permitted method returns 503 authority_unavailable and no side effects; wrong methods return 405 with Allow. Missing enabled authority also fails closed.",
+    "unknown_route": "Unknown paths under /v1/auth/client/ return 404 not_found; wrong method returns 405 invalid_request with Allow.",
+    "revoke": "Revoke affects only the presented credential. A matching active unexpired credential for an enabled User may be durably revoked. A correctly matched retained verifier and complete exact tuple for an already durably revoked credential returns 204 during the tombstone window even if its User was later disabled or its original expiration later passed; this acknowledges only a proven completed revocation, not session, product or client authority. An unrevoked expired credential or disabled User returns invalid_credential with no revocation or issuance effect. Unknown or mismatched verifiers return invalid_credential. 204 requires durable revocation or complete authoritative verification of prior revocation; unavailable, incomplete or uncertain authority returns 503.",
+    "rate": "Invalid proof probes consume the address budget, not the victim request budget; rate authority failure is unavailable. Poll earlier than durable next_poll_at returns slow_down with an integer retry_after_seconds from 1 to 600. Starts, decisions, verification lookups and polls enforce their applicable limits before effects.",
+    "secret_boundary": "Proof and credential appear only in intended TLS request/response bodies or bearer headers and restrictive client storage. They never appear in URLs, page HTML, error text, telemetry, process arguments or logs. All fixture values are synthetic."
+  },
+  "examples_are_independent": true,
+  "examples_semantics": "Each example starts only from its stated precondition; array order is not a single sequential session. If request.header_fields is present it replaces request.headers and represents ordered raw header name/value pairs, including duplicates.",
+  "examples": [
+    {
+      "name": "create_mcp",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "yipP5yf6rs8W7NEwqG4IhcVUDAU3U0BEUHHAZXVV_UI",
+          "client_kind": "mcp"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "request_id": "clreq_TU1NTU1NTU1NTU1NTU1NTQ",
+          "user_code": "JKLM-NPQR",
+          "verification_uri": "https://control.example.test/client-login",
+          "verification_uri_complete": "https://control.example.test/client-login?code=JKLM-NPQR",
+          "expires_at": "2030-01-01T00:10:00Z",
+          "interval_seconds": 5
+        }
+      },
+      "precondition": "A second independent mcp client uses its own fresh proof; no request is retained for that digest."
+    },
+    {
+      "name": "capabilities",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/capabilities",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "version": 1,
+          "client_kinds": [
+            "cli",
+            "mcp"
+          ],
+          "endpoints": {
+            "capabilities": "/v1/auth/client/capabilities",
+            "requests": "/v1/auth/client/requests",
+            "verification": "/client-login",
+            "decision": "/v1/auth/client/decision",
+            "poll": "/v1/auth/client/poll",
+            "session": "/v1/auth/client/session",
+            "revoke": "/v1/auth/client/revoke"
+          },
+          "interval_seconds": 5
+        }
+      },
+      "precondition": "Client login is enabled with available required authorities."
+    },
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "cli"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "verification_uri": "https://control.example.test/client-login",
+          "verification_uri_complete": "https://control.example.test/client-login?code=ABCD-EFGH",
+          "expires_at": "2030-01-01T00:10:00Z",
+          "interval_seconds": 5
+        }
+      },
+      "precondition": "No retained request for this proof digest."
+    },
+    {
+      "name": "create_exact_retry",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "cli"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "verification_uri": "https://control.example.test/client-login",
+          "verification_uri_complete": "https://control.example.test/client-login?code=ABCD-EFGH",
+          "expires_at": "2030-01-01T00:10:00Z",
+          "interval_seconds": 5
+        }
+      },
+      "precondition": "The create example has committed; no new time or expiry is assigned."
+    },
+    {
+      "name": "pending",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authorization_pending"
+        }
+      },
+      "precondition": "The request is pending and this poll is permitted by the rate budget."
+    },
+    {
+      "name": "issued",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "credential": "ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+          "credential_id": "clcred_QkJCQkJCQkJCQkJCQkJCQg",
+          "user_id": "user_example",
+          "expires_at": "2030-01-31T00:00:00Z"
+        }
+      },
+      "precondition": "The request is approved, unexpired, and the current User is enabled; first redemption occurs at 2030-01-01T00:00:00Z."
+    },
+    {
+      "name": "replayed_issuance",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "credential": "ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+          "credential_id": "clcred_QkJCQkJCQkJCQkJCQkJCQg",
+          "user_id": "user_example",
+          "expires_at": "2030-01-31T00:00:00Z"
+        }
+      },
+      "precondition": "The issued example committed; same proof retries inside the replay window while credential and User remain valid."
+    },
+    {
+      "name": "session",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/session",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "credential_id": "clcred_QkJCQkJCQkJCQkJCQkJCQg",
+          "user_id": "user_example",
+          "expires_at": "2030-01-31T00:00:00Z"
+        }
+      },
+      "precondition": "The credential and User are current and enabled."
+    },
+    {
+      "name": "revoke",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": null
+      },
+      "precondition": "The credential verifier matches an active credential."
+    },
+    {
+      "name": "revoke_retry",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": null
+      },
+      "precondition": "The matching credential was already durably revoked and its verifier tombstone remains."
+    },
+    {
+      "name": "invalid_request",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "Required create fields are missing; validation occurs before database work."
+    },
+    {
+      "name": "request_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "mcp"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "request_conflict"
+        }
+      },
+      "precondition": "The create example has committed with client kind cli."
+    },
+    {
+      "name": "create_denied_retry",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "cli"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "access_denied"
+        }
+      },
+      "precondition": "The retained request was denied."
+    },
+    {
+      "name": "create_expired_retry",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "cli"
+        }
+      },
+      "response": {
+        "status": 410,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "request_expired"
+        }
+      },
+      "precondition": "The unissued retained request has reached its deadline."
+    },
+    {
+      "name": "invalid_credential",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "WFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The request exists but the supplied proof is wrong; an unknown request receives the same response."
+    },
+    {
+      "name": "access_denied",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "access_denied"
+        }
+      },
+      "precondition": "The request is denied."
+    },
+    {
+      "name": "request_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 410,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "request_expired"
+        }
+      },
+      "precondition": "The unissued request is at or beyond its deadline."
+    },
+    {
+      "name": "restart_required",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "restart_required"
+        }
+      },
+      "precondition": "The issuance replay window has elapsed and the associated credential was durably revoked before responding."
+    },
+    {
+      "name": "session_invalid",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/session",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.WFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The supplied credential is unknown, expired, revoked or belongs to a disabled User."
+    },
+    {
+      "name": "revoke_invalid",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.WFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The supplied credential verifier is unknown."
+    },
+    {
+      "name": "decision_authentication_required",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authentication_required"
+        }
+      },
+      "precondition": "No valid browser session is presented."
+    },
+    {
+      "name": "decision_forbidden_origin",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://other.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "origin_forbidden"
+        }
+      },
+      "precondition": "A valid real browser session exists, but Origin differs from the configured origin."
+    },
+    {
+      "name": "decision_invalid_consent",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "WFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_consent"
+        }
+      },
+      "precondition": "A valid real browser session exists, but the submitted nonce does not match it and the displayed request."
+    },
+    {
+      "name": "decision_terminal",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "request_conflict"
+        }
+      },
+      "precondition": "The request already has a terminal decision or issuance."
+    },
+    {
+      "name": "decision_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 410,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "request_expired"
+        }
+      },
+      "precondition": "The request deadline has been reached."
+    },
+    {
+      "name": "unavailable__v1_auth_client_capabilities",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/capabilities",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "unavailable__v1_auth_client_requests",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "cli"
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "unavailable__client-login",
+      "request": {
+        "method": "GET",
+        "path": "/client-login",
+        "headers": {
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": null,
+        "query": {
+          "code": "ABCD-EFGH"
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "unavailable__v1_auth_client_decision",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "unavailable__v1_auth_client_poll",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "unavailable__v1_auth_client_session",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/session",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "unavailable__v1_auth_client_revoke",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The requested operation requires an unavailable authority; no effect may be reported as successful."
+    },
+    {
+      "name": "throttled__v1_auth_client_requests",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/requests",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "proof_sha256": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+          "client_kind": "cli"
+        }
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Retry-After": "5"
+        },
+        "body": {
+          "error": "slow_down",
+          "retry_after_seconds": 5
+        }
+      },
+      "precondition": "The applicable durable rate budget is exhausted or the poll is earlier than next_poll_at; no issuance or decision occurs."
+    },
+    {
+      "name": "throttled__v1_auth_client_decision",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Retry-After": "5"
+        },
+        "body": {
+          "error": "slow_down",
+          "retry_after_seconds": 5
+        }
+      },
+      "precondition": "The applicable durable rate budget is exhausted or the poll is earlier than next_poll_at; no issuance or decision occurs."
+    },
+    {
+      "name": "throttled__v1_auth_client_poll",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Retry-After": "5"
+        },
+        "body": {
+          "error": "slow_down",
+          "retry_after_seconds": 5
+        }
+      },
+      "precondition": "The applicable durable rate budget is exhausted or the poll is earlier than next_poll_at; no issuance or decision occurs."
+    },
+    {
+      "name": "throttled__client-login",
+      "request": {
+        "method": "GET",
+        "path": "/client-login",
+        "headers": {
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": null,
+        "query": {
+          "code": "ABCD-EFGH"
+        }
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Retry-After": "5"
+        },
+        "body": {
+          "error": "slow_down",
+          "retry_after_seconds": 5
+        }
+      },
+      "precondition": "The applicable durable rate budget is exhausted or the poll is earlier than next_poll_at; no issuance or decision occurs."
+    },
+    {
+      "name": "approved",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": null
+      },
+      "precondition": "The browser just rendered this request and the current real cookie/session/User match the single-use nonce."
+    },
+    {
+      "name": "denied",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "deny"
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": null
+      },
+      "precondition": "The browser just rendered this request and the current real cookie/session/User match the single-use nonce."
+    },
+    {
+      "name": "method_not_allowed__v1_auth_client_capabilities",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/auth/client/capabilities",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "GET"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "method_not_allowed__v1_auth_client_requests",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/auth/client/requests",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "POST"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "method_not_allowed__client-login",
+      "request": {
+        "method": "PUT",
+        "path": "/client-login",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "GET"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "method_not_allowed__v1_auth_client_decision",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/auth/client/decision",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "POST"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "method_not_allowed__v1_auth_client_poll",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/auth/client/poll",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "POST"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "method_not_allowed__v1_auth_client_session",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/auth/client/session",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "GET"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "method_not_allowed__v1_auth_client_revoke",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/auth/client/revoke",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Allow": "POST"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "The path is a recognized protocol route."
+    },
+    {
+      "name": "unknown_protocol_route",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/unknown",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "not_found"
+        }
+      },
+      "precondition": "The path is not a recognized protocol route."
+    },
+    {
+      "name": "disabled_capabilities",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/capabilities",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "Client login is disabled at startup."
+    },
+    {
+      "name": "disabled_verification",
+      "request": {
+        "method": "GET",
+        "path": "/client-login",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "Client login is disabled at startup."
+    },
+    {
+      "name": "late_retry",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "restart_required"
+        }
+      },
+      "precondition": "At the exact replay expiry, the credential is active; this operation durably revokes it with replay-expired reason before responding."
+    },
+    {
+      "name": "late_retry_repeat",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "restart_required"
+        }
+      },
+      "precondition": "The late_retry revocation committed and the association is retained; the same correct proof is retried."
+    },
+    {
+      "name": "late_revocation_unavailable",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The replay deadline has passed and authoritative revocation cannot be established."
+    },
+    {
+      "name": "replay_revoked",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The credential was independently revoked before the replay deadline."
+    },
+    {
+      "name": "replay_disabled_user",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The bound User is disabled before replay."
+    },
+    {
+      "name": "unknown_request",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_WlpaWlpaWlpaWlpaWlpaWg",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The request ID has no retained record, even though the proof is well-formed."
+    },
+    {
+      "name": "other_request_wrong_proof",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_TU1NTU1NTU1NTU1NTU1NTQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The mcp request exists for a different client proof; this supplied proof belongs to the independent cli request and must receive the same response as any wrong proof."
+    },
+    {
+      "name": "poll_binding_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "request_conflict"
+        }
+      },
+      "precondition": "Correct proof authenticates this exact retained request; complete authoritative reads under ordered User, request, credential locks establish a definite immutable request/User/credential association disagreement or a valid-window reconstructed-secret verifier mismatch. Current authority checks are otherwise valid."
+    },
+    {
+      "name": "poll_incomplete_authority",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/poll",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "proof": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "Correct proof authenticates this request, but required retained request or credential material is missing, incomplete, unavailable or an earlier commit remains uncertain."
+    },
+    {
+      "name": "session_malformed",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/session",
+        "headers": {
+          "Authorization": "Bearer malformed"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "One malformed or noncanonical Bearer value is supplied."
+    },
+    {
+      "name": "session_expired",
+      "request": {
+        "method": "GET",
+        "path": "/v1/auth/client/session",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The verifier matches but the credential is expired."
+    },
+    {
+      "name": "revoke_malformed",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer malformed"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "One malformed or noncanonical Bearer value is supplied."
+    },
+    {
+      "name": "revoke_missing",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "No Authorization header is supplied."
+    },
+    {
+      "name": "revoke_duplicate_authorization",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {},
+        "body": null,
+        "header_fields": [
+          [
+            "Authorization",
+            "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+          ],
+          [
+            "Authorization",
+            "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+          ]
+        ]
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_request"
+        }
+      },
+      "precondition": "Two Authorization header fields are supplied; ambiguity is rejected before lookup."
+    },
+    {
+      "name": "revoke_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The verifier matches an expired credential that has not previously been durably revoked."
+    },
+    {
+      "name": "revoke_disabled_user",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "The verifier matches but the bound User is disabled."
+    },
+    {
+      "name": "revoke_tombstone_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.WFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_credential"
+        }
+      },
+      "precondition": "A retained revoked record exists, but the presented secret does not match its verifier."
+    },
+    {
+      "name": "revoke_tombstone_unavailable",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authority_unavailable"
+        }
+      },
+      "precondition": "The presented credential may match a retained revoked record, but complete authoritative tuple or revocation state is unavailable or an earlier commit is uncertain."
+    },
+    {
+      "name": "revoke_tombstone_after_expiry",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": null
+      },
+      "precondition": "The presented retained verifier and exact tuple match a previously durably revoked credential within the 24-hour tombstone window, even though its original expiration has passed."
+    },
+    {
+      "name": "revoke_tombstone_after_disable",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/revoke",
+        "headers": {
+          "Authorization": "Bearer ccl1.clcred_QkJCQkJCQkJCQkJCQkJCQg.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": null
+      },
+      "precondition": "The presented retained verifier and exact tuple match a previously durably revoked credential within the 24-hour tombstone window, and its User was disabled after revocation."
+    },
+    {
+      "name": "decision_account_switch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=REREREREREREREREREREREREREREREREREREREREREQ"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_consent"
+        }
+      },
+      "precondition": "A different valid browser session and User are current after the confirmation was rendered."
+    },
+    {
+      "name": "decision_stale_confirmation",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "invalid_consent"
+        }
+      },
+      "precondition": "The confirmation was refreshed and this formerly valid nonce was replaced."
+    },
+    {
+      "name": "decision_disabled_user",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/client/decision",
+        "headers": {
+          "Content-Type": "application/json",
+          "Origin": "https://control.example.test",
+          "Cookie": "__Host-curious_session=Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+        },
+        "body": {
+          "request_id": "clreq_QUFBQUFBQUFBQUFBQUFBQQ",
+          "user_code": "ABCD-EFGH",
+          "nonce": "Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4",
+          "decision": "approve"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": "authentication_required"
+        }
+      },
+      "precondition": "The current User became disabled after the confirmation was rendered."
+    }
+  ]
+}

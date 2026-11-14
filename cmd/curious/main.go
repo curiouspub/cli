@@ -60,6 +60,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// `curious -h | less` show nothing.
 		u.Help(usageText)
 		return 0
+	case "login":
+		return runControlLogin(args[1:], u, stderr)
+	case "logout":
+		return runControlLogout(args[1:], u)
 	case "version":
 		return runVersion(args[1:], u, stdout)
 	case "deploy":
@@ -83,6 +87,8 @@ func printUsage(u *ui.UI) {
 const usageText ui.Prose = `usage: curious <command> [arguments]
 
 commands:
+  login          sign in to a Control origin
+  logout         revoke a Control credential
   deploy [dir]   pack an Astro project, upload it, build it, print its address
   mcp            serve the Model Context Protocol on stdin and stdout
   version        print the version, commit and build date
