@@ -34,11 +34,9 @@ var macSigningSecrets = []string{
 	"MACOS_NOTARY_ISSUER_ID",
 }
 
-// macSigningJob is the one job that may read them. It is the job that
-// publishes, because the release tool signs between building and
-// archiving inside one run, and there is no way to hand a signed binary
-// from one job to another without handing over everything else too.
-const macSigningJob = "publish"
+// macSigningJob alone receives the Apple inputs. It stages verified
+// bytes with no channel-write permission.
+const macSigningJob = "stage"
 
 // preflightStep names the step that refuses to build without all five.
 const preflightStep = "the macOS signing material is all present"
@@ -60,7 +58,7 @@ func jobAt(all []job, n int) string {
 	return ""
 }
 
-// TestTheMacOSSigningSecretsAreReadByThePublishJobAlone holds the five
+// TestTheMacOSSigningSecretsAreReadByTheStageJobAlone holds the five
 // names to one job in one workflow. The allowlist says a name may be
 // referenced; this says where.
 //
@@ -68,7 +66,7 @@ func jobAt(all []job, n int) string {
 // neither may the snapshot build or any job of the release that is not
 // the one that signs. A credential named in a job that does not use it is
 // a credential every action in that job can read.
-func TestTheMacOSSigningSecretsAreReadByThePublishJobAlone(t *testing.T) {
+func TestTheMacOSSigningSecretsAreReadByTheStageJobAlone(t *testing.T) {
 	root := moduleRoot(t)
 	wanted := map[string]bool{}
 	for _, name := range macSigningSecrets {
@@ -178,9 +176,11 @@ func TestAReleaseWithoutTheSigningMaterialPublishesNothing(t *testing.T) {
 	if tool < 0 {
 		t.Fatalf("the %q job does not run the release tool", macSigningJob)
 	}
+	if args, _ := valueOf(steps[tool], "args"); args != "release --clean --skip=publish,sign" {
+		t.Errorf("the release tool must stage the normal release with only publishing and receipt signing skipped, got %q", args)
+	}
 	if pre > tool {
-		t.Errorf("%q runs after the release tool. It has to run first: by the time the tool "+
-			"finishes, the release is public.", preflightStep)
+		t.Errorf("%q must run before the release tool handles signing or notarization inputs", preflightStep)
 	}
 	for _, at := range []int{pre, tool} {
 		for _, name := range macSigningSecrets {
@@ -255,7 +255,7 @@ const macCheckJob = "mac-check"
 const gatekeeperScript = "scripts/gatekeeper-check.sh"
 
 // TestTheReleaseAsksMacOSWhetherItWouldRunTheBinary holds the release's
-// macOS check to its shape: it follows the publish job, runs on a Mac,
+// macOS check to its shape: it ties public readback to the staged digest, runs on a Mac,
 // holds no credential, and asks the assessment a download gets.
 //
 // THE ASSESSMENT TYPE IS THE POINT. The default one expects an application
@@ -289,9 +289,11 @@ func TestTheReleaseAsksMacOSWhetherItWouldRunTheBinary(t *testing.T) {
 			own[key] = strings.TrimSpace(value)
 		}
 	}
-	if got := own["needs"]; got != "publish" {
-		t.Errorf("the %q job needs %q; it reads what the publish job released, and nothing "+
-			"else has to finish first", macCheckJob, got)
+	if got := own["needs"]; got != "[stage, publish]" {
+		t.Errorf("the %q job needs %q; it must pin public readback to the staged checksum", macCheckJob, got)
+	}
+	if !hasEntry(check.Body, "CHECKSUMS_SHA", "${{ needs.stage.outputs.checksums-sha }}") {
+		t.Error("the public macOS check must bind the checksum file to the reviewed stage")
 	}
 	if got := own["runs-on"]; !strings.HasPrefix(got, "macos-") {
 		t.Errorf("the %q job runs on %q. Only macOS can say whether macOS would run it.", macCheckJob, got)
@@ -314,6 +316,7 @@ func TestTheReleaseAsksMacOSWhetherItWouldRunTheBinary(t *testing.T) {
 	for _, want := range []string{
 		`want="${GITHUB_REF_NAME#v}"`,
 		"shasum -a 256 -c",
+		"\"$CHECKSUMS_SHA\"",
 		gatekeeperScript + " dl/amd64/curious dl/arm64/curious",
 		"com.apple.quarantine",
 		"dl/arm64/curious version",
@@ -329,6 +332,61 @@ func TestTheReleaseAsksMacOSWhetherItWouldRunTheBinary(t *testing.T) {
 			t.Errorf("%s does not carry %q. Without the install assessment every tool is "+
 				"rejected; without the source line a merely signed binary passes.", gatekeeperScript, want)
 		}
+	}
+}
+
+// TestPublishConsumesVerifiedReleaseArtifacts pins the source of the
+// bytes, the stage-only Apple boundary and the public channel order.
+func TestPublishConsumesVerifiedReleaseArtifacts(t *testing.T) {
+	all := make(map[string]job)
+	for _, j := range jobs(readYAMLLines(readRepoFile(t, moduleRoot(t), releaseWorkflow))) {
+		all[j.Name] = j
+	}
+	need := map[string]string{
+		"stage":   "[surfaces, reachable]",
+		"receipt": "stage",
+		"publish": "[stage, receipt]",
+		"formula": "[stage, publish, mac-check]",
+		"wrapper": "[stage, publish, mac-check, formula, brew-linux]",
+	}
+	for name, want := range need {
+		j, ok := all[name]
+		if !ok || !hasEntry(j.Body, "needs", want) {
+			t.Errorf("release job %q must wait for %s", name, want)
+		}
+		if !hasEntry(j.Body, "environment", "release") {
+			t.Errorf("release job %q must use the reviewed release environment", name)
+		}
+		if name == "stage" {
+			if credentialed(j.Body) || hasEntry(j.Body, "actions", "write") || !hasEntry(j.Body, "if", "github.run_attempt == 1") {
+				t.Error("stage can publish, mint OIDC, or rebuild on retry")
+			}
+			continue
+		}
+		download := stepUsing(j.Body, "actions/download-artifact@")
+		if !hasEntry(download, "artifact-ids", "${{ needs.stage.outputs.artifact-id }}") ||
+			!hasEntry(download, "digest-mismatch", "error") ||
+			!strings.Contains(strings.Join(textsOf(j.Body), "\n"), "sha256sum -c MANIFEST.sha256") {
+			t.Errorf("release job %q must consume the exact staged artifact and check its manifest", name)
+		}
+	}
+	stage := all["stage"]
+	assessment, didAssess := lineWith(stage.Body, gatekeeperScript)
+	archive, didUpload := lineWith(stage.Body, "actions/upload-artifact@")
+	if !didAssess || !didUpload || assessment.N >= archive.N {
+		t.Error("notarized Gatekeeper assessment must pass before uploading candidate bytes")
+	}
+	quarantine, didQuarantine := lineWith(stage.Body, "xattr -w com.apple.quarantine")
+	if !didQuarantine || quarantine.N >= assessment.N {
+		t.Error("the stage must apply quarantine before assessment")
+	}
+	if !hasEntry(all["receipt"].Body, "APPROVED", "${{ vars.RELEASE_APPROVED_STAGE }}") {
+		t.Error("checksum receipt must require the owner-approved stage identity")
+	}
+	wrapper := strings.Join(textsOf(all["wrapper"].Body), "\n")
+	if strings.Contains(wrapper, "npm pack") ||
+		!strings.Contains(wrapper, "npm publish --provenance --access public --tag latest \"$package\"") {
+		t.Error("the wrapper must publish the approved tarball without repacking")
 	}
 }
 

@@ -2,14 +2,10 @@
 #
 # cut-release.sh — the step a person runs before a release happens.
 #
-# A release here is started by pushing a tag, and a tag push fires the
-# whole outward change at once: six binaries, a checksum file, a
-# signature, a public release, and a write into the package-manager tap.
-# None of it can be taken back once somebody has downloaded it.
+# Pushing a tag starts signing and verification after protected review.
+# Release channels wait for separate approval of the sealed candidate.
 #
-# THIS SCRIPT IS NOT THE BRAKE. The brake is server-side: the publishing
-# job runs in a deployment environment with a required reviewer, and
-# nobody reaches it by declining to use a wrapper. What this script is
+# The release environment enforces both approvals. What this script is
 # for is the step BEFORE that — showing an operator the state their
 # change is about to land on, and handing them the exact commands rather
 # than making them compose two from memory at the end of a long day.
@@ -64,9 +60,10 @@ readonly EXIT_UNDETERMINED=3 # a question could not be answered at all
 # a refusal that is really a missing program is not the refusal the row
 # is asserting.
 usage() {
-	printf 'usage: scripts/cut-release.sh <version> [--yes]\n\n'
+	printf 'usage: scripts/cut-release.sh <version> [--notes-file <path>] [--yes]\n\n'
 	printf '  <version>   the release version, as a v-prefixed semantic version:\n'
 	printf '              v1.2.3, or v1.2.3-rc.1 for a pre-release.\n'
+	printf '  --notes-file <path>  put the reviewed release notes in the tag.\n'
 	printf '  --yes       actually create and push the tag. Without it this script\n'
 	printf '              enumerates, prints the commands, and changes nothing.\n'
 }
@@ -179,9 +176,16 @@ undetermined() {
 main() {
 	local version="" yes=0
 
+	local notes_file=''
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 		--yes) yes=1 ;;
+		--notes-file)
+			[ "$#" -ge 2 ] || fail_usage "--notes-file needs a path"
+			[ -f "$2" ] && [ -r "$2" ] && [ -s "$2" ] || fail_usage "--notes-file must be a readable, nonempty file"
+			notes_file="$2"
+			shift
+			;;
 		-h | --help)
 			usage
 			exit 0
@@ -322,13 +326,20 @@ main() {
 
 	# --- what would happen ------------------------------------------
 	printf '=== what a release would do ===\n\n'
-	printf 'Pushing this tag starts a workflow that builds six binaries, writes a\n'
-	printf 'checksum file, signs it, publishes a release, and writes into the tap.\n'
-	printf 'The publishing job waits for a reviewer to approve it; nothing before\n'
-	printf 'that approval leaves this machine.\n\n'
+	printf 'Pushing this tag makes it public and starts the release workflow.\n'
+	printf 'Approval in the release environment permits signing and verification.\n'
+	printf 'After those checks, the signed candidate is downloadable from Actions.\n'
+	printf 'Public release channels wait for separate approval of those exact bytes.\n\n'
 
 	printf '=== the exact commands ===\n\n'
-	printf '  git tag -a %s -m %s\n' "$version" "$version"
+	if [ -n "$notes_file" ]; then
+		printf '  git tag -a --cleanup=verbatim %s -F %q\n' "$version" "$notes_file"
+	elif [ "$version" = v0.1.8 ]; then
+		printf '  git tag -a --cleanup=verbatim %s -F RELEASE-NOTES.md\n' "$version"
+		printf '  (provide the owner-reviewed file with --notes-file before using --yes)\n'
+	else
+		printf '  git tag -a %s -m %s\n' "$version" "$version"
+	fi
 	printf '  git push origin refs/tags/%s\n\n' "$version"
 
 	# THE STEP AFTER, printed here because here is where its reader is.
@@ -354,37 +365,20 @@ main() {
 	printf 'A failure there means the artefacts cannot prove who built them, which is\n'
 	printf 'the whole reason they are signed. Treat it as a release to withdraw.\n\n'
 
-	# NOTARISATION CAN OUTLAST THE RELEASE TOOL'S WAIT, and the answer is a
-	# re-run rather than a new version. The tool waits at most twenty
-	# minutes, because its token lives as long as the wait and the notary
-	# service refuses a token that lives longer. A new team's first
-	# submission has been held for over an hour. A timeout fails the build
-	# before anything is archived, so nothing has been published, and the
-	# same run can simply be picked up again once the service has answered.
 	printf '=== if notarisation times out ===\n\n'
-	printf 'The build stops with "timeout waiting for notarize submission response"\n'
-	printf 'before anything is archived or published. Nothing is lost and nothing is\n'
-	printf 're-cut:\n\n'
-	printf '  1. wait until the submission shows Accepted:\n'
-	printf '       xcrun notarytool history --key <AuthKey_ID.p8> --key-id <key id> --issuer <issuer id>\n'
-	printf '  2. re-run the failed job of the same run:\n'
-	printf '       gh run list --repo %s --workflow Release --limit 1\n' "$REPO"
-	printf '       gh run rerun <run id> --failed --repo %s\n\n' "$REPO"
-	printf 'Each binary is submitted in turn, so a later one can time out as well.\n'
-	printf 'The answer is the same.\n\n'
+	printf 'Inspect the submission status in the approved Apple context:\n'
+	printf '  xcrun notarytool history --key <AuthKey_ID.p8> --key-id <key id> --issuer <issuer id>\n'
+	printf 'Stop for owner review if the run has no sealed candidate.\n\n'
 
-	# A FAILED SIGNER INSTALL IS THE SAME SHAPE. The signing tool is
-	# installed and verified at the start of the publishing job, and that
-	# verification reads a trust root from the signing service's own
-	# repository. When that repository cannot be reached, the install
-	# fails before anything is built, so nothing has been published and
-	# the same run can be picked up once the service answers again.
 	printf '=== if the signing tool fails to install ===\n\n'
-	printf 'The job stops at the cosign install with "trusted root is required" or\n'
-	printf '"Could not fetch trusted_root.json" (Sigstore TUF unreachable), before\n'
-	printf 'anything is built or published. Nothing is lost and nothing is re-cut:\n'
-	printf 're-run the failed job once the service answers again:\n\n'
-	printf '       gh run rerun <run id> --failed --repo %s\n\n' "$REPO"
+	printf 'A "trusted root is required" error or a missing original checksum receipt\n'
+	printf 'stops promotion. Preserve the candidate and stop for owner review.\n\n'
+
+	printf '=== after a partial publication ===\n\n'
+	printf 'Recheck the approved candidate, retained receipt and all three channels.\n'
+	printf 'With the same authorized bytes, re-run the failed jobs only:\n'
+	printf '  gh run rerun <run id> --failed --repo %s\n' "$REPO"
+	printf 'If the candidate or receipt is missing, stop for owner review.\n\n'
 
 	if [ "$yes" -ne 1 ]; then
 		printf 'Nothing has been changed. Re-run with --yes to execute exactly the two\n'
@@ -392,10 +386,18 @@ main() {
 		exit 0
 	fi
 
+	if [ "$version" = v0.1.8 ] && [ -z "$notes_file" ]; then
+		fail_usage "v0.1.8 requires the owner-reviewed --notes-file before --yes"
+	fi
+
 	printf 'Running them.\n\n'
-	git tag -a "$version" -m "$version"
+	if [ -n "$notes_file" ]; then
+		git tag -a --cleanup=verbatim "$version" -F "$notes_file"
+	else
+		git tag -a "$version" -m "$version"
+	fi
 	git push origin "refs/tags/$version"
-	printf '\nPushed. The publishing job is now waiting for a reviewer.\n'
+	printf '\nPushed. The stage follows the source checks and requires approval.\n'
 }
 
 main "$@"
