@@ -5,27 +5,23 @@ import (
 	"testing"
 )
 
-// TestTheFormulaJobWritesFromThisRunsChecksums pins where the Homebrew
-// formula comes from. Every platform's sha256 in it is what the package
-// manager checks a download against, so its source is this run's own
-// checksum file, handed over as an artefact, and never a read of the
-// release. And it is written by this repository's program, not by the
-// release tool's deprecated formula block, which the tool's own validator
-// refuses and TestReleaseConfigIsAcceptedByTheReleaseTool keeps out.
+// TestTheFormulaJobWritesFromThisRunsChecksums keeps the tap formula
+// tied to this run's checksums. Stage renders it before sealing the
+// candidate. The tap job promotes those exact bytes and reads them back.
 func TestTheFormulaJobWritesFromThisRunsChecksums(t *testing.T) {
 	root := moduleRoot(t)
 	lines := readYAMLLines(readRepoFile(t, root, releaseWorkflow))
-	var formula, publish job
+	var stage, formula job
 	for _, j := range jobs(lines) {
 		switch j.Name {
+		case "stage":
+			stage = j
 		case "formula":
 			formula = j
-		case "publish":
-			publish = j
 		}
 	}
-	if formula.Body == nil {
-		t.Fatalf("%s has no formula job, so nothing writes the Homebrew formula", releaseWorkflow)
+	if stage.Body == nil || formula.Body == nil {
+		t.Fatalf("%s must have both stage and formula jobs", releaseWorkflow)
 	}
 	for _, l := range formula.Body {
 		for _, read := range []string{"gh release", "gh api", "releases/download/${GITHUB_REF_NAME}\" -", "curl ", "wget "} {
@@ -34,29 +30,58 @@ func TestTheFormulaJobWritesFromThisRunsChecksums(t *testing.T) {
 			}
 		}
 	}
+	render, ok := runBlock(stage.Body, "go run ./tools/formula")
+	if !ok {
+		t.Fatal("stage does not run the repository's formula templater")
+	}
+	if _, ok := lineWith(render, `go run ./tools/formula -version "$want" -checksums sealed/checksums.txt`); !ok {
+		t.Error("stage does not render the formula from this candidate's checksums")
+	}
+	out, writes := lineWith(render, "-out sealed/curiouspub.rb")
+	seal, seals := lineWith(render, "shasum -a 256 -- * > MANIFEST.sha256")
+	if !writes || !seals || out.N >= seal.N {
+		t.Error("stage must write the formula into the candidate before sealing its manifest")
+	}
+	up := uploadNamed(stage.Body, "candidate")
+	if !hasEntry(up, "id", "upload") || !hasEntry(up, "path", "sealed/") ||
+		!hasEntry(stage.Body, "artifact-id", "${{ steps.upload.outputs.artifact-id }}") {
+		t.Error("stage must expose the identity of its sealed candidate upload")
+	}
 	down := stepUsing(formula.Body, "actions/download-artifact@")
-	if down == nil {
-		t.Fatal("the checksum file is not handed from the publish job to the formula job as an artefact")
+	if !hasEntry(down, "artifact-ids", "${{ needs.stage.outputs.artifact-id }}") ||
+		!hasEntry(down, "digest-mismatch", "error") || !hasEntry(down, "path", "staged") {
+		t.Error("the formula job must download the exact stage artifact and reject a digest mismatch")
 	}
-	name, _ := valueOf(down, "name")
-	up := uploadNamed(publish.Body, name)
-	if name == "" || up == nil {
-		t.Fatalf("the formula job downloads the artefact %q, and the publish job uploads no artefact by that name", name)
+	if _, ok := lineWith(formula.Body, "go run ./tools/formula"); ok {
+		t.Error("the formula job must not regenerate the reviewed formula")
 	}
-	if path, _ := valueOf(up, "path"); path != "dist/checksums.txt" {
-		t.Errorf("the artefact the formula job downloads is %q, not the checksum file the release tool writes", path)
+	if !hasEntry(formula.Body, "MANIFEST_SHA", "${{ needs.stage.outputs.manifest-sha }}") {
+		t.Error("the formula job must verify against the manifest digest from stage")
 	}
-	if _, ok := lineWith(formula.Body, "go run ./tools/formula"); !ok {
-		t.Error("the formula job does not run this repository's templater")
+	promote, ok := runBlock(formula.Body, `cp "$expected" "$target"`)
+	if !ok {
+		t.Fatal("the formula job does not copy the verified candidate formula")
 	}
-	if _, ok := lineWith(formula.Body, "-checksums dist/checksums.txt"); !ok {
-		t.Error("the formula job does not hand the templater the artefact's checksum file")
+	verify, verifies := lineWith(promote, `(cd staged && printf '%s  MANIFEST.sha256\n' "$MANIFEST_SHA" | sha256sum -c - && sha256sum -c MANIFEST.sha256)`)
+	copyLine, _ := lineWith(promote, `cp "$expected" "$target"`)
+	if !verifies || verify.N >= copyLine.N {
+		t.Error("the formula job must verify the approved manifest digest and its members before copying the formula")
+	}
+	for _, want := range []string{
+		`expected="$PWD/staged/curiouspub.rb"`,
+		"target=Formula/curiouspub.rb",
+	} {
+		if _, ok := lineWith(promote, want); !ok {
+			t.Errorf("the formula job does not preserve exact tap bytes: missing %q", want)
+		}
+	}
+	fetch, fetches := lineWith(promote, "git fetch origin refs/heads/main")
+	readback, reads := lineWith(promote, `git show "FETCH_HEAD:$target" | cmp - "$expected"`)
+	if !fetches || !reads || fetch.N >= readback.N {
+		t.Error("the formula job must fetch the tap and compare its exact published bytes")
 	}
 	if _, ok := lineWith(formula.Body, "repository: curiouspub/homebrew-tap"); !ok {
 		t.Error("the formula job does not write to the tap")
-	}
-	if _, ok := lineWith(formula.Body, "cp curiouspub.rb tap/Formula/curiouspub.rb"); !ok {
-		t.Error("the formula job does not place the formula at Formula/curiouspub.rb in the tap")
 	}
 	if !hasEntry(formula.Body, "environment", "release") {
 		t.Error("the formula job writes to the tap outside the reviewed release environment")
