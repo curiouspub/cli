@@ -1,10 +1,6 @@
 name: Release
 
-# A VERSION TAG AND NOTHING ELSE. Every additional trigger is another way
-# to reach the publishing job, and this job's whole purpose is to make an
-# irreversible change to what strangers download. A manual dispatch would
-# run against whatever branch the person chose; a branch push would run
-# on work nobody tagged.
+# Only the established version-tag trigger can enter release staging.
 on:
   push:
     tags: ["v*"]
@@ -14,6 +10,10 @@ on:
 # that everything running inside it holds too.
 permissions:
   contents: read
+
+concurrency:
+  group: cli-release
+  cancel-in-progress: false
 
 jobs:
   # FIRST, AND EVERYTHING ELSE DEPENDS ON IT. A tag push does not run the
@@ -88,37 +88,27 @@ jobs:
           fi
           echo "${GITHUB_REF_NAME} -> ${GITHUB_SHA}, reachable from ${DEFAULT_BRANCH}."
 
-  # THE PUBLISHING JOB. It runs in a deployment environment with a
-  # required reviewer, and that is the only brake in front of the whole
-  # outward mutation — binaries, checksums, a signature, a release, a tap
-  # write. This repository's standing pattern is that a command which
-  # changes real state prints what it is about to do and stops without an
-  # explicit word; that pattern governs SCRIPTS, and pushing a tag is not
-  # one. A wrapper is a brake anybody gets past by not using it. An
-  # environment is server-side, it cannot be skipped, and it enumerates on
-  # its own, because a pending deployment lists what is waiting.
-  publish:
-    name: build, sign and publish
-    # Both named rather than relying on the chain through reachable. A
-    # dependency that holds by transitivity holds until somebody edits the
-    # middle of the chain, and the edit that removes it will not look like
-    # it removed anything.
+  # Build and assess the release with the existing tag-scoped Apple inputs.
+  stage:
     needs: [surfaces, reachable]
+    if: github.run_attempt == 1
     environment: release
-    runs-on: ubuntu-latest
+    runs-on: macos-26
     permissions:
-      # Only here, and only for the duration of an approved run.
-      contents: write
-      # The identity a keyless signature is made with. It says this
-      # repository's release workflow produced the artefact, which is the
-      # question a checksum cannot answer.
-      id-token: write
+      checks: read
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      manifest-sha: ${{ steps.seal.outputs.manifest-sha }}
+      tag-oid: ${{ steps.seal.outputs.tag-oid }}
+      checksums-sha: ${{ steps.seal.outputs.checksums-sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The version stamped into the binary is derived from the tag
           # and the commit, and both need the history to be there.
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -127,14 +117,32 @@ jobs:
           # module states the toolchain; nothing else gets a vote.
           check-latest: false
 
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # An exact version, for the same reason the release tool has
-          # one. NOTE for whoever maintains this: the scheduled update
-          # policy bumps action REFERENCES and cannot see a version
-          # passed as an input, so this pin is one a person has to move.
-          # It is current as of the change that added it.
-          cosign-release: v3.1.3
+      - name: Verify the approved source and required checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]
+          test "$(git rev-parse "$GITHUB_REF^{commit}")" = "$GITHUB_SHA"
+          test "$(git cat-file -t "$GITHUB_REF")" = tag
+          if [[ "$GITHUB_REF_NAME" == v0.1.8 ]]; then
+            notes="$(git for-each-ref --format='%(contents)' "$GITHUB_REF")"
+            if [[ -z "$notes" || "$notes" == "$GITHUB_REF_NAME" ]]; then
+              echo "::error::The v0.1.8 tag must contain the reviewed release notes."
+              exit 1
+            fi
+          fi
+          path="repos/$GITHUB_REPOSITORY"
+          gh api "$path/branches/main" | jq -e --arg sha "$GITHUB_SHA" '.protected and .commit.sha==$sha' >/dev/null
+          gh api --paginate "$path/commits/$GITHUB_SHA/check-runs?per_page=100" |
+            jq -es '
+              [.[].check_runs[] | select(.app.id==15368 and .conclusion=="success") | .name] as $green |
+              (["ci (macos-latest)", "ci (ubuntu-latest)", "ci (windows-latest)",
+                "the wrapper package, on the Node floor and on current (22)",
+                "the wrapper package, on the Node floor and on current (current)",
+                "the published surfaces that are not files",
+                "build every artefact and publish none of them"] - $green | length)==0
+            ' >/dev/null
 
       # THE macOS SIGNING MATERIAL IS ALL PRESENT, OR NOTHING IS BUILT. A
       # secret that does not exist reaches a step as an empty string, not
@@ -175,133 +183,357 @@ jobs:
           # whatever the tool happened to be that morning is a release
           # nobody can reproduce.
           version: v2.18.1
-          args: release --clean
+          args: release --clean --skip=publish,sign
         env:
           # Minted for this job by the runner and bounded by the
           # permissions block above. It is never a repository secret.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No tap credential. The release tool writes nothing to the tap
-          # any more; the formula job below does, and holds the one
-          # token that can.
-          # The developer certificate and the notary key. Read by the
-          # release tool's signing block in .goreleaser.yaml, and by
-          # nothing else in this run except the two steps beside this one.
+          GITHUB_TOKEN: ${{ github.token }}
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
           MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
 
-      # THE CHECKSUMS LEAVE THIS JOB AS A RUN ARTEFACT, and the wrapper job
-      # below takes them from here rather than from the release. A release
-      # asset can be replaced by anyone holding write access to the
-      # repository, between this job ending and the next one starting; an
-      # artefact of this run can only be written by this run. The table the
-      # package ships is what every installer verifies a download against,
-      # so its source is the one thing in the chain that must not be a
-      # network read of something mutable.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: checksums
-          path: dist/checksums.txt
-          if-no-files-found: error
-          # The next job reads it within minutes. Nothing else ever should.
-          retention-days: 1
+      - name: Check Developer ID, timestamp, notarization and quarantine
+        run: |
+          set -euo pipefail
+          want="${GITHUB_REF_NAME#v}"
+          test "$(uname -m)" = arm64
+          spctl --status | grep -qx 'assessments enabled'
+          (cd dist && shasum -a 256 -c checksums.txt)
+          quarantine="0081;$(printf '%x' "$(date +%s)");release-check;"
+          mkdir -p dl/amd64 dl/arm64
+          for arch in amd64 arm64; do
+            base="curious_${want}_darwin_${arch}"
+            archive="dist/$base.tar.gz"
+            bin="dl/$arch/curious"
+            xattr -w com.apple.quarantine "$quarantine" "$archive"
+            tar -xzf "$archive" -C "dl/$arch"
+            gzip -dc "dist/$base.gz" | cmp - "$bin"
+            xattr -w com.apple.quarantine "$quarantine" "$bin"
+            test "$(xattr -p com.apple.quarantine "$bin")" = "$quarantine"
+            codesign --verify --strict "$bin"
+            details="$(codesign -dv --verbose=4 "$bin" 2>&1)"
+            grep -qx 'TeamIdentifier=B2JK8DNDHD' <<< "$details"
+            grep -q '^Authority=Developer ID Application:' <<< "$details"
+            grep -Eq 'flags=.*\([^)]*runtime[^)]*\)' <<< "$details"
+            grep -q '^Timestamp=' <<< "$details"
+            codesign -d --extract-certificates="dl/$arch/cert-" "$bin" 2>/dev/null
+            printf '%s  dl/%s/cert-0\n' fdcaaf6a1252359ffbdfc241f75654340290f055c5a0c53ad66d8f14844bea9f "$arch" | shasum -a 256 -c -
+            sed -n 's/^CDHash=//p' <<< "$details" > "dl/$arch/cdhash"
+          done
+          scripts/gatekeeper-check.sh dl/amd64/curious dl/arm64/curious
+          got="$(dl/arm64/curious version)"
+          case "$got" in "curious $want (commit $GITHUB_SHA, "*) ;; *) exit 1 ;; esac
+          test "$(xattr -p com.apple.quarantine dl/arm64/curious)" = "$quarantine"
 
-      # THE NOTARY SERVICE'S OWN LOG, attached to the run. The release tool
-      # fetches it only for a submission that failed; a passing one leaves
-      # no record of what was checked. This step fetches one per binary.
-      #
-      # IT CANNOT FAIL THE JOB, and that is a choice with a cost stated
-      # here. By this point the release is public; failing now would skip
-      # the formula and the npm wrapper, which is a half-published release,
-      # for the sake of a record. The gate on notarisation is the mac-check
-      # job below, which asks the operating system directly. A failure
-      # here shows as a failed step and an annotation, not as a red job.
-      - name: attach the notary service's log
-        continue-on-error: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+
+      - name: Record the accepted notary submissions
         env:
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
         run: node scripts/notary-log.js notary-log
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        continue-on-error: true
-        with:
-          name: notary-log
-          path: notary-log
-          if-no-files-found: error
+      - name: Seal the exact GitHub, Homebrew and npm candidates
+        id: seal
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="${GITHUB_REF_NAME#v}"
+          mkdir sealed
+          files=()
+          for os in darwin linux windows; do
+            for arch in amd64 arm64; do
+              ext=tar.gz
+              if [[ "$os" == windows ]]; then ext=zip; fi
+              files+=("curious_${want}_${os}_${arch}.gz" "curious_${want}_${os}_${arch}.$ext")
+            done
+          done
+          (cd dist && cp "${files[@]}" checksums.txt ../sealed/)
+          for file in "${files[@]}"; do
+            test "$(grep -Ec "^[0-9a-f]{64}  ${file//./[.]}$" sealed/checksums.txt)" = 1
+          done
+          test "$(wc -l < sealed/checksums.txt | tr -d ' ')" = 12
+          (cd sealed && shasum -a 256 -c checksums.txt)
+          node npm/tools/build-checksums.js --tag "$GITHUB_REF_NAME" --checksums sealed/checksums.txt --out npm/checksums.json
+          npm install -g npm@11.20.0
+          test "$(npm --version)" = 11.20.0
+          (cd npm && npm pack --ignore-scripts --pack-destination ../sealed)
+          test -f "sealed/curiouspub-$want.tgz"
+          go run ./tools/formula -version "$want" -checksums sealed/checksums.txt \
+            -download-base "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" \
+            -homepage https://curious.pub/ -desc 'Pack an Astro project, upload it, and stream the build' \
+            -out sealed/curiouspub.rb
+          notes="$(git for-each-ref --format='%(contents)' "$GITHUB_REF")"
+          if [[ -z "$notes" || "$notes" == "$GITHUB_REF_NAME" ]]; then
+            cp dist/CHANGELOG.md sealed/release-notes.md
+          else
+            git cat-file tag "$GITHUB_REF" | sed '1,/^$/d' > sealed/release-notes.md
+          fi
+          test -s sealed/release-notes.md
+          for arch in amd64 arm64; do
+            cdhash="$(cat "dl/$arch/cdhash")"
+            [[ "$cdhash" =~ ^[0-9a-f]{40}$ ]]
+            apple_arch="$arch"
+            if [[ "$arch" == amd64 ]]; then apple_arch=x86_64; fi
+            jq -es --arg hash "$cdhash" --arg arch "$apple_arch" '
+              map(select(.status=="Accepted" and
+                any(.ticketContents[]?; .cdhash==$hash and .arch==$arch and .digestAlgorithm=="SHA-256"))) |
+              if length==1 then .[0] | {status,jobId,sha256,ticketContents}
+              else error("unmatched notary submission") end
+            ' notary-log/*.json > "sealed/notary-$arch.json"
+          done
+          oid="$(git rev-parse "$GITHUB_REF")"
+          printf '%s\n' "$GITHUB_SHA" "$GITHUB_REF" "$oid" "$GITHUB_RUN_ID" > sealed/source.txt
+          (cd sealed && shasum -a 256 -- * > MANIFEST.sha256)
+          digest="$(shasum -a 256 sealed/MANIFEST.sha256 | awk '{print $1}')"
+          sums="$(shasum -a 256 sealed/checksums.txt | awk '{print $1}')"
+          printf 'manifest-sha=%s\ntag-oid=%s\nchecksums-sha=%s\n' "$digest" "$oid" "$sums" >> "$GITHUB_OUTPUT"
 
-  # THE HOMEBREW FORMULA, WRITTEN HERE AND NOT BY THE RELEASE TOOL. The
-  # tool's formula block is deprecated and its own validator refuses it,
-  # and that validator is a gate this repository keeps green. So a small
-  # program in this repository writes the formula from the checksum file
-  # this run produced, and this job pushes it to the tap.
-  #
-  # THE CHECKSUMS COME FROM THIS RUN, as they do for the npm wrapper: the
-  # publish job hands them over as an artefact, and nothing here reads the
-  # release. Each platform's archive is pinned by the sha256 the release
-  # itself computed.
-  #
-  # Reviewed like the other jobs that change something outside this
-  # repository: it writes to the tap, and that is public the moment it
-  # lands.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload
+        with:
+          name: candidate
+          path: sealed/
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+
+      - name: Show the exact candidate for owner review
+        env:
+          DIGEST: ${{ steps.seal.outputs.manifest-sha }}
+          ID: ${{ steps.upload.outputs.artifact-id }}
+          ZIP_SHA: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          printf 'Candidate run %s / artifact %s / archive SHA-256 %s / manifest SHA-256 %s\n\n' \
+            "$GITHUB_RUN_ID" "$ID" "$ZIP_SHA" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          cat sealed/source.txt sealed/MANIFEST.sha256 >> "$GITHUB_STEP_SUMMARY"
+
+  receipt:
+    name: Approve candidate and sign its checksum receipt
+    needs: stage
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.receipt.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          digest-mismatch: error
+          artifact-ids: ${{ needs.stage.outputs.artifact-id }}
+          path: staged
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Mint the detached receipt once across attempts
+        id: receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED: ${{ vars.RELEASE_APPROVED_STAGE }}
+          STAGE_ID: ${{ needs.stage.outputs.artifact-id }}
+          MANIFEST_SHA: ${{ needs.stage.outputs.manifest-sha }}
+        run: |
+          set -euo pipefail
+          [[ "$MANIFEST_SHA" =~ ^[0-9a-f]{64}$ ]]
+          (cd staged && printf '%s  MANIFEST.sha256\n' "$MANIFEST_SHA" | sha256sum -c - && sha256sum -c MANIFEST.sha256)
+          [[ "$STAGE_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$APPROVED" = "$GITHUB_RUN_ID:$STAGE_ID:$MANIFEST_SHA"
+          test "$(sed -n '1p' staged/source.txt)" = "$GITHUB_SHA"
+          test "$(sed -n '2p' staged/source.txt)" = "$GITHUB_REF"
+          test "$(sed -n '4p' staged/source.txt)" = "$GITHUB_RUN_ID"
+          path="repos/$GITHUB_REPOSITORY"
+          tag_oid="$(sed -n '3p' staged/source.txt)"
+          gh api "$path/git/ref/tags/$GITHUB_REF_NAME" | jq -e --arg oid "$tag_oid" '.object.type=="tag" and .object.sha==$oid' >/dev/null
+          gh api "$path/git/tags/$tag_oid" | jq -e --arg sha "$GITHUB_SHA" '.object.type=="commit" and .object.sha==$sha' >/dev/null
+          matches="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=tag-checksum-receipt" |
+            jq -s '[.[].artifacts[] | select(.name=="tag-checksum-receipt")]')"
+          case "$(jq length <<< "$matches")" in
+            0)
+              if [[ "$GITHUB_RUN_ATTEMPT" != 1 ]]; then
+                echo "::error::No original receipt is retained. Stop for owner review; all channels remain gated."
+                exit 1
+              fi
+              cosign sign-blob --yes --bundle=checksums.txt.bundle staged/checksums.txt
+              echo 'created=true' >> "$GITHUB_OUTPUT"
+              ;;
+            1)
+              id="$(jq -er '.[] | select(.expired==false) | .id' <<< "$matches")"
+              digest="$(jq -er '.[] | .digest | select(test("^sha256:[a-f0-9]{64}$")) | ltrimstr("sha256:")' <<< "$matches")"
+              gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > receipt.zip
+              printf '%s  receipt.zip\n' "$digest" | sha256sum -c -
+              test "$(unzip -Z -1 receipt.zip)" = checksums.txt.bundle
+              mkdir -p previous
+              unzip -p receipt.zip checksums.txt.bundle > previous/bundle
+              mv previous/bundle checksums.txt.bundle
+              ;;
+            *) exit 1 ;;
+          esac
+          cosign verify-blob --bundle checksums.txt.bundle \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com staged/checksums.txt
+          printf 'digest=%s\n' "$(sha256sum checksums.txt.bundle | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.receipt.outputs.created == 'true'
+        with:
+          name: tag-checksum-receipt
+          path: checksums.txt.bundle
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+
+  publish:
+    needs: [stage, receipt]
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          digest-mismatch: error
+          artifact-ids: ${{ needs.stage.outputs.artifact-id }}
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          digest-mismatch: error
+          name: tag-checksum-receipt
+          path: dist
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Promote exact assets and verify GitHub readback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RECEIPT_SHA: ${{ needs.receipt.outputs.digest }}
+          MANIFEST_SHA: ${{ needs.stage.outputs.manifest-sha }}
+          TAG_OID: ${{ needs.stage.outputs.tag-oid }}
+        run: |
+          set -euo pipefail
+          test "$(sed -n '1p' dist/source.txt)" = "$GITHUB_SHA"
+          test "$(sed -n '2p' dist/source.txt)" = "$GITHUB_REF"
+          [[ "$RECEIPT_SHA" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  dist/checksums.txt.bundle\n' "$RECEIPT_SHA" | sha256sum -c -
+          [[ "$MANIFEST_SHA" =~ ^[0-9a-f]{64}$ ]]
+          (cd dist && printf '%s  MANIFEST.sha256\n' "$MANIFEST_SHA" | sha256sum -c - && sha256sum -c MANIFEST.sha256)
+          cosign verify-blob --bundle dist/checksums.txt.bundle \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com dist/checksums.txt
+          path="repos/$GITHUB_REPOSITORY"
+          check_tag() {
+            [[ "$TAG_OID" =~ ^[0-9a-f]{40}$ ]]
+            gh api "$path/git/ref/tags/$GITHUB_REF_NAME" | jq -e --arg oid "$TAG_OID" '.object.type=="tag" and .object.sha==$oid' >/dev/null
+            gh api "$path/git/tags/$TAG_OID" | jq -e --arg source "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" '
+              .tag==$tag and .object.type=="commit" and .object.sha==$source
+            ' >/dev/null
+          }
+          check_tag
+          releases="$(gh api --paginate "$path/releases" | jq -s --arg tag "$GITHUB_REF_NAME" 'add | map(select(.tag_name==$tag))')"
+          prerelease=false
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=true; fi
+          case "$(jq length <<< "$releases")" in
+            0) gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "$GITHUB_REF_NAME" --notes-file dist/release-notes.md "--prerelease=$prerelease" ;;
+            1) : ;;
+            *) exit 1 ;;
+          esac
+          release="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,tagName,name,body,assets)"
+          jq -e --arg tag "$GITHUB_REF_NAME" --argjson prerelease "$prerelease" --rawfile notes dist/release-notes.md '
+            .tagName==$tag and .name==$tag and .isPrerelease==$prerelease and
+            (.body | sub("[\r\n]+$";""))==($notes | sub("[\r\n]+$";""))' <<< "$release" >/dev/null
+          files=(dist/curious_"${GITHUB_REF_NAME#v}"_* dist/checksums.txt dist/checksums.txt.bundle)
+          test "${#files[@]}" -eq 14
+          require_assets() {
+            python3 - "$1" "${files[@]}" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          release = json.loads(sys.argv[1])
+          expected = {p.name: "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest() for p in map(Path, sys.argv[2:])}
+          for asset in release["assets"]:
+              if asset["name"] not in expected or expected.pop(asset["name"]) != asset.get("digest"):
+                  raise SystemExit("Conflicting or duplicate GitHub release asset")
+          if expected and not release["isDraft"]:
+              raise SystemExit("Public GitHub release is missing approved assets")
+          PY
+          }
+          require_assets "$release"
+          for file in "${files[@]}"; do
+            if ! jq -e --arg name "${file##*/}" '.assets|any(.name==$name)' <<< "$release" >/dev/null; then
+              gh release upload "$GITHUB_REF_NAME" "$file"
+            fi
+          done
+          release="$(gh release view "$GITHUB_REF_NAME" --json isDraft,assets)"
+          require_assets "$release"
+          test "$(jq '.assets | length' <<< "$release")" -eq "${#files[@]}"
+          if jq -e .isDraft <<< "$release" >/dev/null; then
+            check_tag
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          fi
+          release="$(gh release view "$GITHUB_REF_NAME" --json isDraft,assets)"
+          jq -e '.isDraft==false' <<< "$release" >/dev/null
+          require_assets "$release"
+          # The owner verifies this repository setting before authorizing the run.
+          # Stop downstream channels if the release is mutable for any reason.
+          gh api "$path/releases/tags/$GITHUB_REF_NAME" | jq -e '.immutable==true' >/dev/null
+          check_tag
+          mkdir readback
+          for file in "${files[@]}"; do
+            gh release download "$GITHUB_REF_NAME" --pattern "${file##*/}" --dir readback
+            cmp "$file" "readback/${file##*/}"
+          done
+
   formula:
-    name: write the Homebrew formula
-    needs: publish
+    needs: [stage, publish, mac-check]
     environment: release
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          check-latest: false
-
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: checksums
-          path: dist
-
-      - name: write the formula from this run's checksums
-        run: >
-          go run ./tools/formula
-          -version "${GITHUB_REF_NAME#v}"
-          -checksums dist/checksums.txt
-          -download-base "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
-          -homepage "https://curious.pub/"
-          -desc "Pack an Astro project, upload it, and stream the build"
-          -out curiouspub.rb
-
-      # The tap, checked out with the one credential that can write to it.
+          digest-mismatch: error
+          artifact-ids: ${{ needs.stage.outputs.artifact-id }}
+          path: staged
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: curiouspub/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
-
-      # THE OLD CASK LEAVES THE TAP IN THE SAME COMMIT. Nothing writes it
-      # any more, so a copy left behind would go on offering the last
-      # version it was given, to anyone who asked for it by name. Removing
-      # it here rather than by hand keeps the tap's contents a product of
-      # the release, and --ignore-unmatch makes every later release a
-      # no-op for it.
-      - name: publish the formula to the tap
+      - name: Publish the exact formula and read back the tap
+        env:
+          MANIFEST_SHA: ${{ needs.stage.outputs.manifest-sha }}
+          APPROVED_TAP_HEAD: ${{ vars.RELEASE_APPROVED_TAP_HEAD }}
         run: |
           set -euo pipefail
-          mkdir -p tap/Formula
-          cp curiouspub.rb tap/Formula/curiouspub.rb
+          [[ "$MANIFEST_SHA" =~ ^[0-9a-f]{64}$ && "$APPROVED_TAP_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          (cd staged && printf '%s  MANIFEST.sha256\n' "$MANIFEST_SHA" | sha256sum -c - && sha256sum -c MANIFEST.sha256)
+          expected="$PWD/staged/curiouspub.rb"
           cd tap
-          git config user.name "curious release"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/curiouspub.rb
-          git rm --quiet --ignore-unmatch Casks/curious.rb
-          git commit -m "curiouspub ${GITHUB_REF_NAME}"
-          git push
+          target=Formula/curiouspub.rb
+          if ! cmp -s "$expected" "$target" || [[ -e Casks/curious.rb ]]; then
+            test "$(git rev-parse HEAD)" = "$APPROVED_TAP_HEAD"
+            mkdir -p Formula
+            cp "$expected" "$target"
+            git rm --quiet --ignore-unmatch Casks/curious.rb
+            git add "$target"
+            git -c user.name='curious release' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "curiouspub $GITHUB_REF_NAME"
+            git push origin HEAD:refs/heads/main
+          fi
+          git fetch origin refs/heads/main
+          git show "FETCH_HEAD:$target" | cmp - "$expected"
+          if git cat-file -e FETCH_HEAD:Casks/curious.rb 2>/dev/null; then
+            exit 1
+          fi
 
   # THE FORMULA INSTALLS ON LINUX, from a tap nobody added, and reports
   # the version this tag released. It installs what strangers install,
@@ -367,7 +599,7 @@ jobs:
   # first.
   mac-check:
     name: the macOS binary is accepted by the operating system and runs
-    needs: publish
+    needs: [stage, publish]
     runs-on: macos-latest
     permissions:
       contents: read
@@ -375,6 +607,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: assess the released darwin binaries and run one
+        env:
+          CHECKSUMS_SHA: ${{ needs.stage.outputs.checksums-sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -382,6 +616,8 @@ jobs:
           base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           mkdir -p dl
           curl -fsSL -o dl/checksums.txt "$base/checksums.txt"
+          [[ "$CHECKSUMS_SHA" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  dl/checksums.txt\n' "$CHECKSUMS_SHA" | shasum -a 256 -c -
           for arch in amd64 arm64; do
             curl -fsSL -o "dl/curious_${want}_darwin_${arch}.tar.gz" "$base/curious_${want}_darwin_${arch}.tar.gz"
           done
@@ -391,8 +627,8 @@ jobs:
             tar -xzf "dl/curious_${want}_darwin_${arch}.tar.gz" -C "dl/$arch"
           done
           spctl --status || true
-          scripts/gatekeeper-check.sh dl/amd64/curious dl/arm64/curious
           xattr -w com.apple.quarantine "0081;$(printf '%x' "$(date +%s)");release-check;" dl/arm64/curious
+          scripts/gatekeeper-check.sh dl/amd64/curious dl/arm64/curious
           got="$(dl/arm64/curious version)"
           echo "$got"
           case " $got " in
@@ -400,42 +636,9 @@ jobs:
             *) echo "::error::the macOS binary reported '$got', and the release is $want"; exit 1 ;;
           esac
 
-  # THE WRAPPER PUBLISH, AND IT IS A SEPARATE JOB ON PURPOSE. Under
-  # trusted publishing the identity token IS the registry credential, so
-  # putting this step in the job above would place the ability to publish
-  # a package inside a job that runs a full Go build and three actions
-  # from outside the actions organisation. The split is what keeps the
-  # least-privilege claim true rather than merely stated.
-  #
-  # ITS OWN ACTION LIST, written out rather than claimed to be empty:
-  # actions/checkout, because the package files are in the tree;
-  # actions/setup-node, because publishing needs a newer package manager
-  # than the wrapper's own floor; and actions/download-artifact, because
-  # the checksums arrive from the job above inside this run. All three
-  # pinned, all three from the actions organisation.
-  #
-  # ONE FETCH IN A RUN STEP, PINNED AND VERIFIED, and this sentence used to
-  # say there were none. The package manager a credential-free publish
-  # needs is installed from the registry at an exact version, and the step
-  # after it refuses anything but that version. An exact version on that
-  # registry is immutable once published, so the bytes are fixed; the
-  # range this line once named was resolved afresh on every release, inside
-  # the job that holds the publish identity. Node is an exact version too,
-  # and for the same reason: A JOB THAT HOLDS A CREDENTIAL RESOLVES
-  # NOTHING FROM A RANGE.
-  #
-  # NO REGISTRY SECRET EXISTS. The job proves its identity with the token
-  # the runner mints for it, so there is nothing here to leak, rotate or
-  # scope wrongly.
-  #
-  # OPERATOR PRECONDITION, named as one: the trusted publisher is
-  # configured on the registry against this repository, this workflow
-  # file and this environment. A reviewed environment may prompt once per
-  # job, so the first release is what says how many approvals a release
-  # now takes.
   wrapper:
     name: publish the npm wrapper
-    needs: publish
+    needs: [stage, publish, mac-check, formula, brew-linux]
     environment: release
     runs-on: ubuntu-latest
     permissions:
@@ -501,27 +704,41 @@ jobs:
           fi
           echo "npm ${have}"
 
-      # FROM THIS RUN, NEVER FROM THE RELEASE. The job above hands the file
-      # over as an artefact of this run; this job makes no network read of
-      # the release at all, so nothing that happens to a release asset
-      # between the two jobs can reach the table the package ships.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: checksums
-          path: dist
+          artifact-ids: ${{ needs.stage.outputs.artifact-id }}
+          digest-mismatch: error
+          path: staged
 
-      # The only thing that holds the tag, the package version and every
-      # key of the shipped table to the same number.
-      - name: build the checksum table the package ships
+      - name: Publish the approved tarball without repacking
+        env:
+          MANIFEST_SHA: ${{ needs.stage.outputs.manifest-sha }}
         run: |
-          node npm/tools/build-checksums.js \
-            --tag "${GITHUB_REF_NAME}" \
-            --checksums dist/checksums.txt \
-            --out npm/checksums.json
-
-      - name: publish
-        working-directory: npm
-        run: npm publish --provenance --access public --tag latest
+          set -euo pipefail
+          [[ "$MANIFEST_SHA" =~ ^[0-9a-f]{64}$ ]]
+          (cd staged && printf '%s  MANIFEST.sha256\n' "$MANIFEST_SHA" | sha256sum -c - && sha256sum -c MANIFEST.sha256)
+          version="${GITHUB_REF_NAME#v}"
+          test "$(node -p 'require("./npm/package.json").version')" = "$version"
+          package="staged/curiouspub-$version.tgz"
+          integrity="sha512-$(openssl dgst -sha512 -binary "$package" | openssl base64 -A)"
+          if npm view "curiouspub@$version" dist.integrity --json --prefer-online > registry.json; then
+            jq -e --arg integrity "$integrity" '. == $integrity' registry.json >/dev/null
+          else
+            jq -e '.error.code=="E404"' registry.json >/dev/null
+            npm publish --provenance --access public --tag latest "$package"
+          fi
+          found=false
+          for ((try=0; try<30; try++)); do
+            if result="$(npm view "curiouspub@$version" dist.integrity --json --prefer-online)" && [[ -n "$result" ]]; then
+              jq -e --arg integrity "$integrity" '. == $integrity' <<< "$result" >/dev/null
+              found=true
+              break
+            fi
+            sleep 10
+          done
+          test "$found" = true
+          npm view "curiouspub@$version" dist.attestations --json --prefer-online |
+            jq -e '.provenance.predicateType=="https://slsa.dev/provenance/v1"' >/dev/null
 
       # THE MEASUREMENT THAT REPLACES A GUESS. This name already carries
       # a published version higher than the one being released, and
@@ -565,6 +782,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          # shellcheck disable=SC2016
           node -e '
             const { execFileSync } = require("node:child_process");
             const [, wanted, intervalSeconds, windowSeconds, ...client] = process.argv;

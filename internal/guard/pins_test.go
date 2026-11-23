@@ -407,28 +407,25 @@ func TestTheWrapperJobHasNoNetworkReadOfTheRelease(t *testing.T) {
 		}
 	}
 
-	var publishJob job
+	var stageJob job
 	for _, j := range jobs(lines) {
-		if j.Name == "publish" {
-			publishJob = j
+		if j.Name == "stage" {
+			stageJob = j
 		}
 	}
 	download := stepUsing(wrapper.Body, "actions/download-artifact@")
-	if download == nil {
-		t.Fatalf("the %q job takes no artefact from the publish job", wrapperJobName)
+	upload := uploadNamed(stageJob.Body, "candidate")
+	if download == nil || upload == nil {
+		t.Fatalf("the %q job must consume the staging job's approved candidate", wrapperJobName)
 	}
-	down, _ := valueOf(download, "name")
-	upload := uploadNamed(publishJob.Body, down)
-	if down == "" || upload == nil {
-		t.Fatalf("the %q job downloads the artefact %q, and the publish job uploads no artefact by that name",
-			wrapperJobName, down)
+	if path, _ := valueOf(upload, "path"); path != "sealed/" {
+		t.Errorf("stage uploads %q, want the sealed package, checksums and manifest", path)
 	}
-	if path, _ := valueOf(upload, "path"); path != "dist/checksums.txt" {
-		t.Errorf("the publish job uploads %q, not the checksum file the release tool writes", path)
+	if id, _ := valueOf(upload, "id"); id != "upload" {
+		t.Errorf("stage upload has id %q, want upload so the job outputs its artifact ID", id)
 	}
-	if dir, _ := valueOf(download, "path"); dir != "dist" {
-		t.Errorf("the %q job downloads the checksums into %q, and builds its table from dist/checksums.txt",
-			wrapperJobName, dir)
+	if dir, _ := valueOf(download, "path"); dir != "staged" {
+		t.Errorf("the %q job downloads the candidate into %q, want staged", wrapperJobName, dir)
 	}
 }
 

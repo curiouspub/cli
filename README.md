@@ -122,7 +122,7 @@ and it tells you what is wrong before it reaches anything.
 
 ## Installing it
 
-**These work today.** The latest published release is v0.1.7. Each command
+**These work today.** Check the [latest published release](https://github.com/curiouspub/cli/releases/latest). Each command
 below was run against the real registry and the real tap before this
 section was written. What they get you is the tool, and the tool deploys:
 "Status" above says what that means today.
