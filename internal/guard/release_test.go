@@ -40,6 +40,8 @@ package guard
 // stated before it was trusted.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -420,6 +422,47 @@ var allowedSecrets = map[string]string{
 // mutation at once and no script can stand in front of that, because
 // pushing a tag is not a script.
 const requiredEnvironment = "release"
+
+// This exception is confined to the exact one-shot npm staging workflow.
+const npmV018RecoveryWorkflow = ".github/workflows/npm-recover-v018.yml"
+
+func hasRequiredPublishEnvironment(workflow string, j job) bool {
+	if workflow == npmV018RecoveryWorkflow && j.Name == "stage-npm" {
+		return hasEntry(j.Body, "environment", "npm-v018-recovery")
+	}
+	return hasEntry(j.Body, "environment", requiredEnvironment)
+}
+
+func TestNPMV018RecoveryWorkflow(t *testing.T) {
+	root := moduleRoot(t)
+	workflow := readRepoFile(t, root, npmV018RecoveryWorkflow)
+	sum := sha256.Sum256([]byte(workflow))
+	// The exception authorizes one reviewed capability, including the exact
+	// trigger, expiry and digests. Any workflow drift requires a new review.
+	const approved = "4d802849d298c2b2e720e9590a3bb975ee541aeb9c59d9ad5850ac7c1c440937"
+	if got := hex.EncodeToString(sum[:]); got != approved {
+		t.Fatalf("%s changed: got SHA-256 %s, approved %s", npmV018RecoveryWorkflow, got, approved)
+	}
+
+	tests := []struct {
+		name, workflow, job, environment string
+		allowed                          bool
+	}{
+		{"one recovery job", npmV018RecoveryWorkflow, "stage-npm", "npm-v018-recovery", true},
+		{"recovery cannot use release", npmV018RecoveryWorkflow, "stage-npm", "release", false},
+		{"wrong recovery job", npmV018RecoveryWorkflow, "publish", "npm-v018-recovery", false},
+		{"wrong workflow", ".github/workflows/other.yml", "stage-npm", "npm-v018-recovery", false},
+		{"ordinary release", ".github/workflows/release.yml", "wrapper", "release", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			j := job{Name: test.job, Body: readYAMLLines("environment: " + test.environment)}
+			if got := hasRequiredPublishEnvironment(test.workflow, j); got != test.allowed {
+				t.Fatalf("hasRequiredPublishEnvironment = %t, want %t", got, test.allowed)
+			}
+		})
+	}
+}
 
 // releaseWorkflow and snapshotWorkflow are named because the rows below
 // ask different questions of each: one publishes and one proves the
@@ -874,7 +917,7 @@ func TestWorkflows(t *testing.T) {
 				if rel == releaseWorkflow {
 					inRelease++
 				}
-				if !hasEntry(j.Body, "environment", requiredEnvironment) {
+				if !hasRequiredPublishEnvironment(rel, j) {
 					t.Errorf("%s: job %q can write or names %v, and does not run in the %q environment\n"+
 						"An environment nothing references gates nothing. A tag push fires binaries, "+
 						"checksums, a signature, a release and a tap write at once, and the only brake "+
@@ -902,7 +945,7 @@ func TestWorkflows(t *testing.T) {
 				if !strings.Contains(body, "id-token: write") {
 					continue
 				}
-				if !hasEntry(j.Body, "environment", requiredEnvironment) {
+				if !hasRequiredPublishEnvironment(rel, j) {
 					t.Errorf("%s: job %q mints an identity token outside the %q environment\n"+
 						"That token is what a signature is made with, and it says this repository's "+
 						"workflow produced the artefact. It belongs only where a person has approved "+
