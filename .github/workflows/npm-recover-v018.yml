@@ -1,0 +1,224 @@
+name: Stage the sealed npm v0.1.8 recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-npm-v018-recovery
+  cancel-in-progress: false
+
+jobs:
+  stage-npm:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'curiouspub/cli' &&
+      github.ref == 'refs/heads/main' &&
+      github.ref_protected &&
+      github.actor == 'enesismail' &&
+      github.triggering_actor == 'enesismail' &&
+      github.run_attempt == 1
+    environment: npm-v018-recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Verify authorization and retrieve the original candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_RUN: ${{ vars.NPM_V018_APPROVED_RUN }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/npm-v018-recovery"
+          mkdir -m 700 "$work"
+          cd "$work"
+
+          # The reviewer sets this tuple in the recovery environment for one run.
+          [[ "$APPROVED_RUN" =~ ^[1-9][0-9]*:[0-9a-f]{40}:[1-9][0-9]{9}$ ]]
+          IFS=: read -r run sha deadline <<< "$APPROVED_RUN"
+          test "$run" = "$GITHUB_RUN_ID"
+          test "$sha" = "$GITHUB_SHA"
+          now="$(date +%s)"
+          test "$now" -le "$deadline"
+          test "$deadline" -le "$((now + 7200))"
+          test "$GITHUB_REF_PROTECTED" = true
+
+          repo=repos/curiouspub/cli
+          source=a507f8beef86eea0165d8cd9746220dbc5a7cf41
+          tag=e4c190cfef1cb699363d49e3222bc1475cec2f85
+          archive=842f85821463c13df7ed7599eeedfc2cae7bfb58e2850507f0aa8a622fdf8332
+          receipt=796d5ecb2003c34f77885b51ac99c94770ca467d830c3e59b6017efc3a31a21f
+          gh api "$repo/branches/main" | jq -e --arg sha "$sha" '.protected and .commit.sha==$sha' >/dev/null
+          gh api "$repo/git/ref/tags/v0.1.8" | jq -e --arg tag "$tag" '.object.type=="tag" and .object.sha==$tag' >/dev/null
+          gh api "$repo/git/tags/$tag" | jq -e --arg source "$source" '.tag=="v0.1.8" and .object.type=="commit" and .object.sha==$source' >/dev/null
+          gh api "$repo/actions/runs/45254874836" | jq -e --arg source "$source" '
+            .id==45254874836 and .workflow_id==352588864 and .path==".github/workflows/release.yml" and
+            .event=="push" and .head_branch=="v0.1.8" and .head_sha==$source and
+            .run_attempt==1 and .status=="completed" and .conclusion=="failure"' >/dev/null
+          gh api "$repo/actions/artifacts/14859255651" | jq -e --arg source "$source" --arg digest "sha256:$archive" '
+            .id==14859255651 and .name=="candidate" and .expired==false and .digest==$digest and
+            .workflow_run.id==45254874836 and .workflow_run.head_branch=="v0.1.8" and
+            .workflow_run.head_sha==$source' >/dev/null
+          gh api "$repo/releases/tags/v0.1.8" | jq -e --arg digest "sha256:$receipt" '
+            .id==455967696 and .tag_name=="v0.1.8" and .immutable and (.draft|not) and
+            ([.assets[]|select(.name=="checksums.txt.bundle")|.digest]==[$digest])' >/dev/null
+          gh api "$repo/actions/artifacts/14859255651/zip" > candidate.zip
+          printf '%s  candidate.zip\n' "$archive" | sha256sum -c -
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --output checksums.txt.bundle \
+            https://github.com/curiouspub/cli/releases/download/v0.1.8/checksums.txt.bundle
+          printf '%s  checksums.txt.bundle\n' "$receipt" | sha256sum -c -
+
+          python3 -I - <<'PY'
+          import hashlib
+          import io
+          import json
+          import pathlib
+          import re
+          import tarfile
+          import zipfile
+
+          def sha(data):
+              return hashlib.sha256(data).hexdigest()
+
+          def rows(data):
+              values = {}
+              for line in data.decode("ascii").splitlines():
+                  match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
+                  assert match is not None
+                  digest, name = match.groups()
+                  assert name not in values
+                  values[name] = digest
+              return values
+
+          with zipfile.ZipFile("candidate.zip") as candidate:
+              manifest = candidate.read("MANIFEST.sha256")
+              assert sha(manifest) == "d83370f7998cd00d9ed4b47ff51df3a984295c0334bc397941be34399ef65350"
+              members = rows(manifest)
+              assert len(members) == 19 and "MANIFEST.sha256" not in members
+              assert len(candidate.namelist()) == 20 and set(candidate.namelist()) == set(members) | {"MANIFEST.sha256"}
+              assert all(sha(candidate.read(name)) == digest for name, digest in members.items())
+              assert candidate.read("source.txt").decode("ascii").splitlines() == [
+                  "a507f8beef86eea0165d8cd9746220dbc5a7cf41", "refs/tags/v0.1.8",
+                  "e4c190cfef1cb699363d49e3222bc1475cec2f85", "45254874836",
+              ]
+              checksums = candidate.read("checksums.txt")
+              assert sha(checksums) == "0e321733e2c6e1bf668cbea9a72fc0b448f5137f03aa581d12343f89edaecfef"
+              signed = rows(checksums)
+              assert len(signed) == 12 and all(members.get(name) == digest for name, digest in signed.items())
+              tarball = candidate.read("curiouspub-0.1.8.tgz")
+          assert sha(tarball) == "1cede5a2c8965066461f8fde563d91b5f2e0109f12e9fad5515cffd8284c572d"
+          with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as package:
+              metadata = [entry for entry in package if entry.name == "package/package.json"]
+              assert len(metadata) == 1 and metadata[0].isfile()
+              package_json = json.load(package.extractfile(metadata[0]))
+              assert package_json["name"] == "curiouspub" and package_json["version"] == "0.1.8"
+              assert package_json["repository"]["url"] == "https://github.com/curiouspub/cli"
+              assert not package_json.get("publishConfig")
+          pathlib.Path("staged").mkdir()
+          pathlib.Path("staged/curiouspub-0.1.8.tgz").write_bytes(tarball)
+          pathlib.Path("checksums.txt").write_bytes(checksums)
+          PY
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.1
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+
+      - name: Verify the receipt and stage only the approved tarball
+        shell: bash
+        env:
+          APPROVED_RUN: ${{ vars.NPM_V018_APPROVED_RUN }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/npm-v018-recovery"
+          : > user.npmrc
+          : > global.npmrc
+          export NPM_CONFIG_USERCONFIG="$PWD/user.npmrc"
+          export NPM_CONFIG_GLOBALCONFIG="$PWD/global.npmrc"
+          issuer=https://token.actions.githubusercontent.com
+          cosign verify-blob --bundle checksums.txt.bundle \
+            --certificate-identity "https://github.com/curiouspub/cli/.github/workflows/release.yml@refs/tags/v0.1.8" \
+            --certificate-oidc-issuer "$issuer" checksums.txt
+          test -z "${NODE_AUTH_TOKEN:-}${NPM_TOKEN:-}${NPM_CONFIG_OTP:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          npm install --global npm@11.20.0
+          test "$(npm --version)" = 11.20.0
+          node_root="$(npm root --global)/npm"
+          package=./staged/curiouspub-0.1.8.tgz
+          sha512="$(sha512sum "$package" | cut -d ' ' -f 1)"
+          registry_absent() {
+            test "$(curl --silent --show-error --proto '=https' --output registry.json --write-out '%{http_code}' https://registry.npmjs.org/curiouspub/0.1.8)" = 404
+            jq -e '.=="version not found: 0.1.8"' registry.json >/dev/null
+            curl --fail --silent --show-error --proto '=https' https://registry.npmjs.org/-/package/curiouspub/dist-tags |
+              jq -e '.latest=="0.1.7"' >/dev/null
+          }
+          registry_absent
+
+          # npm 11.20.0 ships the same provenance generator used by its publish
+          # command. Retain and verify its exact bundle before submitting it.
+          mkdir evidence
+          node - "$node_root" "$package" "$sha512" <<'JS'
+          const assert = require('node:assert/strict')
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const [root, tarball, digest] = process.argv.slice(2)
+          const parse = require(path.join(root, 'node_modules/npm-package-arg'))
+          assert.equal(parse(tarball).type, 'file')
+          const { generateProvenance } = require(path.join(root, 'node_modules/libnpmpublish/lib/provenance.js'))
+          generateProvenance([{ name: 'pkg:npm/curiouspub@0.1.8', digest: { sha512: digest } }], {})
+            .then(bundle => fs.writeFileSync('evidence/provenance.json', JSON.stringify(bundle)))
+            .catch(error => { console.error(error.message); process.exitCode = 1 })
+          JS
+          cosign verify-blob-attestation --bundle evidence/provenance.json --type slsaprovenance1 \
+            --digest "$sha512" --digestAlg sha512 \
+            --certificate-identity "https://github.com/curiouspub/cli/.github/workflows/npm-recover-v018.yml@refs/heads/main" \
+            --certificate-oidc-issuer "$issuer"
+          jq -er .dsseEnvelope.payload evidence/provenance.json | base64 --decode |
+            jq -e --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" --arg digest "$sha512" '
+              .predicateType=="https://slsa.dev/provenance/v1" and
+              .subject==[{name:"pkg:npm/curiouspub@0.1.8",digest:{sha512:$digest}}] and
+              .predicate.buildDefinition.externalParameters.workflow=={
+                path:".github/workflows/npm-recover-v018.yml",ref:"refs/heads/main",repository:"https://github.com/curiouspub/cli"} and
+              .predicate.buildDefinition.internalParameters.github.event_name=="workflow_dispatch" and
+              .predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit==$sha and
+              .predicate.runDetails.builder.id=="https://github.com/actions/runner/github-hosted" and
+              .predicate.runDetails.metadata.invocationId==("https://github.com/curiouspub/cli/actions/runs/" + $run + "/attempts/1")
+            ' >/dev/null
+          registry_absent
+          [[ "$APPROVED_RUN" =~ ^[1-9][0-9]*:[0-9a-f]{40}:[1-9][0-9]{9}$ ]]
+          IFS=: read -r run sha deadline <<< "$APPROVED_RUN"
+          test "$run" = "$GITHUB_RUN_ID"
+          test "$sha" = "$GITHUB_SHA"
+          test "$(date +%s)" -le "$deadline"
+          printf '1cede5a2c8965066461f8fde563d91b5f2e0109f12e9fad5515cffd8284c572d  %s\n' "$package" | sha256sum -c -
+          npm stage publish --json --access public --tag latest --provenance-file evidence/provenance.json "$package" > stage-response.json
+          jq -e 'if type=="object" and keys==["curiouspub"] then .curiouspub else error("unexpected stage response") end' \
+            stage-response.json > stage-package.json
+          integrity="sha512-$(openssl dgst -sha512 -binary "$package" | openssl base64 -A)"
+          jq -e --arg integrity "$integrity" '
+            .name=="curiouspub" and .version=="0.1.8" and .integrity==$integrity and
+            (.stageId|type=="string" and test("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$";"i"))
+          ' stage-package.json >/dev/null
+          stage_id_digest="$(jq -jr .stageId stage-package.json | sha256sum | cut -d ' ' -f 1)"
+          jq --arg digest "$stage_id_digest" '{stageIdSHA256:$digest,name,version,integrity,tag:"latest"}' stage-package.json > evidence/stage.json
+          printf 'npm staged item ID SHA-256 %s\n' "$stage_id_digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-v018-staging-evidence
+          path: ${{ runner.temp }}/npm-v018-recovery/evidence/
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
